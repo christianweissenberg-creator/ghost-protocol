@@ -1,0 +1,38 @@
+name: Daily Intelligence Briefing
+
+on:
+  schedule:
+    # Täglich um 06:00 UTC (08:00 MESZ)
+    - cron: '0 6 * * *'
+  workflow_dispatch:  # Manueller Trigger
+
+jobs:
+  briefing:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Dependencies
+        run: pip install -r requirements.txt
+
+      - name: Create .env
+        run: |
+          echo "ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }}" >> .env
+          echo "SERPER_API_KEY=${{ secrets.SERPER_API_KEY }}" >> .env
+          echo "TELEGRAM_BOT_TOKEN=${{ secrets.TELEGRAM_BOT_TOKEN }}" >> .env
+          echo "TELEGRAM_CHAT_ID=${{ secrets.TELEGRAM_CHAT_ID }}" >> .env
+
+      - name: Run Daily Briefing
+        run: python scripts/daily_briefing.py
+
+      - name: Upload Briefing
+        uses: actions/upload-artifact@v4
+        with:
+          name: briefing-${{ github.run_id }}
+          path: outputs/
+          retention-days: 30
