@@ -1,23 +1,42 @@
-# Ghost Protocol — Knowledge Base Index
+# 👻 Ghost Protocol — Knowledge Base
 
-> Dieser Ordner enthält die gesamte Dokumentation des Ghost Protocol Projekts.
-> Jedes Dokument ist ein eigenständiges Knowledge File für das Claude.ai Projekt.
+## Navigation
 
-## Dokumente
+### Strategie
+- [[01-vision]] — Vision, Mission, Kernprodukt
+- [[03-revenue]] — Revenue Model & Finanzprojektion
+- [[06-decisions]] — Entscheidungslog (chronologisch)
 
-| Datei | Inhalt | Priorität |
-|------|--------|----------|
-| `01-vision.md` | Mission, Ziele, Kennmetriken | 🚨 High |
-| `02-legal.md` | Rechtliche Regeln DE (Pflichtlektüre) | 🚨 High |
-| `03-revenue.md` | Revenue-Streams + Preising | 🚨 High |
-| `04-agents.md` | Alle 14 Agenten, Rollen, LLMs | 🚨 High |
-| `05-sprints.md` | Sprint-Planung (8 Wochen) | Medium |
-| `06-decisions.md` | Strategische Entscheidungen (ADR) | Medium |
-| `07-qa.md` | 50 Fragen/Antworten (Quick Reference) | Medium |
-| `GHOST_PROTOCOL_Projektplan_v1.md` | Gesamter Projektplan (umfassend) | Referenz |
+### Compliance
+- [[02-legal]] — Rechtliche Findings Deutschland
+- [[07-qa]] — 50 kritische Fragen & Antworten
 
-## Verwendung
+### Execution
+- [[04-agents]] — Agent-Spezifikationen (14 Agenten)
+- [[05-sprints]] — Sprint-Plan & Task-Tracking
 
-1. Alle Dateien als Knowledge Files in das Claude.ai Projekt "Ghost Protocol" hochladen
-2. Project Instructions aus der README oder `setup.md` einfügen
-3. Jede neue Conversation im Projekt hat sofort den vollen Kontext
+---
+
+## Quick Status
+
+| KPI | Aktuell | Ziel Monat 1 | Ziel Monat 3 |
+|-----|---------|-------------|-------------|
+| Revenue | €0 | €800-1.500 | €2.000-5.000 |
+| Newsletter Subscriber | 0 | 200 | 1.000 |
+| Digital Products | 0 | 5 | 15 |
+| Blog Posts | 0 | 12 | 50 |
+| Premium Subscriber | 0 | 20 | 70 |
+
+## Aktive Entscheidungen
+
+> [!warning] Polymarket ist ILLEGAL in DE
+> GGL-Verbot, §284/285 StGB. Gestrichen am 29.03.2026.
+> Siehe [[02-legal#Prediction Markets]]
+
+> [!info] Kernprodukt = AI Crypto Intelligence Reports
+> Entschieden am 29.03.2026. Siehe [[01-vision#Kernprodukt]]
+
+## Links
+- GitHub: `github.com/[USER]/ghost-protocol`
+- Tech Stack: CrewAI + Claude API + Hetzner + Supabase
+- Budget: €300-400 Startup, ~€55/Mo laufend

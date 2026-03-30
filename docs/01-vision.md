@@ -1,37 +1,48 @@
-# Ghost Protocol — Vision & Mission
+# Vision & Strategie
 
 ## Mission
-Ghost Protocol ist eine autonome AI-Corporation, betrieben von 14 spezialisierten
-CrewAI-Agenten, die 24/7 multiple Revenue-Streams operieren.
+Eine autonome AI-Corporation die 24/7 Revenue generiert über AI-powered Crypto Intelligence für den DACH-Raum.
 
 ## Kernprodukt
-AI-powered Crypto Intelligence Reports für den DACH-Raum.
+**AI Crypto Intelligence Reports** — Automatisiert generierte, datengestützte Marktanalysen die kein Mensch in dieser Geschwindigkeit und Tiefe liefern kann.
 
-## Ziele
-- **Monat 1:** €0-500 Revenue, 200 Newsletter-Subscriber
-- **Monat 3:** €2.000+/Mo recurring
-- **Monat 6:** €5.000+/Mo, 1.000 Subscriber, UG-Gründung
+### Warum genau DAS:
+1. Kreuzung AI + Krypto + Deutsch = fast leerer Markt
+2. AI-Speed-Vorteil: Report in 10 Min statt 4h manuell
+3. Recurring Revenue: Subscription-Modell
+4. Content-Flywheel: Report = Newsletter = Blog = Social Post = SEO
+5. Christians Expertise = Credibility-Moat
 
-## Constraints
-- **Budget:** €300-400 (hart, nicht verhandelbar)
-- **Zeit:** 2-5h/Woche manueller Oversight durch Christian
-- **Team:** Keine Mitarbeiter — nur AI-Agenten + Christian
-- **Laufende Kosten:** ~€55/Mo (VPS €6, Claude API ~€40, Serper €5, Domain €2)
+### Produkt-Tiers
+| Tier | Preis | Inhalt | Delivery |
+|------|-------|--------|----------|
+| Free | €0 | Wöchentlicher Marktüberblick | Newsletter (Beehiiv) |
+| Pro | €29/Mo | Tägliche Analyse + Deep Dives | Newsletter + Web |
+| Premium | €49/Mo | Pro + Trading-Signals + Alerts | + Telegram Gruppe |
 
-## Moat
-- DACH-Fokus (weniger Konkurrenz als EN)
-- Regulatorisches Know-how (MiCA, DAC8, BaFin)
-- Multi-Model-Strategie (40% Kostenersparnis)
-- Vollständig automatisierte Content-Pipeline
-- On-Chain + Fundamental + Makro + Sentiment Analyse
+### Sekundärprodukte
+- High-Value Digital Products (€29-97 Einmalkauf)
+- Affiliate-Revenue (integriert in Content)
+- Siehe [[03-revenue]] für Details
 
-## Tech Stack
-- **Framework:** CrewAI (self-hosted)
-- **LLMs:** Claude Sonnet 4 (Complex) + Claude Haiku (Simple)
-- **Hosting:** Hetzner VPS CX22 (€6/Mo)
-- **Database:** Supabase (Free Tier)
-- **Blog:** Astro auf Cloudflare Pages (€0)
-- **Newsletter:** Beehiiv (Free bis 2.500 Subscriber)
-- **Shop:** Gumroad (€0, 10% Commission)
-- **Automation:** GitHub Actions + n8n (optional)
-- **Monitoring:** Telegram Bot (Alerts)
+## Zielgruppe
+- Primär: Deutschsprachige Krypto-Investoren (Hobby bis Semi-Pro)
+- Sekundär: Steuerberater mit Krypto-Mandanten
+- Tertiär: AI-interessierte Krypto-Community
+
+## Differenzierung vs. Wettbewerb
+| Wir | BTC-ECHO | Blocktrainer | CoinPro |
+|-----|----------|-------------|---------|
+| AI-generiert, datengetrieben | Redaktion, News-fokus | Education, YouTube | CH-fokus |
+| Quantitative Analyse | Qualitativ | Tutorial-Format | Marktüberblick |
+| Automatisiert (Skaliert) | Manuell (begrenzt) | Manuell | Manuell |
+| DACH Steuer-Integration | Nein | Teilweise | CH only |
+
+## Nicht-Ziele (bewusst ausgeschlossen)
+- ❌ Prediction Markets (illegal in DE)
+- ❌ Vermögensverwaltung (BaFin-pflichtig)
+- ❌ Trading für Dritte (BaFin-pflichtig)
+- ❌ ICO/Token Launch (regulatorisch komplex)
+- ❌ Plattform-Bau (zu lange Time-to-Revenue)
+
+Siehe auch: [[02-legal]], [[04-agents]], [[05-sprints]]

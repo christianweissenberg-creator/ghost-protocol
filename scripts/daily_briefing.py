@@ -28,7 +28,7 @@ logger: logging.Logger = logging.getLogger(__name__)
 
 
 def main() -> None:
-    """Führt das Daily Briefing aus und speichert das Ergebnnis."""
+    """Führt das Daily Briefing aus und speichert das Ergebnis."""
     logger.info("Daily Intelligence Briefing gestartet")
 
     task = create_daily_briefing_task()

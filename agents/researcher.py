@@ -1,10 +1,10 @@
-"""Ghost Protocol â Product Research Agent (THE SCOUT).
+"""Ghost Protocol — Product Research Agent (THE SCOUT).
 
 Scannt Gumroad, Etsy, Reddit und Krypto-Communities um zu identifizieren
-welche Produkte DACH-Krypto-Nutzer tatsÃ¤chlich kaufen wollen.
-Liefert priorisierte Produkt-Ideen mit Revenue-SchÃ¤tzungen.
+welche Produkte DACH-Krypto-Nutzer tatsächlich kaufen wollen.
+Liefert priorisierte Produkt-Ideen mit Revenue-Schätzungen.
 
-AusfÃ¼hrung: python -m agents.researcher
+Ausführung: python -m agents.researcher
 Output: outputs/product_research_report.md
 """
 
@@ -33,7 +33,7 @@ logger: logging.Logger = logging.getLogger(__name__)
 def search_gumroad_trends(query: str) -> str:
     """Search for trending digital products on Gumroad in a specific niche.
 
-    Use this to understand what people actually BUY â real demand signals.
+    Use this to understand what people actually BUY — real demand signals.
     """
     url = "https://google.serper.dev/search"
     headers = {"X-API-KEY": SERPER_API_KEY, "Content-Type": "application/json"}
@@ -85,7 +85,7 @@ def search_etsy_trends(query: str) -> str:
 def search_reddit_painpoints(query: str) -> str:
     """Search Reddit for pain points and problems people describe in crypto/finance communities.
 
-    These are product opportunities â real problems people would pay to solve.
+    These are product opportunities — real problems people would pay to solve.
     """
     url = "https://google.serper.dev/search"
     headers = {"X-API-KEY": SERPER_API_KEY, "Content-Type": "application/json"}
@@ -149,8 +149,8 @@ researcher: Agent = Agent(
     backstory=(
         "Du bist ein erfahrener Marktforscher mit Spezialisierung auf digitale "
         "Produkte im DACH-Kryptomarkt. Du denkst in Kundenproblemen, nicht in "
-        "LÃ¶sungen. Du weiÃt: Ein Produkt das niemand sucht, verkauft sich nicht â "
-        "egal wie gut es ist. Du bist brutal ehrlich Ã¼ber Marktpotenziale und "
+        "Lösungen. Du weißt: Ein Produkt das niemand sucht, verkauft sich nicht — "
+        "egal wie gut es ist. Du bist brutal ehrlich über Marktpotenziale und "
         "unterscheidest klar zwischen 'nice to have' und 'must have' Produkten."
     ),
     tools=[
@@ -169,18 +169,18 @@ researcher: Agent = Agent(
 
 research_task: Task = Task(
     description="""
-    FÃ¼hre eine vollstÃ¤ndige Marktanalyse durch:
+    Führe eine vollständige Marktanalyse durch:
 
     1. DEMAND SCAN: Suche auf Gumroad nach "crypto trading template",
        "krypto steuer", "bitcoin portfolio tracker", "crypto journal"
     2. PAIN POINT MINING: Suche Reddit nach Problemen in Krypto-Steuer,
        DeFi-Tracking, Trading-Journaling
     3. COMPETITION GAP: Suche auf dem deutschen Markt nach existierenden
-       Produkten und deren QualitÃ¤t
+       Produkten und deren Qualität
     4. ETSY OPPORTUNITY: Suche nach High-Review Templates und Planern
     5. SYNTHESE: Priorisierte Liste von exakt 5 Produkten mit Name,
-       Beschreibung, Zielgruppe, Preis, geschÃ¤tzte Sales, Erstellungszeit,
-       MarktbegrÃ¼ndung und Wettbewerbsvorteil
+       Beschreibung, Zielgruppe, Preis, geschätzte Sales, Erstellungszeit,
+       Marktbegründung und Wettbewerbsvorteil
 
     Sei BRUTAL ehrlich. Nur Produkte mit nachweisbarer Nachfrage.
     """,
@@ -208,7 +208,7 @@ research_crew: Crew = Crew(
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelname)s: %(message)s")
-    logger.info("GHOST PROTOCOL â Product Research Agent gestartet")
+    logger.info("GHOST PROTOCOL — Product Research Agent gestartet")
     logger.info("Scanning markets for DACH crypto product opportunities...")
 
     try:
@@ -227,5 +227,5 @@ if __name__ == "__main__":
 
     except Exception as e:
         logger.error("Research Crew fehlgeschlagen: %s", e)
-        # Telegram-Alert wÃ¤re hier ideal (wird in Sprint 2 integriert)
+        # Telegram-Alert wäre hier ideal (wird in Sprint 2 integriert)
         raise
