@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import type { Agent } from "@/lib/types";
 import { AGENT_REGISTRY, TIER_META } from "@/lib/types";
 
@@ -16,7 +17,7 @@ export function AgentCard({ agent }: AgentCardProps) {
   const tierMeta = TIER_META[agent.tier];
 
   return (
-    <div className="card-ghost p-4 group animate-slide-up">
+    <Link href={`/agents/${agent.id}`} className="card-ghost p-4 group animate-slide-up block cursor-pointer hover:border-accent-violet/30">
       <div className="flex items-start justify-between mb-3">
         <div className="flex items-center gap-3">
           {/* Agent Avatar */}
@@ -80,6 +81,6 @@ export function AgentCard({ agent }: AgentCardProps) {
           ))}
         </div>
       </div>
-    </div>
+    </Link>
   );
 }
