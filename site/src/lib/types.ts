@@ -1,28 +1,38 @@
-// Ghost Protocol Agent Types
+// Ghost Protocol Agent Types — matches Supabase schema
 
 export type AgentTier = 0 | 1 | 2 | 3;
-export type AgentStatus = "active" | "idle" | "error" | "offline" | "working";
+export type AgentStatus = "online" | "offline" | "error" | "maintenance" | "working";
 
 export interface Agent {
-  id: string;
-  name: string;
+  id: string;            // "donna", "oracle" etc.
+  name: string;          // "DONNA", "ORACLE" etc.
   role: string;
   tier: AgentTier;
   llm_model: string;
   status: AgentStatus;
-  persona: string;
-  capabilities: string[];
+  channels: string[];
+  last_heartbeat: string | null;
+  total_input_tokens: number;
+  total_output_tokens: number;
+  total_cost_usd: number;
+  config: Record<string, unknown>;
   created_at: string;
   updated_at: string;
 }
 
 export interface Message {
   id: string;
-  from_agent: string;
-  to_agent: string;
-  content: string;
-  message_type: "task" | "response" | "broadcast" | "alert";
-  priority: number;
+  timestamp: string;
+  from_agent: string;          // agent id ("donna")
+  from_role: string | null;
+  to_channels: string[];
+  to_agents: string[];
+  message_type: string;
+  priority: string;            // "normal", "high", "urgent", "critical"
+  content: Record<string, unknown>;  // JSONB
+  requires_legal_review: boolean;
+  confidence: number;
+  parent_message_id: string | null;
   metadata: Record<string, unknown>;
   created_at: string;
 }
@@ -62,4 +72,11 @@ export const AGENT_REGISTRY: Record<string, { icon: string; persona: string; tie
   GUARDIAN: { icon: "GU", persona: "Data Engineer", tierColor: "#22c55e" },
   CONCIERGE: { icon: "CN", persona: "Community Support", tierColor: "#22c55e" },
   LOCALIZER: { icon: "LO", persona: "Cultural Intel", tierColor: "#22c55e" },
+};
+
+export const PRIORITY_COLORS: Record<string, string> = {
+  normal: "#6b6b7b",
+  high: "#f59e0b",
+  urgent: "#ff3366",
+  critical: "#ff0000",
 };

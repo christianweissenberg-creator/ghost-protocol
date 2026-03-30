@@ -42,10 +42,10 @@ export function MessageFeed({ messages }: MessageFeedProps) {
             </span>
             <span className="text-text-muted text-xs">→</span>
             <span className="text-xs text-text-secondary">
-              {msg.to_agent}
+              {msg.to_agents?.join(", ") || msg.to_channels?.join(", ") || "—"}
             </span>
             <span className="text-[10px] text-text-muted ml-auto font-mono">
-              {new Date(msg.created_at).toLocaleTimeString("de-DE", {
+              {new Date(msg.timestamp ?? msg.created_at).toLocaleTimeString("de-DE", {
                 hour: "2-digit",
                 minute: "2-digit",
                 second: "2-digit",
@@ -53,7 +53,7 @@ export function MessageFeed({ messages }: MessageFeedProps) {
             </span>
           </div>
           <p className="text-xs text-text-secondary leading-relaxed line-clamp-2">
-            {msg.content}
+            {typeof msg.content === "string" ? msg.content : (msg.content as Record<string, unknown>)?.text as string ?? JSON.stringify(msg.content)}
           </p>
         </div>
       ))}

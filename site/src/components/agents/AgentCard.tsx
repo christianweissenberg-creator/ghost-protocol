@@ -70,12 +70,12 @@ export function AgentCard({ agent }: AgentCardProps) {
           {agent.llm_model}
         </span>
         <div className="flex gap-1">
-          {(agent.capabilities ?? []).slice(0, 3).map((cap) => (
+          {(agent.channels ?? []).slice(0, 3).map((ch) => (
             <span
-              key={cap}
+              key={ch}
               className="text-[9px] px-1.5 py-0.5 rounded bg-surface-elevated text-text-muted"
             >
-              {cap}
+              {ch}
             </span>
           ))}
         </div>

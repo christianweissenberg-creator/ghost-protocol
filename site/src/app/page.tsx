@@ -11,7 +11,7 @@ export default function CommandCenter() {
   const { agents, loading: agentsLoading } = useAgents();
   const { messages, loading: messagesLoading } = useMessages(30);
 
-  const activeCount = agents.filter((a) => a.status === "active" || a.status === "working").length;
+  const activeCount = agents.filter((a) => a.status === "online" || a.status === "working").length;
   const tierCounts = agents.reduce(
     (acc, a) => {
       acc[a.tier] = (acc[a.tier] ?? 0) + 1;

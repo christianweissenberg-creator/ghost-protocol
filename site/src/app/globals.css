@@ -79,9 +79,9 @@ body {
   border-radius: 50%;
 }
 
-.status-active { background: var(--accent-emerald); box-shadow: 0 0 8px rgba(34, 197, 94, 0.5); }
+.status-online { background: var(--accent-emerald); box-shadow: 0 0 8px rgba(34, 197, 94, 0.5); }
 .status-working { background: var(--accent-amber); box-shadow: 0 0 8px rgba(245, 158, 11, 0.5); animation: pulse-subtle 1.5s ease-in-out infinite; }
-.status-idle { background: var(--text-muted); }
+.status-maintenance { background: var(--accent-cyan); }
 .status-error { background: var(--accent-rose); box-shadow: 0 0 8px rgba(255, 51, 102, 0.5); }
 .status-offline { background: #333; }
 

@@ -1,6 +1,7 @@
 "use client";
 
 import { useMessages, useAgents } from "@/lib/hooks";
+import { CommandPanel } from "@/components/ui/CommandPanel";
 import { useState } from "react";
 
 const TYPE_COLORS: Record<string, string> = {
@@ -25,7 +26,7 @@ export default function MessagesPage() {
 
   const filtered = messages.filter((msg) => {
     if (filter !== "all" && msg.message_type !== filter) return false;
-    if (agentFilter !== "all" && msg.from_agent !== agentFilter && msg.to_agent !== agentFilter)
+    if (agentFilter !== "all" && msg.from_agent !== agentFilter && !msg.to_agents?.includes(agentFilter))
       return false;
     return true;
   });
@@ -87,7 +88,7 @@ export default function MessagesPage() {
           >
             <option value="all">Alle Agents</option>
             {agents.map((a) => (
-              <option key={a.id} value={a.name}>
+              <option key={a.id} value={a.id}>
                 {a.name}
               </option>
             ))}
@@ -151,9 +152,9 @@ export default function MessagesPage() {
                 </span>
 
                 {/* Priority */}
-                {msg.priority >= 8 && (
+                {(msg.priority === "urgent" || msg.priority === "critical") && (
                   <span className="text-[9px] px-1.5 py-0.5 rounded bg-accent-rose/10 text-accent-rose font-mono">
-                    P{msg.priority}
+                    {msg.priority.toUpperCase()}
                   </span>
                 )}
 
@@ -164,7 +165,7 @@ export default function MessagesPage() {
                   </span>
                   <span className="text-text-muted">→</span>
                   <span className="text-sm text-text-secondary">
-                    {msg.to_agent}
+                    {msg.to_agents?.join(", ") || msg.to_channels?.join(", ") || "—"}
                   </span>
                 </div>
 
@@ -182,7 +183,7 @@ export default function MessagesPage() {
 
               {/* Content */}
               <p className="text-sm text-text-secondary leading-relaxed">
-                {msg.content}
+                {typeof msg.content === "string" ? msg.content : (msg.content as Record<string, unknown>)?.text as string ?? JSON.stringify(msg.content)}
               </p>
 
               {/* Metadata */}
@@ -202,6 +203,11 @@ export default function MessagesPage() {
           ))}
         </div>
       )}
+
+      {/* Command Panel */}
+      <div className="mt-6">
+        <CommandPanel agents={agents} />
+      </div>
     </div>
   );
 }
