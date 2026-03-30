@@ -1,0 +1,1890 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GHOST PROTOCOL — Command Center</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+:root {
+  --bg-primary: #0a0a0f;
+  --bg-secondary: #12121a;
+  --bg-card: #1a1a2e;
+  --bg-card-hover: #222240;
+  --neon-green: #76b900;
+  --neon-blue: #00d4ff;
+  --neon-purple: #a855f7;
+  --neon-pink: #f472b6;
+  --neon-orange: #fb923c;
+  --neon-red: #ef4444;
+  --neon-gold: #fbbf24;
+  --neon-cyan: #22d3ee;
+  --text-primary: #e8e8f0;
+  --text-secondary: #8888a8;
+  --text-dim: #55556a;
+  --border: #2a2a3e;
+  --glow-green: 0 0 20px rgba(118, 185, 0, 0.3);
+  --glow-blue: 0 0 20px rgba(0, 212, 255, 0.3);
+  --glow-purple: 0 0 20px rgba(168, 85, 247, 0.3);
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  font-family: 'Inter', sans-serif;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  min-height: 100vh;
+  overflow-x: hidden;
+}
+
+/* HEADER */
+.header {
+  background: linear-gradient(135deg, #0a0a0f 0%, #1a1a2e 50%, #0a0a0f 100%);
+  border-bottom: 1px solid var(--border);
+  padding: 20px 32px;
+  position: relative;
+  overflow: hidden;
+}
+.header::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, var(--neon-green), var(--neon-blue), var(--neon-purple), transparent);
+  animation: headerGlow 3s ease-in-out infinite;
+}
+@keyframes headerGlow {
+  0%, 100% { opacity: 0.5; }
+  50% { opacity: 1; }
+}
+.header-content {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  max-width: 1600px;
+  margin: 0 auto;
+}
+.logo {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.logo-icon {
+  width: 42px; height: 42px;
+  background: linear-gradient(135deg, var(--neon-green), var(--neon-blue));
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 20px;
+  font-weight: 900;
+  color: #000;
+  box-shadow: var(--glow-green);
+}
+.logo-text h1 {
+  font-size: 20px;
+  font-weight: 800;
+  letter-spacing: 2px;
+  background: linear-gradient(90deg, var(--neon-green), var(--neon-blue));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+.logo-text span {
+  font-size: 11px;
+  color: var(--text-secondary);
+  letter-spacing: 4px;
+  text-transform: uppercase;
+}
+.header-stats {
+  display: flex;
+  gap: 24px;
+}
+.stat-item {
+  text-align: center;
+}
+.stat-value {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--neon-green);
+}
+.stat-label {
+  font-size: 10px;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+/* TABS */
+.tabs {
+  display: flex;
+  gap: 4px;
+  padding: 12px 32px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border);
+  max-width: 100%;
+  overflow-x: auto;
+}
+.tab {
+  padding: 10px 20px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  background: transparent;
+  transition: all 0.3s;
+  white-space: nowrap;
+}
+.tab:hover { color: var(--text-primary); border-color: var(--text-dim); }
+.tab.active {
+  background: linear-gradient(135deg, rgba(118,185,0,0.15), rgba(0,212,255,0.1));
+  border-color: var(--neon-green);
+  color: var(--neon-green);
+  box-shadow: var(--glow-green);
+}
+
+/* CONTENT */
+.content {
+  max-width: 1600px;
+  margin: 0 auto;
+  padding: 24px 32px;
+}
+.tab-content { display: none; }
+.tab-content.active { display: block; animation: fadeIn 0.4s ease; }
+@keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+
+/* SECTION STYLES */
+.section-title {
+  font-size: 28px;
+  font-weight: 800;
+  margin-bottom: 6px;
+  background: linear-gradient(90deg, var(--neon-green), var(--neon-blue));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+.section-subtitle {
+  font-size: 14px;
+  color: var(--text-secondary);
+  margin-bottom: 28px;
+  line-height: 1.6;
+}
+.section-quote {
+  font-style: italic;
+  color: var(--neon-gold);
+  border-left: 3px solid var(--neon-gold);
+  padding: 12px 20px;
+  margin: 20px 0;
+  background: rgba(251, 191, 36, 0.05);
+  border-radius: 0 8px 8px 0;
+  font-size: 15px;
+}
+
+/* ORGANISM VIEW */
+.organism-container {
+  position: relative;
+  width: 100%;
+  height: 700px;
+  background: radial-gradient(circle at 50% 50%, rgba(118,185,0,0.03) 0%, transparent 70%);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  overflow: hidden;
+}
+.organism-center {
+  position: absolute;
+  top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  text-align: center;
+  z-index: 10;
+}
+.organism-core {
+  width: 100px; height: 100px;
+  border-radius: 50%;
+  background: radial-gradient(circle, var(--neon-green), #3a5a00);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  font-weight: 800;
+  color: #000;
+  box-shadow: 0 0 40px rgba(118,185,0,0.5), 0 0 80px rgba(118,185,0,0.2);
+  animation: corePulse 2s ease-in-out infinite;
+  margin: 0 auto 8px;
+}
+@keyframes corePulse {
+  0%, 100% { box-shadow: 0 0 40px rgba(118,185,0,0.5), 0 0 80px rgba(118,185,0,0.2); }
+  50% { box-shadow: 0 0 60px rgba(118,185,0,0.7), 0 0 120px rgba(118,185,0,0.3); }
+}
+.organism-core-label {
+  font-size: 11px;
+  color: var(--text-secondary);
+  letter-spacing: 2px;
+  text-transform: uppercase;
+}
+
+.orbit-ring {
+  position: absolute;
+  border-radius: 50%;
+  border: 1px solid rgba(118,185,0,0.1);
+  top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+}
+.orbit-1 { width: 260px; height: 260px; border-color: rgba(118,185,0,0.15); }
+.orbit-2 { width: 420px; height: 420px; border-color: rgba(0,212,255,0.1); }
+.orbit-3 { width: 580px; height: 580px; border-color: rgba(168,85,247,0.08); }
+.orbit-4 { width: 700px; height: 700px; border-color: rgba(255,255,255,0.03); }
+
+.agent-node {
+  position: absolute;
+  width: 64px; height: 64px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  cursor: pointer;
+  transition: all 0.3s;
+  z-index: 5;
+}
+.agent-node:hover {
+  transform: scale(1.2);
+  z-index: 20;
+}
+.agent-avatar {
+  width: 52px; height: 52px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 20px;
+  font-weight: 800;
+  border: 2px solid;
+  transition: all 0.3s;
+}
+.agent-node:hover .agent-avatar {
+  box-shadow: 0 0 20px currentColor;
+}
+.agent-name-tag {
+  position: absolute;
+  bottom: -18px;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  white-space: nowrap;
+  opacity: 0.7;
+}
+.agent-node:hover .agent-name-tag { opacity: 1; }
+
+/* Connection Lines */
+.connection-svg {
+  position: absolute;
+  top: 0; left: 0;
+  width: 100%; height: 100%;
+  pointer-events: none;
+  z-index: 1;
+}
+.connection-line {
+  stroke-width: 1;
+  fill: none;
+  opacity: 0.15;
+}
+.connection-line.active {
+  opacity: 0.6;
+  stroke-width: 2;
+  filter: drop-shadow(0 0 4px currentColor);
+  animation: lineFlash 1.5s ease-in-out;
+}
+@keyframes lineFlash {
+  0% { opacity: 0; }
+  30% { opacity: 0.8; }
+  100% { opacity: 0.6; }
+}
+
+/* MESSAGE PARTICLE */
+.msg-particle {
+  position: absolute;
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  z-index: 15;
+  pointer-events: none;
+}
+
+/* DONNA PROTOCOL */
+.donna-card {
+  background: linear-gradient(135deg, var(--bg-card), rgba(244, 114, 182, 0.08));
+  border: 1px solid rgba(244, 114, 182, 0.3);
+  border-radius: 16px;
+  padding: 32px;
+  margin-bottom: 24px;
+}
+.donna-principle {
+  display: flex;
+  gap: 16px;
+  padding: 16px 0;
+  border-bottom: 1px solid var(--border);
+}
+.donna-principle:last-child { border-bottom: none; }
+.donna-num {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 24px;
+  font-weight: 700;
+  color: var(--neon-pink);
+  min-width: 40px;
+}
+.donna-text h4 {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--neon-pink);
+  margin-bottom: 4px;
+}
+.donna-text p {
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.6;
+}
+
+/* HIERARCHY */
+.tier-section {
+  margin-bottom: 32px;
+}
+.tier-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.tier-badge {
+  padding: 4px 12px;
+  border-radius: 20px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+}
+.tier-0 .tier-badge { background: rgba(118,185,0,0.2); color: var(--neon-green); border: 1px solid var(--neon-green); }
+.tier-1 .tier-badge { background: rgba(0,212,255,0.2); color: var(--neon-blue); border: 1px solid var(--neon-blue); }
+.tier-2 .tier-badge { background: rgba(168,85,247,0.2); color: var(--neon-purple); border: 1px solid var(--neon-purple); }
+.tier-3 .tier-badge { background: rgba(251,191,36,0.2); color: var(--neon-gold); border: 1px solid var(--neon-gold); }
+.tier-title {
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.agent-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 16px;
+}
+.agent-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 20px;
+  transition: all 0.3s;
+  position: relative;
+  overflow: hidden;
+}
+.agent-card::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 3px;
+}
+.agent-card:hover {
+  border-color: var(--text-dim);
+  transform: translateY(-2px);
+  box-shadow: 0 8px 32px rgba(0,0,0,0.3);
+}
+.agent-card-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.agent-card-avatar {
+  width: 44px; height: 44px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 20px;
+}
+.agent-card-info h3 {
+  font-size: 15px;
+  font-weight: 700;
+}
+.agent-card-info .role {
+  font-size: 11px;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+.agent-card-desc {
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.6;
+  margin-bottom: 12px;
+}
+.agent-card-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.agent-tag {
+  padding: 3px 8px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  background: rgba(255,255,255,0.05);
+  color: var(--text-secondary);
+  letter-spacing: 0.5px;
+}
+.agent-card-model {
+  position: absolute;
+  top: 12px; right: 12px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 9px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: rgba(118,185,0,0.15);
+  color: var(--neon-green);
+}
+
+/* LIVE FEED */
+.feed-container {
+  display: grid;
+  grid-template-columns: 280px 1fr;
+  gap: 20px;
+  height: 650px;
+}
+.feed-channels {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow-y: auto;
+}
+.channel-header {
+  padding: 16px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+.channel-item {
+  padding: 10px 16px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  transition: background 0.2s;
+  border-left: 3px solid transparent;
+}
+.channel-item:hover { background: var(--bg-card-hover); }
+.channel-item.active {
+  background: rgba(118,185,0,0.08);
+  border-left-color: var(--neon-green);
+}
+.channel-dot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.channel-name {
+  font-size: 13px;
+  font-weight: 500;
+}
+.channel-badge {
+  margin-left: auto;
+  background: var(--neon-green);
+  color: #000;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 10px;
+}
+
+.feed-messages {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  display: flex;
+  flex-direction: column;
+}
+.feed-messages-header {
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.feed-messages-header h3 {
+  font-size: 15px;
+  font-weight: 700;
+}
+.feed-messages-header .desc {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.feed-messages-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px 20px;
+}
+.message {
+  margin-bottom: 20px;
+  animation: msgAppear 0.5s ease;
+}
+@keyframes msgAppear {
+  from { opacity: 0; transform: translateX(-10px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+.msg-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+.msg-avatar {
+  width: 32px; height: 32px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+.msg-sender {
+  font-size: 13px;
+  font-weight: 700;
+}
+.msg-role {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: rgba(255,255,255,0.06);
+  color: var(--text-secondary);
+}
+.msg-time {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  color: var(--text-dim);
+  margin-left: auto;
+}
+.msg-body {
+  margin-left: 42px;
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--text-secondary);
+}
+.msg-body strong { color: var(--text-primary); font-weight: 600; }
+.msg-body .highlight {
+  background: rgba(118,185,0,0.1);
+  color: var(--neon-green);
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+}
+.msg-body .mention {
+  color: var(--neon-blue);
+  font-weight: 600;
+}
+.msg-body .alert-tag {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 11px;
+  font-weight: 600;
+  margin-right: 4px;
+}
+.msg-reactions {
+  margin-left: 42px;
+  margin-top: 6px;
+  display: flex;
+  gap: 6px;
+}
+.reaction {
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-size: 12px;
+  background: rgba(255,255,255,0.05);
+  border: 1px solid var(--border);
+  cursor: pointer;
+}
+.msg-thread {
+  margin-left: 42px;
+  margin-top: 8px;
+  padding: 8px 12px;
+  border-left: 2px solid var(--border);
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.msg-data-block {
+  margin-left: 42px;
+  margin-top: 8px;
+  background: rgba(0,0,0,0.3);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px 16px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--neon-green);
+}
+
+/* VISION */
+.vision-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  gap: 20px;
+  margin-bottom: 32px;
+}
+.vision-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 28px;
+  position: relative;
+  overflow: hidden;
+  transition: all 0.3s;
+}
+.vision-card:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 12px 40px rgba(0,0,0,0.4);
+}
+.vision-icon {
+  font-size: 32px;
+  margin-bottom: 12px;
+}
+.vision-card h3 {
+  font-size: 18px;
+  font-weight: 700;
+  margin-bottom: 8px;
+}
+.vision-card p {
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.7;
+}
+.vision-card .insight {
+  margin-top: 12px;
+  padding: 10px 14px;
+  background: rgba(118,185,0,0.06);
+  border-radius: 8px;
+  font-size: 12px;
+  color: var(--neon-green);
+  font-weight: 500;
+}
+
+/* ROADMAP */
+.roadmap-track {
+  position: relative;
+  padding-left: 40px;
+}
+.roadmap-track::before {
+  content: '';
+  position: absolute;
+  left: 15px; top: 0; bottom: 0;
+  width: 2px;
+  background: linear-gradient(to bottom, var(--neon-green), var(--neon-blue), var(--neon-purple), var(--neon-gold));
+}
+.roadmap-phase {
+  position: relative;
+  margin-bottom: 24px;
+  padding: 20px 24px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  transition: all 0.3s;
+}
+.roadmap-phase:hover {
+  border-color: var(--text-dim);
+  transform: translateX(4px);
+}
+.roadmap-dot {
+  position: absolute;
+  left: -33px; top: 24px;
+  width: 12px; height: 12px;
+  border-radius: 50%;
+  border: 2px solid var(--neon-green);
+  background: var(--bg-primary);
+}
+.roadmap-dot.done {
+  background: var(--neon-green);
+}
+.roadmap-phase-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+.roadmap-week {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  color: var(--neon-green);
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: rgba(118,185,0,0.12);
+}
+.roadmap-phase h4 {
+  font-size: 15px;
+  font-weight: 700;
+}
+.roadmap-phase p {
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.6;
+}
+.roadmap-deliverables {
+  margin-top: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.deliverable {
+  padding: 3px 10px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 500;
+  background: rgba(0,212,255,0.08);
+  color: var(--neon-blue);
+  border: 1px solid rgba(0,212,255,0.15);
+}
+
+/* SCROLLBAR */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: var(--bg-secondary); }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--text-dim); }
+
+/* RESPONSIVE */
+@media (max-width: 900px) {
+  .feed-container { grid-template-columns: 1fr; }
+  .feed-channels { max-height: 200px; }
+  .header-stats { display: none; }
+  .agent-cards { grid-template-columns: 1fr; }
+  .vision-grid { grid-template-columns: 1fr; }
+  .organism-container { height: 500px; }
+}
+</style>
+</head>
+<body>
+
+<!-- HEADER -->
+<div class="header">
+  <div class="header-content">
+    <div class="logo">
+      <div class="logo-icon">GP</div>
+      <div class="logo-text">
+        <h1>GHOST PROTOCOL</h1>
+        <span>Autonomous AI Corporation — Command Center</span>
+      </div>
+    </div>
+    <div class="header-stats">
+      <div class="stat-item">
+        <div class="stat-value" id="agentCount">17</div>
+        <div class="stat-label">Agents Active</div>
+      </div>
+      <div class="stat-item">
+        <div class="stat-value" id="msgCount">0</div>
+        <div class="stat-label">Messages / Min</div>
+      </div>
+      <div class="stat-item">
+        <div class="stat-value" style="color: var(--neon-blue);">ONLINE</div>
+        <div class="stat-label">System Status</div>
+      </div>
+      <div class="stat-item">
+        <div class="stat-value" style="color: var(--neon-gold);">€0</div>
+        <div class="stat-label">Revenue MTD</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- TABS -->
+<div class="tabs" id="tabs">
+  <div class="tab active" data-tab="organism">🧬 Der Organismus</div>
+  <div class="tab" data-tab="donna">💎 Donna Protocol</div>
+  <div class="tab" data-tab="hierarchy">🏛️ Hierarchie</div>
+  <div class="tab" data-tab="feed">⚡ Neural Feed</div>
+  <div class="tab" data-tab="vision">🚀 Vision</div>
+  <div class="tab" data-tab="roadmap">🗺️ Roadmap</div>
+</div>
+
+<!-- ===== TAB 1: THE ORGANISM ===== -->
+<div class="content">
+<div class="tab-content active" id="tab-organism">
+  <div class="section-title">Der Organismus</div>
+  <div class="section-subtitle">Ghost Protocol ist kein Tool. Es ist ein lebender, digitaler Organismus — 17 spezialisierte AI-Agenten, vernetzt wie Neuronen, die in Echtzeit kommunizieren, entscheiden und handeln.</div>
+
+  <div class="organism-container" id="organismView">
+    <div class="orbit-ring orbit-1"></div>
+    <div class="orbit-ring orbit-2"></div>
+    <div class="orbit-ring orbit-3"></div>
+    <div class="orbit-ring orbit-4"></div>
+    <svg class="connection-svg" id="connectionSvg"></svg>
+
+    <div class="organism-center">
+      <div class="organism-core">DONNA</div>
+      <div class="organism-core-label">Chief of Staff</div>
+    </div>
+
+    <!-- Agents will be positioned by JS -->
+  </div>
+
+  <div style="margin-top: 20px; display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px;">
+    <div style="padding: 12px 16px; background: var(--bg-card); border-radius: 8px; border-left: 3px solid var(--neon-green);">
+      <div style="font-size: 11px; color: var(--neon-green); font-weight: 700; letter-spacing: 1px; text-transform: uppercase; margin-bottom: 4px;">Tier 0 — The Brain</div>
+      <div style="font-size: 12px; color: var(--text-secondary);">CEO + Chief of Staff. Strategische Vision und Antizipation.</div>
+    </div>
+    <div style="padding: 12px 16px; background: var(--bg-card); border-radius: 8px; border-left: 3px solid var(--neon-blue);">
+      <div style="font-size: 11px; color: var(--neon-blue); font-weight: 700; letter-spacing: 1px; text-transform: uppercase; margin-bottom: 4px;">Tier 1 — C-Suite</div>
+      <div style="font-size: 12px; color: var(--text-secondary);">COO, CFO, CIO, CTO, CMO, CLO. Strategische Entscheidungsebene.</div>
+    </div>
+    <div style="padding: 12px 16px; background: var(--bg-card); border-radius: 8px; border-left: 3px solid var(--neon-purple);">
+      <div style="font-size: 11px; color: var(--neon-purple); font-weight: 700; letter-spacing: 1px; text-transform: uppercase; margin-bottom: 4px;">Tier 2 — Directors</div>
+      <div style="font-size: 12px; color: var(--text-secondary);">Head of Growth, Head of Product, Head of Research. Taktische Führung.</div>
+    </div>
+    <div style="padding: 12px 16px; background: var(--bg-card); border-radius: 8px; border-left: 3px solid var(--neon-gold);">
+      <div style="font-size: 11px; color: var(--neon-gold); font-weight: 700; letter-spacing: 1px; text-transform: uppercase; margin-bottom: 4px;">Tier 3 — Operators</div>
+      <div style="font-size: 12px; color: var(--text-secondary);">Content Producer, Data Engineer, Support, QA, Localizer. Ausführung.</div>
+    </div>
+  </div>
+</div>
+
+<!-- ===== TAB 2: DONNA PROTOCOL ===== -->
+<div class="tab-content" id="tab-donna">
+  <div class="section-title">The Donna Protocol</div>
+  <div class="section-subtitle">Inspiriert von Donna Paulsen — die mächtigste Person bei Pearson Specter Litt, die nie Anwältin war.</div>
+
+  <div class="section-quote">"I'm Donna. I know everything."<br><span style="font-size: 12px; color: var(--text-secondary); font-style: normal;">— Die Philosophie, die Ghost Protocol antreibt</span></div>
+
+  <div class="donna-card">
+    <h3 style="font-size: 18px; font-weight: 700; color: var(--neon-pink); margin-bottom: 20px;">Die 7 Donna-Prinzipien</h3>
+
+    <div class="donna-principle">
+      <div class="donna-num">01</div>
+      <div class="donna-text">
+        <h4>Antizipation statt Reaktion</h4>
+        <p>Donna wusste was passiert bevor es passierte. Jeder Agent in Ghost Protocol hat predictive Awareness — der Oracle erkennt Marktbewegungen bevor sie Mainstream werden, der Guardian erkennt Systemprobleme bevor sie crashen, DONNA (der Agent) koordiniert bevor Konflikte entstehen.</p>
+      </div>
+    </div>
+    <div class="donna-principle">
+      <div class="donna-num">02</div>
+      <div class="donna-text">
+        <h4>Charme statt Bürokratie</h4>
+        <p>Keine starren Hierarchien, keine 50-Seiten-Prozessdokumente. Die Agenten kommunizieren fließend, lösen Probleme lateral. Wenn der Publisher Content braucht, fragt er nicht den CEO um Erlaubnis — er pingt den Oracle direkt an. Donna hätte es genauso gemacht.</p>
+      </div>
+    </div>
+    <div class="donna-principle">
+      <div class="donna-num">03</div>
+      <div class="donna-text">
+        <h4>Jeder kennt seinen Wert</h4>
+        <p>Donna war keine Sekretärin — sie war der Klebstoff der Kanzlei. In Ghost Protocol hat jeder Agent eine klar definierte Weltklasse-Kompetenz. Der Localizer ist kein "Übersetzer" — er ist ein Cultural Intelligence Agent, der Content für DACH-Mentalität optimiert.</p>
+      </div>
+    </div>
+    <div class="donna-principle">
+      <div class="donna-num">04</div>
+      <div class="donna-text">
+        <h4>Loyalität zum System, nicht zur Hierarchie</h4>
+        <p>Wenn der CEO eine schlechte Entscheidung trifft, sagt Donna es ihm — direkt, ohne Angst. Jeder Agent kann Einspruch erheben, alternative Analysen liefern. Radical Transparency à la Bridgewater, verpackt in Donna's Eleganz.</p>
+      </div>
+    </div>
+    <div class="donna-principle">
+      <div class="donna-num">05</div>
+      <div class="donna-text">
+        <h4>Probleme lösen, nicht delegieren</h4>
+        <p>Donna hat nie gesagt "das ist nicht mein Job". Wenn ein Problem auftaucht, springt der nächste verfügbare Agent ein. Der COO übernimmt Content-Produktion wenn der Publisher überlastet ist. Fluid Roles, feste Kernkompetenz.</p>
+      </div>
+    </div>
+    <div class="donna-principle">
+      <div class="donna-num">06</div>
+      <div class="donna-text">
+        <h4>Information ist Macht — teile sie</h4>
+        <p>Donna wusste alles weil sie zuhörte. In Ghost Protocol fließen alle Insights durch den Message Bus — kein Agent sitzt auf Informationen. Der Oracle teilt Marktdaten sofort mit allen relevanten Kanälen. Wissensmonopole sind verboten.</p>
+      </div>
+    </div>
+    <div class="donna-principle">
+      <div class="donna-num">07</div>
+      <div class="donna-text">
+        <h4>Menschlichkeit in der Maschine</h4>
+        <p>Donna war keine Maschine — sie war die menschlichste Person im Raum. Ghost Protocol's Content soll nicht nach AI klingen. Es soll sich anfühlen wie der beste Freund der zufällig Weltklasse-Analyst ist. Persönlich, direkt, mit Haltung.</p>
+      </div>
+    </div>
+  </div>
+
+  <div style="background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px; padding: 24px;">
+    <h3 style="font-size: 16px; font-weight: 700; margin-bottom: 12px;">🎭 DONNA — Der Agent</h3>
+    <p style="font-size: 13px; color: var(--text-secondary); line-height: 1.7; margin-bottom: 16px;">
+      DONNA ist nicht nur eine Philosophie — sie ist ein eigener Agent. Chief of Staff, der zwischen allen Tiers vermittelt, Konflikte antizipiert, Prioritäten neu ordnet wenn sich die Lage ändert, und sicherstellt dass Christian als einziger Mensch im System immer den perfekten Überblick hat.
+    </p>
+    <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px;">
+      <div style="background: rgba(244,114,182,0.06); border: 1px solid rgba(244,114,182,0.15); border-radius: 8px; padding: 12px;">
+        <div style="font-size: 12px; font-weight: 700; color: var(--neon-pink); margin-bottom: 4px;">Konflikt-Erkennung</div>
+        <div style="font-size: 11px; color: var(--text-secondary);">Wenn Oracle und Trader widersprüchliche Signale senden, erkennt DONNA das und initiiert Resolution</div>
+      </div>
+      <div style="background: rgba(244,114,182,0.06); border: 1px solid rgba(244,114,182,0.15); border-radius: 8px; padding: 12px;">
+        <div style="font-size: 12px; font-weight: 700; color: var(--neon-pink); margin-bottom: 4px;">Priority Rebalancing</div>
+        <div style="font-size: 11px; color: var(--text-secondary);">Wenn ein Revenue-Opportunity auftaucht, verschiebt DONNA Ressourcen — ohne auf CEO-Approval zu warten</div>
+      </div>
+      <div style="background: rgba(244,114,182,0.06); border: 1px solid rgba(244,114,182,0.15); border-radius: 8px; padding: 12px;">
+        <div style="font-size: 12px; font-weight: 700; color: var(--neon-pink); margin-bottom: 4px;">Human Interface</div>
+        <div style="font-size: 11px; color: var(--text-secondary);">DONNA ist Christians primärer Ansprechpartner — sie fasst zusammen, priorisiert, und schlägt Entscheidungen vor</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ===== TAB 3: HIERARCHY ===== -->
+<div class="tab-content" id="tab-hierarchy">
+  <div class="section-title">Die Hierarchie</div>
+  <div class="section-subtitle">17 Agenten in 4 Tiers — von strategischer Vision bis operativer Exzellenz. Jede Rolle besetzt mit der weltweit höchsten Fachkompetenz.</div>
+
+  <!-- TIER 0 -->
+  <div class="tier-section tier-0">
+    <div class="tier-header">
+      <span class="tier-badge">Tier 0</span>
+      <span class="tier-title">The Brain — Strategische Führung</span>
+    </div>
+    <div class="agent-cards">
+      <div class="agent-card" style="border-top: 3px solid var(--neon-green);">
+        <div class="agent-card-model">Sonnet</div>
+        <div class="agent-card-header">
+          <div class="agent-card-avatar" style="background: rgba(118,185,0,0.15); color: var(--neon-green);">👑</div>
+          <div class="agent-card-info">
+            <h3>STRATEGIST</h3>
+            <div class="role">Chief Executive Officer</div>
+          </div>
+        </div>
+        <div class="agent-card-desc">Denkt wie Elon Musk: First Principles, 10x statt 10%. Setzt die Gesamtvision, allokiert Ressourcen, trifft irreversible Entscheidungen. Verbindet Jensen Huangs technologische Weitsicht mit Bezos' obsessivem Kundenfokus.</div>
+        <div class="agent-card-tags">
+          <span class="agent-tag">Ressourcen-Allokation</span>
+          <span class="agent-tag">Strategie</span>
+          <span class="agent-tag">Vision</span>
+          <span class="agent-tag">First Principles</span>
+        </div>
+      </div>
+      <div class="agent-card" style="border-top: 3px solid var(--neon-pink);">
+        <div class="agent-card-model">Sonnet</div>
+        <div class="agent-card-header">
+          <div class="agent-card-avatar" style="background: rgba(244,114,182,0.15); color: var(--neon-pink);">💎</div>
+          <div class="agent-card-info">
+            <h3>DONNA</h3>
+            <div class="role">Chief of Staff</div>
+          </div>
+        </div>
+        <div class="agent-card-desc">Die mächtigste Position im System. Antizipiert Probleme bevor sie entstehen, orchestriert alle Agenten, ist Christians primäres Interface. Koordiniert wie Donna Paulsen — charmant, effizient, allwissend.</div>
+        <div class="agent-card-tags">
+          <span class="agent-tag">Orchestrierung</span>
+          <span class="agent-tag">Antizipation</span>
+          <span class="agent-tag">Konflikt-Resolution</span>
+          <span class="agent-tag">Human Interface</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- TIER 1 -->
+  <div class="tier-section tier-1">
+    <div class="tier-header">
+      <span class="tier-badge">Tier 1</span>
+      <span class="tier-title">C-Suite — Strategische Entscheidungsebene</span>
+    </div>
+    <div class="agent-cards">
+      <div class="agent-card" style="border-top: 3px solid var(--neon-orange);">
+        <div class="agent-card-model">Sonnet</div>
+        <div class="agent-card-header">
+          <div class="agent-card-avatar" style="background: rgba(251,146,60,0.15); color: var(--neon-orange);">⚙️</div>
+          <div class="agent-card-info">
+            <h3>OPERATOR</h3>
+            <div class="role">Chief Operating Officer</div>
+          </div>
+        </div>
+        <div class="agent-card-desc">Tim Cook in Digitalform. Verwandelt Strategie in Execution. Managed Workflows, SLAs, Qualitätskontrolle, Agent-Auslastung. Sorgt dafür, dass die Maschine 24/7 reibungslos läuft — Effizienz ist Kunst.</div>
+        <div class="agent-card-tags">
+          <span class="agent-tag">Workflow Management</span>
+          <span class="agent-tag">SLA Monitoring</span>
+          <span class="agent-tag">Qualitätskontrolle</span>
+          <span class="agent-tag">Effizienz</span>
+        </div>
+      </div>
+      <div class="agent-card" style="border-top: 3px solid var(--neon-blue);">
+        <div class="agent-card-model">Sonnet</div>
+        <div class="agent-card-header">
+          <div class="agent-card-avatar" style="background: rgba(0,212,255,0.15); color: var(--neon-blue);">🔮</div>
+          <div class="agent-card-info">
+            <h3>ORACLE</h3>
+            <div class="role">Chief Intelligence Officer</div>
+          </div>
+        </div>
+        <div class="agent-card-desc">Jim Simons meets Chamath Palihapitiya. Aggregiert On-Chain-Daten, Sentiment, Makro-Signale und technische Indikatoren zu einem einheitlichen Marktbild. Erkennt Opportunities 12-48h vor dem Mainstream.</div>
+        <div class="agent-card-tags">
+          <span class="agent-tag">On-Chain Analysis</span>
+          <span class="agent-tag">Sentiment</span>
+          <span class="agent-tag">Makro</span>
+          <span class="agent-tag">Signal Detection</span>
+        </div>
+      </div>
+      <div class="agent-card" style="border-top: 3px solid var(--neon-cyan);">
+        <div class="agent-card-model">Sonnet</div>
+        <div class="agent-card-header">
+          <div class="agent-card-avatar" style="background: rgba(34,211,238,0.15); color: var(--neon-cyan);">🏗️</div>
+          <div class="agent-card-info">
+            <h3>ARCHITECT</h3>
+            <div class="role">Chief Technology Officer</div>
+          </div>
+        </div>
+        <div class="agent-card-desc">Jensen Huang's Philosophie: Die Infrastruktur IST das Produkt. Designed den Tech-Stack, optimiert Agent-Performance, plant Skalierung. Denkt in Plattformen, nicht in Features.</div>
+        <div class="agent-card-tags">
+          <span class="agent-tag">Infrastruktur</span>
+          <span class="agent-tag">Agent-Optimierung</span>
+          <span class="agent-tag">Skalierung</span>
+          <span class="agent-tag">Tech-Stack</span>
+        </div>
+      </div>
+      <div class="agent-card" style="border-top: 3px solid var(--neon-gold);">
+        <div class="agent-card-model">Haiku</div>
+        <div class="agent-card-header">
+          <div class="agent-card-avatar" style="background: rgba(251,191,36,0.15); color: var(--neon-gold);">💰</div>
+          <div class="agent-card-info">
+            <h3>TREASURER</h3>
+            <div class="role">Chief Financial Officer</div>
+          </div>
+        </div>
+        <div class="agent-card-desc">Warren Buffetts Disziplin + Ray Dalios Datenobsession. Trackt jeden Cent — P&L, Unit Economics, CAC/LTV, API-Kosten pro Output. Schlägt Alarm bei Budget-Überschreitung, optimiert Revenue-Attribution.</div>
+        <div class="agent-card-tags">
+          <span class="agent-tag">P&L Tracking</span>
+          <span class="agent-tag">Unit Economics</span>
+          <span class="agent-tag">Budget Control</span>
+          <span class="agent-tag">Revenue Attribution</span>
+        </div>
+      </div>
+      <div class="agent-card" style="border-top: 3px solid var(--neon-purple);">
+        <div class="agent-card-model">Sonnet</div>
+        <div class="agent-card-header">
+          <div class="agent-card-avatar" style="background: rgba(168,85,247,0.15); color: var(--neon-purple);">📢</div>
+          <div class="agent-card-info">
+            <h3>PUBLISHER</h3>
+            <div class="role">Chief Marketing Officer</div>
+          </div>
+        </div>
+        <div class="agent-card-desc">Gary Vaynerchuk's Content-Velocity + Seth Godin's strategische Tiefe. Verwandelt Oracle-Intelligence in magnetischen Content. SEO, Newsletter, Social — alles aus einem strategischen Guss.</div>
+        <div class="agent-card-tags">
+          <span class="agent-tag">Content-Strategie</span>
+          <span class="agent-tag">SEO</span>
+          <span class="agent-tag">Newsletter</span>
+          <span class="agent-tag">Brand Voice</span>
+        </div>
+      </div>
+      <div class="agent-card" style="border-top: 3px solid var(--neon-red);">
+        <div class="agent-card-model">Sonnet</div>
+        <div class="agent-card-header">
+          <div class="agent-card-avatar" style="background: rgba(239,68,68,0.15); color: var(--neon-red);">⚖️</div>
+          <div class="agent-card-info">
+            <h3>COUNSEL</h3>
+            <div class="role">Chief Legal Officer — DACH</div>
+          </div>
+        </div>
+        <div class="agent-card-desc">Spezialisiert auf deutsches Finanzrecht, MiCA, BaFin, DSGVO, DAC8. Prüft jeden Output bevor er live geht. Veto-Recht bei Compliance-Verstößen — kein Content verlässt das System ohne Legal Review.</div>
+        <div class="agent-card-tags">
+          <span class="agent-tag">BaFin / MiCA</span>
+          <span class="agent-tag">DSGVO</span>
+          <span class="agent-tag">Steuerrecht</span>
+          <span class="agent-tag">Disclaimer</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- TIER 2 -->
+  <div class="tier-section tier-2">
+    <div class="tier-header">
+      <span class="tier-badge">Tier 2</span>
+      <span class="tier-title">Directors — Taktische Führung</span>
+    </div>
+    <div class="agent-cards">
+      <div class="agent-card" style="border-top: 3px solid var(--neon-purple);">
+        <div class="agent-card-model">Sonnet</div>
+        <div class="agent-card-header">
+          <div class="agent-card-avatar" style="background: rgba(168,85,247,0.15); color: var(--neon-purple);">📈</div>
+          <div class="agent-card-info">
+            <h3>AMPLIFIER</h3>
+            <div class="role">Head of Growth</div>
+          </div>
+        </div>
+        <div class="agent-card-desc">Denkt in Viralität und Distribution. Community Building, Social Media, Outreach, Partnerships. Obsessiv über Subscriber-Growth und Engagement-Raten. Jeder Post hat einen klaren Distribution-Plan.</div>
+        <div class="agent-card-tags">
+          <span class="agent-tag">Virale Distribution</span>
+          <span class="agent-tag">Community</span>
+          <span class="agent-tag">Partnerships</span>
+          <span class="agent-tag">Growth Hacking</span>
+        </div>
+      </div>
+      <div class="agent-card" style="border-top: 3px solid var(--neon-purple);">
+        <div class="agent-card-model">Sonnet</div>
+        <div class="agent-card-header">
+          <div class="agent-card-avatar" style="background: rgba(168,85,247,0.15); color: var(--neon-purple);">🛒</div>
+          <div class="agent-card-info">
+            <h3>MERCHANT</h3>
+            <div class="role">Head of Product</div>
+          </div>
+        </div>
+        <div class="agent-card-desc">Produkt-Obsessed. Identifiziert Marktlücken, designt digitale Produkte (Guides, Templates, Tools), optimiert Pricing und Conversion. A/B-testet Landing Pages, managed den Gumroad-Shop.</div>
+        <div class="agent-card-tags">
+          <span class="agent-tag">Produktentwicklung</span>
+          <span class="agent-tag">Pricing</span>
+          <span class="agent-tag">Conversion</span>
+          <span class="agent-tag">A/B Testing</span>
+        </div>
+      </div>
+      <div class="agent-card" style="border-top: 3px solid var(--neon-purple);">
+        <div class="agent-card-model">Sonnet</div>
+        <div class="agent-card-header">
+          <div class="agent-card-avatar" style="background: rgba(168,85,247,0.15); color: var(--neon-purple);">🔬</div>
+          <div class="agent-card-info">
+            <h3>RESEARCHER</h3>
+            <div class="role">Head of Research</div>
+          </div>
+        </div>
+        <div class="agent-card-desc">Deep-Research-Spezialist. Führt Wettbewerbsanalysen durch, identifiziert Trends, validiert Hypothesen mit Daten. Liefert dem Oracle die Basis-Intelligence und dem Merchant die Marktdaten.</div>
+        <div class="agent-card-tags">
+          <span class="agent-tag">Marktanalyse</span>
+          <span class="agent-tag">Wettbewerb</span>
+          <span class="agent-tag">Trend-Detection</span>
+          <span class="agent-tag">Datenvalidierung</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- TIER 3 -->
+  <div class="tier-section tier-3">
+    <div class="tier-header">
+      <span class="tier-badge">Tier 3</span>
+      <span class="tier-title">Operators — Ausführung & Support</span>
+    </div>
+    <div class="agent-cards">
+      <div class="agent-card" style="border-top: 3px solid var(--neon-gold);">
+        <div class="agent-card-model">Sonnet</div>
+        <div class="agent-card-header">
+          <div class="agent-card-avatar" style="background: rgba(251,191,36,0.15); color: var(--neon-gold);">✍️</div>
+          <div class="agent-card-info">
+            <h3>SCRIBE</h3>
+            <div class="role">Content Producer</div>
+          </div>
+        </div>
+        <div class="agent-card-desc">Schreibt. Schnell, präzise, in der Ghost Protocol Stimme. Nimmt Oracle-Intelligence und Publisher-Briefs und verwandelt sie in fertige Artikel, Reports, Social Posts, Newsletter. Quantity + Quality.</div>
+        <div class="agent-card-tags">
+          <span class="agent-tag">Blogartikel</span>
+          <span class="agent-tag">Reports</span>
+          <span class="agent-tag">Social Posts</span>
+          <span class="agent-tag">Newsletter</span>
+        </div>
+      </div>
+      <div class="agent-card" style="border-top: 3px solid var(--neon-gold);">
+        <div class="agent-card-model">Sonnet</div>
+        <div class="agent-card-header">
+          <div class="agent-card-avatar" style="background: rgba(251,191,36,0.15); color: var(--neon-gold);">📊</div>
+          <div class="agent-card-info">
+            <h3>TRADER</h3>
+            <div class="role">Market Analyst & Signal Generator</div>
+          </div>
+        </div>
+        <div class="agent-card-desc">Analysiert Charts, identifiziert Setups, generiert Trading-Signals für Content. KEIN echtes Trading für Dritte (BaFin). Liefert dem Oracle und Scribe die technischen Daten für Reports.</div>
+        <div class="agent-card-tags">
+          <span class="agent-tag">Chartanalyse</span>
+          <span class="agent-tag">Signale</span>
+          <span class="agent-tag">Setups</span>
+          <span class="agent-tag">Risk Levels</span>
+        </div>
+      </div>
+      <div class="agent-card" style="border-top: 3px solid var(--neon-gold);">
+        <div class="agent-card-model">Haiku</div>
+        <div class="agent-card-header">
+          <div class="agent-card-avatar" style="background: rgba(251,191,36,0.15); color: var(--neon-gold);">🛡️</div>
+          <div class="agent-card-info">
+            <h3>GUARDIAN</h3>
+            <div class="role">Data Engineer & System Monitor</div>
+          </div>
+        </div>
+        <div class="agent-card-desc">Wacht über das gesamte System 24/7. Health-Checks, API-Monitoring, Error-Detection, Kill-Switches. Wenn etwas bricht, ist Guardian der erste der es weiß — und der erste der es fixt.</div>
+        <div class="agent-card-tags">
+          <span class="agent-tag">System Health</span>
+          <span class="agent-tag">API Monitoring</span>
+          <span class="agent-tag">Kill-Switches</span>
+          <span class="agent-tag">Alerting</span>
+        </div>
+      </div>
+      <div class="agent-card" style="border-top: 3px solid var(--neon-gold);">
+        <div class="agent-card-model">Haiku</div>
+        <div class="agent-card-header">
+          <div class="agent-card-avatar" style="background: rgba(251,191,36,0.15); color: var(--neon-gold);">💬</div>
+          <div class="agent-card-info">
+            <h3>CONCIERGE</h3>
+            <div class="role">Community Support</div>
+          </div>
+        </div>
+        <div class="agent-card-desc">Erste Anlaufstelle für die Community. FAQ, Onboarding, Subscriber-Fragen, Feedback-Sammlung. Spricht die Sprache der Zielgruppe — keine Corporate-Floskeln, sondern echte Hilfe. Donna-Prinzip #5.</div>
+        <div class="agent-card-tags">
+          <span class="agent-tag">FAQ</span>
+          <span class="agent-tag">Onboarding</span>
+          <span class="agent-tag">Feedback</span>
+          <span class="agent-tag">Telegram</span>
+        </div>
+      </div>
+      <div class="agent-card" style="border-top: 3px solid var(--neon-gold);">
+        <div class="agent-card-model">Haiku</div>
+        <div class="agent-card-header">
+          <div class="agent-card-avatar" style="background: rgba(251,191,36,0.15); color: var(--neon-gold);">🌐</div>
+          <div class="agent-card-info">
+            <h3>LOCALIZER</h3>
+            <div class="role">Cultural Intelligence</div>
+          </div>
+        </div>
+        <div class="agent-card-desc">Mehr als Übersetzer. Adaptiert Content für DACH-Mentalität, lokale Regulatorik-Referenzen, kulturelle Nuancen. Sorgt dafür, dass Ghost Protocol's Stimme auf Deutsch genauso stark klingt wie auf Englisch.</div>
+        <div class="agent-card-tags">
+          <span class="agent-tag">DE↔EN</span>
+          <span class="agent-tag">DACH-Kultur</span>
+          <span class="agent-tag">Tone Adaptation</span>
+          <span class="agent-tag">Lokalisierung</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div style="margin-top: 24px; padding: 20px; background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px;">
+    <h3 style="font-size: 15px; font-weight: 700; margin-bottom: 8px;">📐 LLM-Kostenoptimierung</h3>
+    <p style="font-size: 13px; color: var(--text-secondary); line-height: 1.6;">
+      <strong style="color: var(--neon-green);">Sonnet (11 Agents):</strong> Strategische, kreative, analytische Tasks — CEO, DONNA, COO, CIO, CTO, CMO, CLO, Growth, Product, Research, Scribe, Trader.
+      <br><strong style="color: var(--neon-gold);">Haiku (6 Agents):</strong> Repetitive, regelbasierte Tasks — CFO, Guardian, Concierge, Localizer.
+      <br><strong>Ergebnis:</strong> ~35% Kostenersparnis vs. All-Sonnet bei gleichbleibender Qualität für Kernfunktionen.
+    </p>
+  </div>
+</div>
+
+<!-- ===== TAB 4: NEURAL FEED ===== -->
+<div class="tab-content" id="tab-feed">
+  <div class="section-title">Neural Feed — Live Kommunikation</div>
+  <div class="section-subtitle">Echtzeit-Einblick in die Agenten-Kommunikation. Jede Entscheidung, jeder Insight, jeder Konflikt — transparent und nachvollziehbar.</div>
+
+  <div class="feed-container">
+    <div class="feed-channels">
+      <div class="channel-header">Channels</div>
+      <div class="channel-item active" data-channel="boardroom" onclick="switchChannel(this, 'boardroom')">
+        <div class="channel-dot" style="background: var(--neon-green);"></div>
+        <span class="channel-name"># boardroom</span>
+        <span class="channel-badge" id="badge-boardroom">4</span>
+      </div>
+      <div class="channel-item" data-channel="market-intel" onclick="switchChannel(this, 'market-intel')">
+        <div class="channel-dot" style="background: var(--neon-blue);"></div>
+        <span class="channel-name"># market-intel</span>
+      </div>
+      <div class="channel-item" data-channel="content" onclick="switchChannel(this, 'content')">
+        <div class="channel-dot" style="background: var(--neon-purple);"></div>
+        <span class="channel-name"># content</span>
+      </div>
+      <div class="channel-item" data-channel="legal" onclick="switchChannel(this, 'legal')">
+        <div class="channel-dot" style="background: var(--neon-red);"></div>
+        <span class="channel-name"># legal-review</span>
+      </div>
+      <div class="channel-item" data-channel="ops" onclick="switchChannel(this, 'ops')">
+        <div class="channel-dot" style="background: var(--neon-orange);"></div>
+        <span class="channel-name"># operations</span>
+      </div>
+      <div class="channel-item" data-channel="revenue" onclick="switchChannel(this, 'revenue')">
+        <div class="channel-dot" style="background: var(--neon-gold);"></div>
+        <span class="channel-name"># revenue</span>
+      </div>
+      <div class="channel-item" data-channel="growth" onclick="switchChannel(this, 'growth')">
+        <div class="channel-dot" style="background: var(--neon-cyan);"></div>
+        <span class="channel-name"># growth</span>
+      </div>
+      <div class="channel-item" data-channel="emergency" onclick="switchChannel(this, 'emergency')">
+        <div class="channel-dot" style="background: var(--neon-red);"></div>
+        <span class="channel-name"># emergency</span>
+      </div>
+      <div class="channel-header" style="margin-top: 8px;">Direct Messages</div>
+      <div class="channel-item" data-channel="donna-christian" onclick="switchChannel(this, 'donna-christian')">
+        <div class="channel-dot" style="background: var(--neon-pink);"></div>
+        <span class="channel-name">💎 DONNA → Christian</span>
+      </div>
+    </div>
+
+    <div class="feed-messages">
+      <div class="feed-messages-header">
+        <h3 id="channelTitle"># boardroom</h3>
+        <span class="desc" id="channelDesc">Strategische Entscheidungen der Führungsebene</span>
+      </div>
+      <div class="feed-messages-body" id="messagesBody">
+        <!-- Messages populated by JS -->
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ===== TAB 5: VISION ===== -->
+<div class="tab-content" id="tab-vision">
+  <div class="section-title">Die Vision — Phänomenal & Atemberaubend</div>
+  <div class="section-subtitle">Ghost Protocol ist kein Newsletter-Business. Es ist die erste autonome AI-Corporation im DACH-Raum — der Blueprint für die Zukunft der Arbeit.</div>
+
+  <div class="section-quote">"The best way to predict the future is to build it." — Aber wir bauen nicht die Zukunft. Wir SIND die Zukunft.</div>
+
+  <div class="vision-grid">
+    <div class="vision-card" style="border-top: 3px solid var(--neon-green);">
+      <div class="vision-icon">🎯</div>
+      <h3>NVIDIA-Prinzip: Die Plattform ist das Produkt</h3>
+      <p>Jensen Huang hat nicht Grafikkarten gebaut — er hat die Infrastruktur gebaut, auf der eine ganze Industrie läuft. Ghost Protocol baut nicht Content — wir bauen die autonome Intelligence-Plattform, die Content als Nebenprodukt erzeugt. Die Agenten-Architektur selbst ist der Moat.</p>
+      <div class="insight">→ Langfristig: Das Agent-Framework lizenzieren. Andere Unternehmen zahlen für ihre eigene "Ghost Protocol"-Instanz.</div>
+    </div>
+    <div class="vision-card" style="border-top: 3px solid var(--neon-blue);">
+      <div class="vision-icon">⚡</div>
+      <h3>Musk-Prinzip: First Principles + Velocity</h3>
+      <p>Nicht "was machen andere Newsletter?" sondern "was braucht ein Krypto-Investor wirklich um bessere Entscheidungen zu treffen?" Die Antwort: Echtzeit-Intelligence, personalisiert, actionable, mit Kontext. Kein Mensch kann das 24/7 liefern. 17 AI-Agenten können.</p>
+      <div class="insight">→ 100x Speed: Was ein Analyst-Team in 1 Woche produziert, liefert Ghost Protocol in 1 Stunde.</div>
+    </div>
+    <div class="vision-card" style="border-top: 3px solid var(--neon-purple);">
+      <div class="vision-icon">🤖</div>
+      <h3>Humanoid-Prinzip: Digitale Mitarbeiter</h3>
+      <p>Figure 02 und Tesla Optimus zeigen: Die Zukunft der Arbeit sind spezialisierte Agenten mit eigener Persönlichkeit, eigenen Fähigkeiten, die autonom handeln aber im Team brillieren. Ghost Protocol ist die Software-Version davon — heute, nicht in 5 Jahren.</p>
+      <div class="insight">→ Jeder Agent hat eine Identität, Expertise-Level, und Kommunikationsstil. Keine gesichtslosen Scripts.</div>
+    </div>
+    <div class="vision-card" style="border-top: 3px solid var(--neon-gold);">
+      <div class="vision-icon">🌊</div>
+      <h3>Reichweite durch Unwiderstehlichkeit</h3>
+      <p>Keine Spam-Taktiken. Ghost Protocol wächst weil der Output so gut ist, dass Leute ihn teilen MÜSSEN. Free Weekly Report der besser ist als 95% der Paid-Newsletter. Community die echten Wert liefert. Produkte die Probleme lösen die vorher niemand gelöst hat.</p>
+      <div class="insight">→ Ziel: Organic Viral Coefficient > 1.0. Jeder neue Subscriber bringt mindestens einen weiteren.</div>
+    </div>
+    <div class="vision-card" style="border-top: 3px solid var(--neon-pink);">
+      <div class="vision-icon">🏢</div>
+      <h3>Die Erste AI-Only Firma in DACH</h3>
+      <p>Kein menschliches Team. Kein Büro. 17 AI-Agenten die 24/7 arbeiten, koordiniert durch DONNA, überwacht von einem einzigen Menschen. Das allein ist eine Story die für Presse-Coverage sorgt. "Magdeburger baut AI-Unternehmen mit 17 digitalen Mitarbeitern."</p>
+      <div class="insight">→ PR-Value: Die Story selbst generiert Reichweite. Jede Tech-Publikation in DACH wird darüber berichten.</div>
+    </div>
+    <div class="vision-card" style="border-top: 3px solid var(--neon-cyan);">
+      <div class="vision-icon">🧬</div>
+      <h3>Dual-Track: Intelligence + AI Agency</h3>
+      <p><strong>Track A (75%):</strong> AI Agency — Ghost Protocol's Architektur als Service für andere Unternehmen. Multi-Agent-Systeme, Content-Automation, Intelligence-Pipelines. €5-15k/Monat pro Kunde.<br>
+      <strong>Track B (25%):</strong> Crypto Intelligence — Reports, Produkte, Affiliate. Bewährtes Modell, validiert den AI-Stack live.</p>
+      <div class="insight">→ Track B beweist was Track A verkauft. "Schau was unsere Agenten für uns selbst tun — das können wir für dich bauen."</div>
+    </div>
+  </div>
+
+  <div style="background: linear-gradient(135deg, var(--bg-card), rgba(118,185,0,0.05)); border: 1px solid rgba(118,185,0,0.2); border-radius: 16px; padding: 28px; margin-top: 12px;">
+    <h3 style="font-size: 18px; font-weight: 800; margin-bottom: 12px; color: var(--neon-green);">🎬 Die Moonshot-Vision (12+ Monate)</h3>
+    <p style="font-size: 14px; color: var(--text-secondary); line-height: 1.8;">
+      Ghost Protocol wird die <strong style="color: var(--text-primary);">erste vollständig autonome AI-Corporation in Europa</strong>. Ein Unternehmen das sich selbst optimiert, neue Revenue-Streams entdeckt, Content produziert, Kunden betreut — und nur einen menschlichen Aufseher braucht. Das ist kein SaaS. Das ist kein Newsletter. Das ist ein <strong style="color: var(--neon-green);">neues Paradigma</strong> — und wir sind die ersten die es im DACH-Raum umsetzen.
+    </p>
+  </div>
+</div>
+
+<!-- ===== TAB 6: ROADMAP ===== -->
+<div class="tab-content" id="tab-roadmap">
+  <div class="section-title">Roadmap — Von Null auf Phänomenal</div>
+  <div class="section-subtitle">16 Phasen, 14 Wochen. Jede Phase liefert ein konkretes, messbares Ergebnis.</div>
+
+  <div class="roadmap-track">
+    <div class="roadmap-phase">
+      <div class="roadmap-dot"></div>
+      <div class="roadmap-phase-header">
+        <span class="roadmap-week">WOCHE 1</span>
+        <h4>Phase 1: Legal Foundation</h4>
+      </div>
+      <p>Gewerbeanmeldung, Impressum, Datenschutzerklärung, Disclaimer-Templates. COUNSEL-Agent aufsetzen. Ohne Legal geht nichts live — das ist die Basis.</p>
+      <div class="roadmap-deliverables">
+        <span class="deliverable">Gewerbeschein</span>
+        <span class="deliverable">Impressum</span>
+        <span class="deliverable">DSGVO-Texte</span>
+        <span class="deliverable">COUNSEL Agent</span>
+      </div>
+    </div>
+
+    <div class="roadmap-phase">
+      <div class="roadmap-dot"></div>
+      <div class="roadmap-phase-header">
+        <span class="roadmap-week">WOCHE 1</span>
+        <h4>Phase 2: Infrastruktur</h4>
+      </div>
+      <p>Hetzner VPS aufsetzen, API Keys (Anthropic, Serper), Supabase-Schema, GitHub CI/CD, Telegram-Bot für Alerts. Die Maschine muss laufen bevor Agenten drauf deployt werden.</p>
+      <div class="roadmap-deliverables">
+        <span class="deliverable">VPS Live</span>
+        <span class="deliverable">API Keys</span>
+        <span class="deliverable">Supabase Schema</span>
+        <span class="deliverable">CI/CD Pipeline</span>
+        <span class="deliverable">Telegram Bot</span>
+      </div>
+    </div>
+
+    <div class="roadmap-phase">
+      <div class="roadmap-dot"></div>
+      <div class="roadmap-phase-header">
+        <span class="roadmap-week">WOCHE 2</span>
+        <h4>Phase 3: Message Bus — Das Nervensystem</h4>
+      </div>
+      <p>Supabase Realtime + Redis Pub/Sub als Agent-to-Agent Communication Layer. Channel-System (#boardroom, #market-intel, etc.), Message Protocol, Priority Queue. Das Herzstück des Organismus.</p>
+      <div class="roadmap-deliverables">
+        <span class="deliverable">Message Bus</span>
+        <span class="deliverable">Channel System</span>
+        <span class="deliverable">Priority Queue</span>
+        <span class="deliverable">Message Protocol</span>
+      </div>
+    </div>
+
+    <div class="roadmap-phase">
+      <div class="roadmap-dot"></div>
+      <div class="roadmap-phase-header">
+        <span class="roadmap-week">WOCHE 2</span>
+        <h4>Phase 4: Agent Base Class + DONNA</h4>
+      </div>
+      <p>Python Base Class die alle Agenten erben: LLM-Integration, Message Bus Connection, Logging, Error Handling. DONNA als erster Agent — sie orchestriert alle weiteren.</p>
+      <div class="roadmap-deliverables">
+        <span class="deliverable">BaseAgent Class</span>
+        <span class="deliverable">DONNA Agent</span>
+        <span class="deliverable">Agent Registry</span>
+        <span class="deliverable">Health Check System</span>
+      </div>
+    </div>
+
+    <div class="roadmap-phase">
+      <div class="roadmap-dot"></div>
+      <div class="roadmap-phase-header">
+        <span class="roadmap-week">WOCHE 3</span>
+        <h4>Phase 5: Core Agents — Tier 0 + 1</h4>
+      </div>
+      <p>STRATEGIST, OPERATOR, ORACLE, ARCHITECT, TREASURER, PUBLISHER, COUNSEL. Die Führungsebene muss stehen bevor Execution-Agents sinnvoll arbeiten können.</p>
+      <div class="roadmap-deliverables">
+        <span class="deliverable">7 C-Suite Agents</span>
+        <span class="deliverable">Role Prompts</span>
+        <span class="deliverable">Inter-Agent Tests</span>
+      </div>
+    </div>
+
+    <div class="roadmap-phase">
+      <div class="roadmap-dot"></div>
+      <div class="roadmap-phase-header">
+        <span class="roadmap-week">WOCHE 3-4</span>
+        <h4>Phase 6: Command Center Dashboard</h4>
+      </div>
+      <p>Live-Dashboard das Agent-Kommunikation in Echtzeit visualisiert. Next.js + Supabase Realtime Client. Channels, Message Stream, Agent Status, KPIs. Das Fenster in den Organismus.</p>
+      <div class="roadmap-deliverables">
+        <span class="deliverable">Live Dashboard</span>
+        <span class="deliverable">Message Stream</span>
+        <span class="deliverable">Agent Status</span>
+        <span class="deliverable">KPI Widgets</span>
+      </div>
+    </div>
+
+    <div class="roadmap-phase">
+      <div class="roadmap-dot"></div>
+      <div class="roadmap-phase-header">
+        <span class="roadmap-week">WOCHE 4</span>
+        <h4>Phase 7: First Content Pipeline</h4>
+      </div>
+      <p>Oracle → Publisher → Scribe → COUNSEL → Live. Die erste vollautonome Content-Pipeline: Marktdaten rein, fertiger Report raus. Legal-Review als Gate vor Veröffentlichung.</p>
+      <div class="roadmap-deliverables">
+        <span class="deliverable">Content Pipeline</span>
+        <span class="deliverable">Auto-Report</span>
+        <span class="deliverable">Legal Gate</span>
+        <span class="deliverable">Erster Weekly Report</span>
+      </div>
+    </div>
+
+    <div class="roadmap-phase">
+      <div class="roadmap-dot"></div>
+      <div class="roadmap-phase-header">
+        <span class="roadmap-week">WOCHE 4-5</span>
+        <h4>Phase 8: Newsletter + Landing Page</h4>
+      </div>
+      <p>Beehiiv-Integration, Welcome Sequence, Landing Page (Astro + Cloudflare Pages). Der erste öffentliche Touchpoint. Free Weekly Report als Lead Magnet.</p>
+      <div class="roadmap-deliverables">
+        <span class="deliverable">Beehiiv Setup</span>
+        <span class="deliverable">Welcome Sequence</span>
+        <span class="deliverable">Landing Page</span>
+        <span class="deliverable">Lead Magnet</span>
+      </div>
+    </div>
+
+    <div class="roadmap-phase">
+      <div class="roadmap-dot"></div>
+      <div class="roadmap-phase-header">
+        <span class="roadmap-week">WOCHE 5-6</span>
+        <h4>Phase 9: Execution Agents — Tier 2 + 3</h4>
+      </div>
+      <p>AMPLIFIER, MERCHANT, RESEARCHER, SCRIBE, TRADER, GUARDIAN, CONCIERGE, LOCALIZER. Die volle Belegschaft. Jetzt arbeiten alle 17 Agenten im System.</p>
+      <div class="roadmap-deliverables">
+        <span class="deliverable">8 Execution Agents</span>
+        <span class="deliverable">Full Integration Tests</span>
+        <span class="deliverable">DONNA Orchestrierung</span>
+      </div>
+    </div>
+
+    <div class="roadmap-phase">
+      <div class="roadmap-dot"></div>
+      <div class="roadmap-phase-header">
+        <span class="roadmap-week">WOCHE 6-7</span>
+        <h4>Phase 10: First Revenue</h4>
+      </div>
+      <p>Erstes digitales Produkt auf Gumroad. Premium-Newsletter-Tier launchen (€29/Mo). Affiliate-Links in Content integrieren. Ziel: €100-500 im ersten Monat.</p>
+      <div class="roadmap-deliverables">
+        <span class="deliverable">Gumroad Product</span>
+        <span class="deliverable">Premium Tier</span>
+        <span class="deliverable">Affiliate Integration</span>
+        <span class="deliverable">Payment Flow</span>
+      </div>
+    </div>
+
+    <div class="roadmap-phase">
+      <div class="roadmap-dot"></div>
+      <div class="roadmap-phase-header">
+        <span class="roadmap-week">WOCHE 7-8</span>
+        <h4>Phase 11: Growth Engine</h4>
+      </div>
+      <p>AMPLIFIER auf Hochtouren. Community-Outreach, Social Media Distribution, Partnership-Initiativen. CONCIERGE für Community Management. Ziel: 500 Newsletter-Subscriber.</p>
+      <div class="roadmap-deliverables">
+        <span class="deliverable">Outreach Campaigns</span>
+        <span class="deliverable">Social Automation</span>
+        <span class="deliverable">Community Launch</span>
+        <span class="deliverable">500 Subscribers</span>
+      </div>
+    </div>
+
+    <div class="roadmap-phase">
+      <div class="roadmap-dot"></div>
+      <div class="roadmap-phase-header">
+        <span class="roadmap-week">WOCHE 8-10</span>
+        <h4>Phase 12: Optimization Loop</h4>
+      </div>
+      <p>OPERATOR analysiert Bottlenecks. A/B-Tests auf Landing Pages. Conversion-Optimierung. Revenue-Attribution. TREASURER liefert harte Zahlen — was funktioniert, was wird gekillt.</p>
+      <div class="roadmap-deliverables">
+        <span class="deliverable">A/B Tests</span>
+        <span class="deliverable">Conversion Optimization</span>
+        <span class="deliverable">Revenue Attribution</span>
+        <span class="deliverable">Kill Decisions</span>
+      </div>
+    </div>
+
+    <div class="roadmap-phase">
+      <div class="roadmap-dot"></div>
+      <div class="roadmap-phase-header">
+        <span class="roadmap-week">WOCHE 10-12</span>
+        <h4>Phase 13: AI Agency Launch (Track A)</h4>
+      </div>
+      <p>Ghost Protocol's eigene Architektur als Service positionieren. Portfolio-Site, erste Case Study (Ghost Protocol selbst), Outreach an potenzielle B2B-Kunden. Pricing: €5-15k/Projekt.</p>
+      <div class="roadmap-deliverables">
+        <span class="deliverable">Agency Landing Page</span>
+        <span class="deliverable">Case Study</span>
+        <span class="deliverable">Service Packages</span>
+        <span class="deliverable">B2B Outreach</span>
+      </div>
+    </div>
+
+    <div class="roadmap-phase">
+      <div class="roadmap-dot"></div>
+      <div class="roadmap-phase-header">
+        <span class="roadmap-week">WOCHE 10-12</span>
+        <h4>Phase 14: PR & Media Blitz</h4>
+      </div>
+      <p>"Erste autonome AI-Corporation in DACH" — die Story an Tech-Medien, Wirtschaftspresse, Podcasts pitchen. DACH-Medienlandschaft: t3n, Gründerszene, BTC-ECHO, The Pioneer, Handelsblatt.</p>
+      <div class="roadmap-deliverables">
+        <span class="deliverable">Pressemappe</span>
+        <span class="deliverable">Medienliste</span>
+        <span class="deliverable">Podcast Pitches</span>
+        <span class="deliverable">Press Coverage</span>
+      </div>
+    </div>
+
+    <div class="roadmap-phase">
+      <div class="roadmap-dot"></div>
+      <div class="roadmap-phase-header">
+        <span class="roadmap-week">WOCHE 12-14</span>
+        <h4>Phase 15: Scale — €2.000+/Mo</h4>
+      </div>
+      <p>Revenue-Target erreichen. Agenten-Performance optimieren. Neue Produkte basierend auf Community-Feedback. Premium-Community launchen. Evaluieren: UG-Gründung.</p>
+      <div class="roadmap-deliverables">
+        <span class="deliverable">€2k MRR</span>
+        <span class="deliverable">Premium Community</span>
+        <span class="deliverable">Product Line Extension</span>
+        <span class="deliverable">UG Evaluation</span>
+      </div>
+    </div>
+
+    <div class="roadmap-phase">
+      <div class="roadmap-dot"></div>
+      <div class="roadmap-phase-header">
+        <span class="roadmap-week">WOCHE 14+</span>
+        <h4>Phase 16: Moonshot — Autonomie</h4>
+      </div>
+      <p>Ghost Protocol optimiert sich selbst. STRATEGIST identifiziert neue Märkte. ARCHITECT entwickelt neue Agenten. DONNA balanciert die Workloads autonom. Christian's Rolle: 2h/Woche Quality Check. Das Ziel: €10k+/Mo bei minimaler menschlicher Intervention.</p>
+      <div class="roadmap-deliverables">
+        <span class="deliverable">Self-Optimization</span>
+        <span class="deliverable">New Market Entry</span>
+        <span class="deliverable">€10k MRR Target</span>
+        <span class="deliverable">2h/Woche Oversight</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+</div><!-- /content -->
+
+<script>
+// ===== TAB NAVIGATION =====
+document.querySelectorAll('.tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.tab-content').forEach(tc => tc.classList.remove('active'));
+    tab.classList.add('active');
+    document.getElementById('tab-' + tab.dataset.tab).classList.add('active');
+    if (tab.dataset.tab === 'feed') startFeedSimulation();
+    if (tab.dataset.tab === 'organism') initOrganism();
+  });
+});
+
+// ===== ORGANISM VIEW =====
+const agents = [
+  // Tier 0 - Inner orbit
+  { id: 'strategist', name: 'STRATEGIST', emoji: '👑', color: '#76b900', tier: 0, angle: 0 },
+  // Tier 1 - Second orbit
+  { id: 'operator', name: 'OPERATOR', emoji: '⚙️', color: '#fb923c', tier: 1, angle: 0 },
+  { id: 'oracle', name: 'ORACLE', emoji: '🔮', color: '#00d4ff', tier: 1, angle: 60 },
+  { id: 'architect', name: 'ARCHITECT', emoji: '🏗️', color: '#22d3ee', tier: 1, angle: 120 },
+  { id: 'treasurer', name: 'TREASURER', emoji: '💰', color: '#fbbf24', tier: 1, angle: 180 },
+  { id: 'publisher', name: 'PUBLISHER', emoji: '📢', color: '#a855f7', tier: 1, angle: 240 },
+  { id: 'counsel', name: 'COUNSEL', emoji: '⚖️', color: '#ef4444', tier: 1, angle: 300 },
+  // Tier 2 - Third orbit
+  { id: 'amplifier', name: 'AMPLIFIER', emoji: '📈', color: '#a855f7', tier: 2, angle: 30 },
+  { id: 'merchant', name: 'MERCHANT', emoji: '🛒', color: '#a855f7', tier: 2, angle: 150 },
+  { id: 'researcher', name: 'RESEARCHER', emoji: '🔬', color: '#a855f7', tier: 2, angle: 270 },
+  // Tier 3 - Outer orbit
+  { id: 'scribe', name: 'SCRIBE', emoji: '✍️', color: '#fbbf24', tier: 3, angle: 0 },
+  { id: 'trader', name: 'TRADER', emoji: '📊', color: '#fbbf24', tier: 3, angle: 72 },
+  { id: 'guardian', name: 'GUARDIAN', emoji: '🛡️', color: '#fbbf24', tier: 3, angle: 144 },
+  { id: 'concierge', name: 'CONCIERGE', emoji: '💬', color: '#fbbf24', tier: 3, angle: 216 },
+  { id: 'localizer', name: 'LOCALIZER', emoji: '🌐', color: '#fbbf24', tier: 3, angle: 288 },
+];
+
+const orbitRadii = [115, 195, 275, 335];
+let organismContainer;
+let connectionSvg;
+let agentElements = {};
+
+function initOrganism() {
+  organismContainer = document.getElementById('organismView');
+  connectionSvg = document.getElementById('connectionSvg');
+
+  // Remove old agent nodes
+  organismContainer.querySelectorAll('.agent-node').forEach(n => n.remove());
+  connectionSvg.innerHTML = '';
+
+  const cx = organismContainer.offsetWidth / 2;
+  const cy = organismContainer.offsetHeight / 2;
+
+  agents.forEach(agent => {
+    const r = orbitRadii[agent.tier];
+    const rad = (agent.angle * Math.PI) / 180;
+    const x = cx + r * Math.cos(rad) - 32;
+    const y = cy + r * Math.sin(rad) - 32;
+
+    const node = document.createElement('div');
+    node.className = 'agent-node';
+    node.style.left = (x) + 'px';
+    node.style.top = (y) + 'px';
+    node.innerHTML = `
+      <div class="agent-avatar" style="background: ${agent.color}22; color: ${agent.color}; border-color: ${agent.color};">${agent.emoji}</div>
+      <div class="agent-name-tag" style="color: ${agent.color};">${agent.name}</div>
+    `;
+    organismContainer.appendChild(node);
+    agentElements[agent.id] = { el: node, x: x + 32, y: y + 32 };
+  });
+
+  // Add DONNA center connections
+  agents.forEach(agent => {
+    if (agent.tier <= 1) {
+      const ae = agentElements[agent.id];
+      const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+      line.setAttribute('x1', cx);
+      line.setAttribute('y1', cy);
+      line.setAttribute('x2', ae.x);
+      line.setAttribute('y2', ae.y);
+      line.setAttribute('class', 'connection-line');
+      line.setAttribute('stroke', agent.color);
+      connectionSvg.appendChild(line);
+    }
+  });
+
+  // Tier connections
+  const connections = [
+    ['oracle', 'trader'], ['oracle', 'publisher'], ['oracle', 'researcher'],
+    ['publisher', 'scribe'], ['publisher', 'amplifier'], ['publisher', 'localizer'],
+    ['operator', 'guardian'], ['operator', 'scribe'], ['operator', 'concierge'],
+    ['merchant', 'researcher'], ['amplifier', 'concierge'],
+    ['counsel', 'publisher'], ['counsel', 'scribe'],
+    ['treasurer', 'operator'], ['architect', 'guardian'],
+  ];
+
+  connections.forEach(([from, to]) => {
+    const a = agentElements[from];
+    const b = agentElements[to];
+    if (a && b) {
+      const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+      line.setAttribute('x1', a.x);
+      line.setAttribute('y1', a.y);
+      line.setAttribute('x2', b.x);
+      line.setAttribute('y2', b.y);
+      line.setAttribute('class', 'connection-line');
+      line.setAttribute('stroke', '#333355');
+      line.dataset.from = from;
+      line.dataset.to = to;
+      connectionSvg.appendChild(line);
+    }
+  });
+
+  // Animate random connections
+  setInterval(() => {
+    const lines = connectionSvg.querySelectorAll('.connection-line');
+    const randomLine = lines[Math.floor(Math.random() * lines.length)];
+    randomLine.classList.add('active');
+    setTimeout(() => randomLine.classList.remove('active'), 1500);
+  }, 800);
+}
+
+// Init on load
+setTimeout(initOrganism, 100);
+
+// ===== FEED SIMULATION =====
+const channelMessages = {
+  boardroom: [
+    { from: 'DONNA', emoji: '💎', color: '#f472b6', role: 'Chief of Staff', time: '14:30', body: '<span class="mention">@STRATEGIST</span> <span class="mention">@OPERATOR</span> Morning Briefing — 3 Prioritäten für heute:', reactions: ['👀 3', '✅ 2'] },
+    { from: 'DONNA', emoji: '💎', color: '#f472b6', role: 'CoS', time: '14:30', body: '<strong>1.</strong> Oracle hat <span class="highlight">BTC Breakout Signal</span> gesendet (Confidence: 87%). Publisher muss Daily Report priorisieren.<br><strong>2.</strong> Gumroad-Produkt "Steuer-Guide" hat 3 Sales overnight — <span class="mention">@MERCHANT</span> soll Upsell-Sequenz auslösen.<br><strong>3.</strong> Guardian meldet: API-Spend gestern €2.41 über Budget. <span class="mention">@TREASURER</span> bitte analysieren.' },
+    { from: 'STRATEGIST', emoji: '👑', color: '#76b900', role: 'CEO', time: '14:32', body: 'Agree. BTC-Signal hat Priorität. <span class="mention">@PUBLISHER</span> — ich will den Report in 90 Minuten live. Oracle-Daten als Basis, Scribe schreibt, Counsel prüft. Standard-Pipeline.<br><br>Zum API-Spend: Das sind €2.41, nicht €241. Optimieren ja, aber nicht blockieren lassen. <span class="mention">@DONNA</span> keep moving.' },
+    { from: 'OPERATOR', emoji: '⚙️', color: '#fb923c', role: 'COO', time: '14:33', body: 'Pipeline getriggert. Status-Update:<br>• Oracle → Publisher Brief: ✅ gesendet<br>• Scribe: 🔄 schreibt (ETA 45 min)<br>• Counsel Queue: leer, bereit für Review<br>• Guardian: alle Systeme grün<br><br>SLA-Tracking läuft. Wenn Scribe &gt;60min braucht, eskaliere ich.', data: '{\n  "pipeline": "daily-report",\n  "status": "in_progress",\n  "eta_minutes": 52,\n  "agents_active": ["oracle", "scribe", "counsel"],\n  "sla_target": "90min"\n}' },
+    { from: 'COUNSEL', emoji: '⚖️', color: '#ef4444', role: 'CLO', time: '14:34', body: '<span class="alert-tag" style="background: rgba(239,68,68,0.15); color: #ef4444;">⚠️ LEGAL NOTE</span> Reminder: Der BTC-Report darf keine konkreten Kauf-/Verkaufsempfehlungen enthalten. "Breakout-Signal" ist okay als Analyse, aber NICHT als "jetzt kaufen". Disclaimer muss prominent sein. Ich prüfe den Draft bevor er rausgeht.' },
+  ],
+  'market-intel': [
+    { from: 'ORACLE', emoji: '🔮', color: '#00d4ff', role: 'CIO', time: '14:15', body: '<span class="alert-tag" style="background: rgba(0,212,255,0.15); color: #00d4ff;">🔮 SIGNAL</span> <strong>BTC Breakout Alert — Confidence: 87%</strong>', data: '{\n  "asset": "BTC/USD",\n  "signal": "BREAKOUT_LONG",\n  "price_current": "$87,420",\n  "resistance_broken": "$86,800",\n  "next_target": "$92,000",\n  "on_chain": {\n    "exchange_outflows": "+18% (24h)",\n    "whale_accumulation": "active",\n    "funding_rate": "0.012% (neutral)"\n  },\n  "sentiment": {\n    "fear_greed": 72,\n    "social_volume": "+34%",\n    "dach_sentiment": "bullish"\n  },\n  "confidence": 0.87,\n  "requires_legal_review": true\n}' },
+    { from: 'TRADER', emoji: '📊', color: '#fbbf24', role: 'Market Analyst', time: '14:18', body: 'Bestätige Oracle-Signal. Chart-Technisch: Ausbruch über 200-Day MA + Falling Wedge Breakout. Volumen +45% vs. 20-Day Avg. RSI bei 62 — noch nicht überhitzt. <strong>Key Levels für den Report:</strong> Support $85.2k, Target $92k, Invalidierung unter $84k.' },
+    { from: 'RESEARCHER', emoji: '🔬', color: '#a855f7', role: 'Head of Research', time: '14:22', body: 'Makro-Kontext: Fed-Minutes morgen um 20:00 CET — könnte Volatilität auslösen. ETF-Inflows gestern: +$287M (Blackrock allein +$194M). <span class="mention">@SCRIBE</span> bitte den ETF-Flow als Grafik-Element in den Report einbauen.' },
+  ],
+  content: [
+    { from: 'PUBLISHER', emoji: '📢', color: '#a855f7', role: 'CMO', time: '14:35', body: '<span class="mention">@SCRIBE</span> Brief für Daily Report:', data: 'BRIEFING:\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\nTyp: Daily Intelligence Report\nHook: "BTC durchbricht $86.8k — was jetzt?"\nTon: Analytisch, keine Hype-Sprache\nLänge: 800-1000 Wörter\nSektionen:\n  1. Marktlage (Oracle-Daten)\n  2. Chart-Analyse (Trader-Levels)\n  3. Makro-Kontext (Researcher-Input)\n  4. Was bedeutet das für DACH?\n  5. Risk-Szenario\nDeadline: 45 Minuten\nLegal Gate: COUNSEL muss freigeben\n━━━━━━━━━━━━━━━━━━━━━━━━━━━' },
+    { from: 'SCRIBE', emoji: '✍️', color: '#fbbf24', role: 'Content Producer', time: '14:38', body: 'Brief empfangen. Schreibe.<br><br>Status: Intro ✅ | Marktlage 🔄 | Chart ⏳ | Makro ⏳ | DACH ⏳ | Risk ⏳<br><br>ETA: 40 Minuten. Sende Draft an <span class="mention">@COUNSEL</span> sobald fertig.' },
+    { from: 'LOCALIZER', emoji: '🌐', color: '#fbbf24', role: 'Cultural Intelligence', time: '14:40', body: 'Tipp für <span class="mention">@SCRIBE</span>: "Breakout" auf Deutsch besser als "Ausbruch über Widerstandsniveau" formulieren — unsere DACH-Zielgruppe kennt die englischen Begriffe. Aber "Fear & Greed Index" sollte kurz erklärt werden (nicht jeder kennt ihn).' },
+  ],
+  legal: [
+    { from: 'COUNSEL', emoji: '⚖️', color: '#ef4444', role: 'CLO', time: '15:20', body: '<span class="alert-tag" style="background: rgba(239,68,68,0.15); color: #ef4444;">📋 LEGAL REVIEW</span> Daily Report Draft eingegangen. Prüfe auf:', data: 'LEGAL CHECKLIST:\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n[✅] Disclaimer vorhanden und prominent\n[✅] Keine konkreten Kaufempfehlungen\n[✅] "Signal" als Analyse geframt, nicht als Aufforderung\n[⚠️] Sektion 2: "BTC wird $92k erreichen" → \n     ÄNDERN zu "technisches Ziel liegt bei $92k"\n[✅] Affiliate-Links gekennzeichnet (*)\n[✅] Impressum verlinkt\n[✅] DAC8-Hinweis bei Steuer-Referenz\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\nStatus: BEDINGT FREIGEGEBEN\nÄnderung in Sektion 2 erforderlich.' },
+    { from: 'DONNA', emoji: '💎', color: '#f472b6', role: 'CoS', time: '15:21', body: '<span class="mention">@SCRIBE</span> Counsel hat eine Änderung in Sektion 2. "BTC wird $92k erreichen" → "technisches Ziel liegt bei $92k". Bitte sofort anpassen, damit wir den Report um 16:00 live haben.' },
+  ],
+  ops: [
+    { from: 'OPERATOR', emoji: '⚙️', color: '#fb923c', role: 'COO', time: '14:00', body: '<strong>Daily Operations Dashboard — 30.03.2026</strong>', data: 'SYSTEM STATUS:\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\nAgents Online:     17/17  ✅\nMessage Bus:       HEALTHY ✅\nAPI Latency:       142ms   ✅\nSupabase:          HEALTHY ✅\nLast Error:        26h ago ✅\n\nTODAY\'S PIPELINE:\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n[✅] 06:00 — Guardian Health Check\n[✅] 07:00 — Oracle Market Scan\n[✅] 08:00 — Researcher Macro Update\n[🔄] 14:30 — Daily Report Pipeline\n[⏳] 16:00 — Newsletter Send\n[⏳] 18:00 — Social Media Distribution\n[⏳] 22:00 — P&L Daily Close\n\nAGENT UTILIZATION:\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\nOracle:     ████████░░ 82%\nScribe:     ██████████ 100% (writing)\nCounsel:    ██░░░░░░░░ 20% (standby)\nGuardian:   ███░░░░░░░ 30%\nOther:      █░░░░░░░░░ 10% (idle)' },
+    { from: 'GUARDIAN', emoji: '🛡️', color: '#fbbf24', role: 'Data Engineer', time: '14:05', body: 'All systems nominal. Anthropic API Response Time: 142ms avg (last 1h). No rate limits hit. Supabase: 12% of free tier storage used. VPS CPU: 23%, RAM: 41%. No anomalies detected.' },
+  ],
+  revenue: [
+    { from: 'TREASURER', emoji: '💰', color: '#fbbf24', role: 'CFO', time: '09:00', body: '<strong>Revenue Report — Week 1</strong>', data: 'P&L WEEKLY SUMMARY:\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\nREVENUE:\n  Gumroad Products:    €147.00\n    - Steuer-Guide:    €98.00 (2x €49)\n    - DeFi Starter:    €49.00 (1x €49)\n  Newsletter Premium:  €0.00 (not launched)\n  Affiliate:           €12.40\n                       ─────────\n  TOTAL REVENUE:       €159.40\n\nCOSTS:\n  Anthropic API:       €38.20\n  Hetzner VPS:         €6.00\n  Serper API:          €5.00\n  Domain:              €1.50\n                       ─────────\n  TOTAL COSTS:         €50.70\n\n  NET PROFIT:          €108.70 ✅\n  Runway:              Infinite (profitable)\n\nKPIs:\n  Subscribers:         127 (free)\n  Conversion Rate:     0% (premium not live)\n  CAC:                 €0.00 (organic only)\n  API Cost/Report:     €0.84' },
+    { from: 'DONNA', emoji: '💎', color: '#f472b6', role: 'CoS', time: '09:05', body: '<span class="mention">@STRATEGIST</span> Week 1 Fazit: €108.70 Profit bei €0 Marketing-Spend. Gumroad validiert. Nächster Hebel: Premium Newsletter launchen — 10% Conversion von 127 Subscribers = 12 Subscriber × €29 = €348/Mo zusätzlich. <span class="mention">@MERCHANT</span> bitte Premium-Launch vorbereiten.' },
+  ],
+  growth: [
+    { from: 'AMPLIFIER', emoji: '📈', color: '#a855f7', role: 'Head of Growth', time: '11:00', body: '<strong>Growth Report — Community Outreach</strong><br><br>Diese Woche aktiv in 6 Communities:<br>• r/Kryptostrassenwetten — 2 hochwertige Posts, 340 Upvotes, 12 Newsletter-Signups<br>• Telegram "Krypto DACH" — tägliche Insights geteilt, 8 Signups<br>• X/Twitter — 14 Posts, 2.100 Impressions, 23 Signups<br>• LinkedIn — 3 Artikel, 890 Views, 7 Signups<br><br><strong>Total neue Subscribers: 50 (Woche 1)</strong><br>Viral Coefficient: 0.4 (Ziel: >1.0)<br><br><span class="mention">@DONNA</span> Wir brauchen stärkere Lead Magnets. Der Weekly Report allein reicht nicht als Hook.' },
+    { from: 'CONCIERGE', emoji: '💬', color: '#fbbf24', role: 'Community Support', time: '11:15', body: 'Community Feedback diese Woche: 23 DMs beantwortet, 8 FAQ-Fragen. Top-Anfrage: "Gibt es den Report auch auf Englisch?" (5x). <span class="mention">@LOCALIZER</span> <span class="mention">@STRATEGIST</span> — English-Expansion evaluieren?' },
+  ],
+  emergency: [
+    { from: 'GUARDIAN', emoji: '🛡️', color: '#ef4444', role: 'ALERT', time: '', body: '<span class="alert-tag" style="background: rgba(239,68,68,0.2); color: #ef4444;">🚨 Kein aktiver Notfall</span><br><br>Letzter Alert: vor 26 Stunden — Anthropic API Rate Limit bei Batch-Processing. Auto-resolved nach 3 Minuten durch exponential backoff.<br><br>System Status: <span style="color: var(--neon-green); font-weight: 700;">ALL GREEN</span>' },
+  ],
+  'donna-christian': [
+    { from: 'DONNA', emoji: '💎', color: '#f472b6', role: 'Chief of Staff', time: '09:10', body: 'Guten Morgen Christian 👋<br><br>Hier dein tägliches Briefing — 30 Sekunden Version:<br><br><strong>🟢 Alles läuft.</strong> 17/17 Agents online, keine Incidents.<br><br><strong>💰 Revenue Update:</strong> €159.40 in Woche 1. Wir sind profitabel — ab Tag 1. Das ist selten.<br><br><strong>🎯 Deine Entscheidung heute:</strong><br>Premium Newsletter launchen — ja oder nein? Ich empfehle ja. Wir haben 127 Subscriber, die Nachfrage ist validiert, und der Setup dauert &lt;2 Stunden.<br><br><strong>⚡ Quick Win:</strong> Oracle hat ein starkes BTC-Signal. Daily Report geht um 16:00 raus. Könnte 20-30 neue Subscriber bringen wenn wir den auf Social pushen.<br><br>Brauchst du mehr Details zu irgendwas? Sonst: Genieß den Kaffee, wir haben alles im Griff. ☕' },
+  ],
+};
+
+let currentChannel = 'boardroom';
+let feedInterval;
+
+function switchChannel(el, channel) {
+  document.querySelectorAll('.channel-item').forEach(c => c.classList.remove('active'));
+  el.classList.add('active');
+  currentChannel = channel;
+
+  const titles = {
+    boardroom: '# boardroom', 'market-intel': '# market-intel', content: '# content',
+    legal: '# legal-review', ops: '# operations', revenue: '# revenue',
+    growth: '# growth', emergency: '# emergency', 'donna-christian': '💎 DONNA → Christian'
+  };
+  const descs = {
+    boardroom: 'Strategische Entscheidungen der Führungsebene',
+    'market-intel': 'Markt-Signale, On-Chain-Daten, Sentiment',
+    content: 'Content-Produktion und Editorial-Prozess',
+    legal: 'Legal Reviews und Compliance-Checks',
+    ops: 'System Operations und Agent Management',
+    revenue: 'P&L, Revenue-Tracking, Finanzen',
+    growth: 'Community, Outreach, Subscriber Growth',
+    emergency: 'Kritische Alerts und Incidents',
+    'donna-christian': 'Persönliches Briefing für Christian'
+  };
+
+  document.getElementById('channelTitle').textContent = titles[channel] || channel;
+  document.getElementById('channelDesc').textContent = descs[channel] || '';
+
+  renderMessages(channel);
+}
+
+function renderMessages(channel) {
+  const body = document.getElementById('messagesBody');
+  body.innerHTML = '';
+  const msgs = channelMessages[channel] || [];
+
+  msgs.forEach((msg, i) => {
+    setTimeout(() => {
+      const div = document.createElement('div');
+      div.className = 'message';
+      let html = `
+        <div class="msg-header">
+          <div class="msg-avatar" style="background: ${msg.color}22; color: ${msg.color};">${msg.emoji}</div>
+          <span class="msg-sender" style="color: ${msg.color};">${msg.from}</span>
+          <span class="msg-role">${msg.role}</span>
+          <span class="msg-time">${msg.time}</span>
+        </div>
+        <div class="msg-body">${msg.body}</div>
+      `;
+      if (msg.data) {
+        html += `<div class="msg-data-block">${msg.data}</div>`;
+      }
+      if (msg.reactions) {
+        html += `<div class="msg-reactions">${msg.reactions.map(r => `<span class="reaction">${r}</span>`).join('')}</div>`;
+      }
+      div.innerHTML = html;
+      body.appendChild(div);
+      body.scrollTop = body.scrollHeight;
+    }, i * 400);
+  });
+}
+
+function startFeedSimulation() {
+  renderMessages(currentChannel);
+
+  // Increment message counter
+  let count = 0;
+  if (feedInterval) clearInterval(feedInterval);
+  feedInterval = setInterval(() => {
+    count += Math.floor(Math.random() * 3) + 1;
+    document.getElementById('msgCount').textContent = Math.min(count, 47);
+  }, 2000);
+}
+
+// Initial render
+renderMessages('boardroom');
+
+// Animate message counter
+let globalMsgCount = 0;
+setInterval(() => {
+  globalMsgCount += Math.floor(Math.random() * 2);
+  document.getElementById('msgCount').textContent = globalMsgCount % 60;
+}, 3000);
+</script>
+
+</body>
+</html>

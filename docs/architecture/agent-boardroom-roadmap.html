@@ -1,0 +1,657 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ghost Protocol — Agent Boardroom Roadmap</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#060610;color:#e0e0e0;font-family:'Segoe UI',system-ui,sans-serif;line-height:1.6}
+.header{text-align:center;padding:40px 20px 10px}
+.header h1{font-size:2.2rem;background:linear-gradient(135deg,#ff4444,#7b2ff7,#00f5d4);-webkit-background-clip:text;-webkit-text-fill-color:transparent;letter-spacing:1px}
+.header p{color:#666;font-size:.85rem;margin-top:6px}
+
+/* Tabs */
+.tabs{display:flex;justify-content:center;gap:6px;padding:16px;flex-wrap:wrap}
+.tab{padding:8px 20px;border-radius:8px;border:1px solid #222;background:#0a0a14;color:#888;cursor:pointer;transition:.3s;font-size:.82rem}
+.tab:hover{border-color:#444;color:#fff}
+.tab.active{background:linear-gradient(135deg,#7b2ff7,#00f5d4);color:#fff;border-color:transparent;font-weight:600}
+.panel{display:none;max-width:1200px;margin:0 auto;padding:20px}
+.panel.active{display:block}
+
+/* Vision Box */
+.vision{max-width:900px;margin:0 auto 20px;background:linear-gradient(135deg,#0a0a2e,#0a1a1e);border:1px solid #7b2ff730;border-radius:16px;padding:28px 32px}
+.vision h2{color:#00f5d4;font-size:1rem;text-transform:uppercase;letter-spacing:2px;margin-bottom:12px}
+.vision .big{font-size:1.3rem;color:#fff;line-height:1.5}
+.vision .big strong{color:#ff8800}
+
+/* Corporate Model */
+.corp-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px;margin:20px 0}
+.corp-card{background:#0d0d18;border:1px solid #1a1a2e;border-radius:14px;padding:20px;transition:.3s}
+.corp-card:hover{border-color:#7b2ff7;transform:translateY(-2px)}
+.corp-card .company{font-size:.75rem;color:#7b2ff7;text-transform:uppercase;letter-spacing:1px;margin-bottom:4px}
+.corp-card h3{color:#fff;font-size:.95rem;margin-bottom:8px}
+.corp-card p{color:#888;font-size:.82rem}
+.corp-card .principle{margin-top:10px;padding:8px 12px;background:#7b2ff708;border-left:3px solid #7b2ff7;font-size:.8rem;color:#b388ff}
+
+/* Agent C-Suite */
+.csuite{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px;margin:20px 0}
+.agent{background:#0d0d18;border:1px solid #1a1a2e;border-radius:14px;padding:20px;position:relative}
+.agent:hover{border-color:#00f5d4}
+.agent .icon{font-size:1.8rem;margin-bottom:8px}
+.agent h3{color:#fff;font-size:1rem}
+.agent .title{color:#00f5d4;font-size:.78rem;font-weight:600;margin-bottom:8px}
+.agent .realworld{font-size:.75rem;color:#7b2ff7;margin-bottom:8px}
+.agent .expertise{font-size:.82rem;color:#aaa;margin-bottom:10px}
+.agent .skills{display:flex;flex-wrap:wrap;gap:4px}
+.agent .skill{padding:2px 8px;border-radius:4px;font-size:.7rem;background:#1a1a2e;color:#888;border:1px solid #2a2a3e}
+
+/* Architecture */
+.arch-section{margin:24px 0}
+.arch-section h3{color:#00f5d4;font-size:.9rem;text-transform:uppercase;letter-spacing:1px;text-align:center;margin-bottom:16px}
+.arch-box{background:#0d0d18;border:1px solid #1a1a2e;border-radius:14px;padding:24px;max-width:900px;margin:0 auto}
+.arch-layer{display:flex;align-items:center;justify-content:center;gap:12px;margin:12px 0;flex-wrap:wrap}
+.arch-node{background:#111120;border:1px solid #2a2a3e;border-radius:10px;padding:12px 18px;text-align:center;min-width:120px;transition:.3s}
+.arch-node:hover{border-color:#7b2ff7;box-shadow:0 0 16px #7b2ff720}
+.arch-node .an-icon{font-size:1.2rem}
+.arch-node .an-name{font-size:.8rem;font-weight:600;color:#fff;margin-top:2px}
+.arch-node .an-tech{font-size:.68rem;color:#888;margin-top:2px}
+.arch-arrow{color:#7b2ff7;font-size:1.2rem}
+.arch-arrow-down{text-align:center;color:#00f5d4;font-size:1.2rem;margin:6px 0}
+.arch-bus{background:linear-gradient(90deg,#7b2ff720,#00f5d420);border:1px dashed #7b2ff750;border-radius:10px;padding:12px;text-align:center;margin:12px 0}
+.arch-bus .bus-name{font-size:.85rem;font-weight:700;color:#ff8800}
+.arch-bus .bus-tech{font-size:.72rem;color:#888}
+
+/* Live Demo Mockup */
+.demo-container{max-width:900px;margin:0 auto}
+.boardroom{background:#080812;border:1px solid #1a1a2e;border-radius:14px;overflow:hidden}
+.br-header{background:#0d0d1a;padding:12px 20px;display:flex;align-items:center;gap:12px;border-bottom:1px solid #1a1a2e}
+.br-header .dot{width:8px;height:8px;border-radius:50%}
+.br-header h4{color:#fff;font-size:.9rem;flex:1}
+.br-header .live{padding:3px 10px;border-radius:10px;font-size:.7rem;font-weight:700;background:#ff444430;color:#ff4444;animation:pulse 2s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
+.br-channels{display:flex;border-bottom:1px solid #1a1a2e}
+.br-sidebar{width:200px;background:#0a0a14;padding:12px;border-right:1px solid #1a1a2e}
+.br-channel{padding:6px 10px;border-radius:6px;font-size:.78rem;color:#888;cursor:pointer;margin:2px 0;transition:.2s}
+.br-channel:hover,.br-channel.active{background:#7b2ff715;color:#fff}
+.br-channel .ch-icon{margin-right:6px}
+.br-messages{flex:1;padding:16px;max-height:500px;overflow-y:auto}
+.msg{display:flex;gap:10px;margin:10px 0;animation:fadeIn .5s ease}
+@keyframes fadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+.msg-avatar{width:32px;height:32px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:1rem;flex-shrink:0}
+.msg-body{flex:1}
+.msg-header{display:flex;align-items:baseline;gap:8px;margin-bottom:2px}
+.msg-name{font-size:.82rem;font-weight:600;color:#fff}
+.msg-role{font-size:.68rem;color:#666}
+.msg-time{font-size:.65rem;color:#444;margin-left:auto}
+.msg-text{font-size:.82rem;color:#bbb;line-height:1.5}
+.msg-text code{background:#1a1a2e;padding:1px 6px;border-radius:3px;font-size:.78rem;color:#00f5d4}
+.msg-text .data{color:#ff8800;font-weight:600}
+.msg-text .alert{color:#ff4444;font-weight:600}
+.msg-text .action{color:#00f5d4;font-weight:600}
+.msg-reaction{display:flex;gap:4px;margin-top:4px}
+.msg-reaction span{padding:1px 6px;border-radius:4px;font-size:.7rem;background:#1a1a2e;border:1px solid #2a2a3e;cursor:pointer}
+
+/* Roadmap */
+.roadmap{max-width:900px;margin:0 auto}
+.phase{margin:28px 0;position:relative;padding-left:44px}
+.phase::before{content:'';position:absolute;left:16px;top:0;bottom:-28px;width:2px;background:linear-gradient(180deg,#7b2ff7,#00f5d4)}
+.phase:last-child::before{display:none}
+.phase-dot{position:absolute;left:8px;top:4px;width:18px;height:18px;border-radius:50%;border:2px solid #7b2ff7;background:#060610}
+.phase-dot.done{background:#00f5d4;border-color:#00f5d4}
+.phase-dot.current{background:#ff8800;border-color:#ff8800;box-shadow:0 0 12px #ff880060}
+.phase h3{color:#fff;font-size:1rem;margin-bottom:2px}
+.phase .duration{font-size:.78rem;color:#ff8800;margin-bottom:8px}
+.phase .deliverables{list-style:none;padding:0}
+.phase .deliverables li{padding:6px 0;font-size:.85rem;color:#aaa;border-bottom:1px solid #0d0d18}
+.phase .deliverables li::before{content:'→';color:#7b2ff7;margin-right:8px}
+.phase .tech-stack{margin-top:8px;display:flex;flex-wrap:wrap;gap:4px}
+.phase .tech{padding:2px 8px;border-radius:4px;font-size:.68rem;background:#1a1a2e;color:#888;border:1px solid #2a2a3e}
+.phase .dep{margin-top:8px;font-size:.75rem;color:#ff4444}
+
+@media(max-width:768px){.csuite,.corp-grid{grid-template-columns:1fr}.br-sidebar{display:none}.arch-layer{flex-direction:column}}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>THE AGENT BOARDROOM</h1>
+  <p>Ghost Protocol v2 — Weltklasse-C-Suite aus AI-Agenten mit Echtzeit-Kommunikation</p>
+</div>
+
+<div class="tabs">
+  <div class="tab active" onclick="showP('vision')">Vision & Vorbilder</div>
+  <div class="tab" onclick="showP('csuite')">Die C-Suite (10 Agenten)</div>
+  <div class="tab" onclick="showP('arch')">Technische Architektur</div>
+  <div class="tab" onclick="showP('demo')">Live Boardroom Demo</div>
+  <div class="tab" onclick="showP('roadmap')">Roadmap (14 Phasen)</div>
+</div>
+
+<!-- VISION -->
+<div class="panel active" id="p-vision">
+  <div class="vision">
+    <h2>Die Vision</h2>
+    <div class="big">
+      Ein AI-Unternehmen, in dem <strong>10 Agenten sich in Echtzeit unterhalten</strong> — wie eine echte C-Suite. Jeder Agent besitzt die <strong>höchste Fachkompetenz seines Bereichs auf dem Weltmarkt</strong>. Du siehst jede Konversation live in einem "Boardroom" Dashboard — parallel, transparent, nachvollziehbar.
+    </div>
+  </div>
+
+  <h3 style="text-align:center;color:#7b2ff7;margin:24px 0 16px;font-size:.9rem;text-transform:uppercase;letter-spacing:1px">Vorbilder: Die besten Unternehmen der Welt</h3>
+  <div class="corp-grid">
+    <div class="corp-card">
+      <div class="company">Bridgewater Associates</div>
+      <h3>Radikale Transparenz</h3>
+      <p>Ray Dalio's Prinzip: Alle Meetings aufgezeichnet. Ideen werden nach Glaubwürdigkeit gewichtet, nicht nach Hierarchie. "Idea Meritocracy" — das beste Argument gewinnt.</p>
+      <div class="principle">→ Unsere Agenten: Jede Kommunikation wird geloggt und ist einsehbar. Entscheidungen basieren auf Datenqualität, nicht auf Agent-Rang.</div>
+    </div>
+    <div class="corp-card">
+      <div class="company">Renaissance Technologies</div>
+      <h3>Quantitativer Ansatz</h3>
+      <p>Jim Simons' Medallion Fund: Flache Struktur, geteilte Incentives. Hire smart people from outside finance. Alle Entscheidungen modellbasiert — kein "Bauchgefühl".</p>
+      <div class="principle">→ Unsere Agenten: Jeder Agent hat Zugang zu denselben Daten. Entscheidungen sind reproduzierbar und auditierbar.</div>
+    </div>
+    <div class="corp-card">
+      <div class="company">Amazon</div>
+      <h3>Two-Pizza Teams + Written Culture</h3>
+      <p>Jeff Bezos: Kleine, autonome Teams. Keine PowerPoints — 6-Seiten-Memos. "Disagree and Commit". Day-1-Mentalität. Single-Threaded Ownership.</p>
+      <div class="principle">→ Unsere Agenten: Jeder Agent "owns" seinen Bereich vollständig. Kommunikation über strukturierte Memos, nicht Chat.</div>
+    </div>
+    <div class="corp-card">
+      <div class="company">Berkshire Hathaway</div>
+      <h3>Delegierte Autonomie</h3>
+      <p>Warren Buffett: 24 Personen managen $1,16 Billionen. Vertrauen + kulturelle Ausrichtung statt Prozesse. Extreme Dezentralisierung mit klaren Leitplanken.</p>
+      <div class="principle">→ Unsere Agenten: Maximal autonom innerhalb klarer Grenzen. Guardian als "Board of Directors" mit Veto-Recht.</div>
+    </div>
+  </div>
+
+  <div style="max-width:800px;margin:20px auto;background:#0d0d18;border:1px solid #ff444430;border-radius:14px;padding:20px;text-align:center">
+    <h4 style="color:#ff4444;margin-bottom:8px">Kritischer Research-Befund</h4>
+    <p style="color:#aaa;font-size:.85rem">"Slack für AI-Agenten" <strong style="color:#fff">existiert nicht.</strong> Kein Framework bietet echte Inter-Agent-Kommunikation mit Echtzeit-Visualisierung. LangGraph kommt am nächsten (Shared State + Parallel Execution), aber selbst dort "reden" Agenten nicht miteinander — sie lesen/schreiben in einen gemeinsamen State.</p>
+    <p style="color:#ff8800;font-size:.85rem;margin-top:8px"><strong>Das bedeutet: Wir bauen etwas, das es noch nicht gibt. Das ist gleichzeitig Risiko und Chance — weil es zum Produkt werden kann.</strong></p>
+  </div>
+</div>
+
+<!-- C-SUITE -->
+<div class="panel" id="p-csuite">
+  <h3 style="text-align:center;color:#fff;margin:0 0 8px;font-size:1.1rem">Die Ghost Protocol C-Suite</h3>
+  <p style="text-align:center;color:#666;font-size:.82rem;margin-bottom:20px">10 Agenten · Jeder mit Weltklasse-Expertise · Modelliert nach den besten Führungskräften der Welt</p>
+
+  <div class="csuite">
+    <div class="agent" style="border-color:#ff8800">
+      <div class="icon">🧠</div>
+      <h3>THE STRATEGIST</h3>
+      <div class="title">Chief Executive Officer (CEO)</div>
+      <div class="realworld">Vorbild: Elon Musk (First Principles) × Ray Dalio (Data-Driven Decisions)</div>
+      <div class="expertise">Ressourcen-Allokation, strategische Kurskorrektur, Agent-Priorisierung. Entscheidet NUR auf Basis von Treasurer-Reports + Oracle-Intel. Weekly Strategy Memo. Christian hat Veto-Recht.</div>
+      <div class="skills"><span class="skill">Strategic Reasoning</span><span class="skill">Resource Allocation</span><span class="skill">Decision Frameworks</span><span class="skill">OKR Management</span></div>
+    </div>
+
+    <div class="agent" style="border-color:#ff4444">
+      <div class="icon">⚖️</div>
+      <h3>THE COUNSEL</h3>
+      <div class="title">General Counsel / Chief Legal Officer (CLO)</div>
+      <div class="realworld">Vorbild: DACH-Regulatorik-Experte · BaFin · MiCA · GlüStV · DSGVO · DAC8</div>
+      <div class="expertise">Prüft JEDEN Output vor Veröffentlichung auf rechtliche Konformität. Disclaimer-Enforcement. Steuerrecht DE/AT/CH. Affiliate-Compliance. Gewerbeanmeldung. UG-Gründung. MiCA-Regeln für Marketing-Kommunikation.</div>
+      <div class="skills"><span class="skill">BaFin-Regulatorik</span><span class="skill">MiCA Compliance</span><span class="skill">DSGVO</span><span class="skill">DAC8 Steuerrecht</span><span class="skill">GlüStV</span><span class="skill">Affiliate-Recht</span></div>
+    </div>
+
+    <div class="agent">
+      <div class="icon">🔮</div>
+      <h3>THE ORACLE</h3>
+      <div class="title">Chief Intelligence Officer (CIO)</div>
+      <div class="realworld">Vorbild: Renaissance Technologies Quant-Ansatz · Daten > Meinungen</div>
+      <div class="expertise">Krypto-Marktintelligenz, On-Chain-Analyse, Sentiment-Scoring, Trend-Detection. Füttert alle Content-Agenten mit Intelligence Feed. Bewertet Opportunities mit Wahrscheinlichkeiten, nie mit Gewissheiten.</div>
+      <div class="skills"><span class="skill">On-Chain Analytics</span><span class="skill">Sentiment Analysis</span><span class="skill">News Scanning</span><span class="skill">Trend Detection</span><span class="skill">Risk Scoring</span></div>
+    </div>
+
+    <div class="agent">
+      <div class="icon">💰</div>
+      <h3>THE TREASURER</h3>
+      <div class="title">Chief Financial Officer (CFO)</div>
+      <div class="realworld">Vorbild: Berkshire's Charlie Munger · Exakte Zahlen, keine Rundungen</div>
+      <div class="expertise">P&L-Tracking auf Cent-Ebene. Revenue-Attribution (welcher Channel, welcher Content). Budget-Optimierung. API-Spend-Monitoring. ROI pro Agent berechnen. Monthly Forecast. Steuerliche Vorab-Kalkulation.</div>
+      <div class="skills"><span class="skill">P&L Tracking</span><span class="skill">Revenue Attribution</span><span class="skill">Budget Optimization</span><span class="skill">Tax Projection</span><span class="skill">Cash Flow</span></div>
+    </div>
+
+    <div class="agent">
+      <div class="icon">📝</div>
+      <h3>THE PUBLISHER</h3>
+      <div class="title">Chief Content Officer (CCO)</div>
+      <div class="realworld">Vorbild: The Hustle / Morning Brew Content-Maschine</div>
+      <div class="expertise">SEO-Content-Erstellung auf Weltklasse-Niveau. DACH-Keywords, E-E-A-T-Signale. 3-5 Artikel/Woche. Jeder Artikel löst ein konkretes Problem. Affiliate-Links natürlich eingebettet. Immer Disclaimer.</div>
+      <div class="skills"><span class="skill">SEO Writing</span><span class="skill">Keyword Research</span><span class="skill">E-E-A-T</span><span class="skill">DACH Content</span><span class="skill">Affiliate Integration</span></div>
+    </div>
+
+    <div class="agent">
+      <div class="icon">📢</div>
+      <h3>THE AMPLIFIER</h3>
+      <div class="title">Chief Marketing Officer (CMO)</div>
+      <div class="realworld">Vorbild: Airbnb/Dropbox Growth Hacking · Sean Ellis Framework</div>
+      <div class="expertise">Multi-Channel Distribution (X, LinkedIn, Newsletter, Telegram). Growth Loops bauen. A/B-Testing. Conversion-Optimierung. Community-Building. Outreach-Strategie.</div>
+      <div class="skills"><span class="skill">Growth Hacking</span><span class="skill">Social Media</span><span class="skill">A/B Testing</span><span class="skill">Conversion</span><span class="skill">Community</span></div>
+    </div>
+
+    <div class="agent">
+      <div class="icon">🏪</div>
+      <h3>THE MERCHANT</h3>
+      <div class="title">Chief Product Officer (CPO)</div>
+      <div class="realworld">Vorbild: Gumroad/Etsy Top-1%-Seller Methodik</div>
+      <div class="expertise">Digital Product Design: Problem identifizieren → Lösung bauen → Pricing optimieren → Launch. Trading Journals, Steuer-Guides, Notion Templates, Prompt Packs. Qualität > Quantität.</div>
+      <div class="skills"><span class="skill">Product Design</span><span class="skill">Pricing Strategy</span><span class="skill">Launch Playbook</span><span class="skill">Listing Optimization</span></div>
+    </div>
+
+    <div class="agent">
+      <div class="icon">📈</div>
+      <h3>THE TRADER</h3>
+      <div class="title">Head of Trading</div>
+      <div class="realworld">Vorbild: Two Sigma / Citadel Systematic Trading · Kein LLM für Execution</div>
+      <div class="expertise">Marktanalyse → Signal-Generierung → Bot-Steuerung. AI denkt, Bot handelt (Separation of Concerns). Hard Stop-Loss: 20% Drawdown = Auto-Shutdown. Exchange-seitiger Stop-Loss ist Pflicht.</div>
+      <div class="skills"><span class="skill">Technical Analysis</span><span class="skill">Signal Generation</span><span class="skill">Risk Management</span><span class="skill">Bot API</span></div>
+    </div>
+
+    <div class="agent" style="border-color:#ff4444">
+      <div class="icon">🛡️</div>
+      <h3>THE GUARDIAN</h3>
+      <div class="title">Chief Information Security Officer (CISO)</div>
+      <div class="realworld">Vorbild: Google SRE Prinzipien · "Hope is not a strategy"</div>
+      <div class="expertise">System-Health alle 15min. Kann JEDEN Agent stoppen. Circuit-Breaker, Token-Limits, Kill-Switches. API-Key-Rotation. Compliance-Audit. Emergency Alerts via Telegram. Darf NIE deaktiviert werden.</div>
+      <div class="skills"><span class="skill">Health Monitoring</span><span class="skill">Kill Switches</span><span class="skill">Circuit Breakers</span><span class="skill">Alert Management</span></div>
+    </div>
+
+    <div class="agent">
+      <div class="icon">🔧</div>
+      <h3>THE ARCHITECT</h3>
+      <div class="title">Chief Technology Officer (CTO)</div>
+      <div class="realworld">Vorbild: Werner Vogels (Amazon CTO) · "Everything fails, all the time"</div>
+      <div class="expertise">System-Architektur, Agent-Orchestrierung, Message-Bus, Dashboard. Optimiert Token-Effizienz, Agent-Handoffs, Latenz. Entscheidet über Framework-Migration (CrewAI → LangGraph). DevOps + CI/CD.</div>
+      <div class="skills"><span class="skill">System Architecture</span><span class="skill">LangGraph/CrewAI</span><span class="skill">DevOps</span><span class="skill">Token Optimization</span><span class="skill">Message Bus</span></div>
+    </div>
+  </div>
+</div>
+
+<!-- ARCHITECTURE -->
+<div class="panel" id="p-arch">
+  <div class="arch-section">
+    <h3>System-Architektur: Der Agent Boardroom</h3>
+    <div class="arch-box">
+
+      <div style="text-align:center;font-size:.8rem;color:#888;margin-bottom:16px">So kommunizieren die 10 Agenten miteinander — in Echtzeit, parallel, transparent</div>
+
+      <div class="arch-layer">
+        <div class="arch-node" style="border-color:#ffcc00"><div class="an-icon">👤</div><div class="an-name">Christian</div><div class="an-tech">Browser Dashboard</div></div>
+      </div>
+      <div class="arch-arrow-down">⬇ WebSocket (Echtzeit)</div>
+
+      <div class="arch-layer">
+        <div class="arch-node" style="border-color:#00f5d4;min-width:300px"><div class="an-icon">🖥️</div><div class="an-name">BOARDROOM DASHBOARD</div><div class="an-tech">Next.js + Supabase Realtime · Channel-basierte Ansicht</div></div>
+      </div>
+      <div class="arch-arrow-down">⬇ Supabase Realtime Subscriptions</div>
+
+      <div class="arch-bus">
+        <div class="bus-name">📡 MESSAGE BUS — "Der Konferenzraum"</div>
+        <div class="bus-tech">Supabase Realtime (WebSocket) + Redis Pub/Sub (Agent-intern) · Channels: #strategy, #market-intel, #content, #legal, #trading, #ops, #emergency</div>
+      </div>
+
+      <div class="arch-arrow-down">⬆⬇ Publish + Subscribe</div>
+
+      <div class="arch-layer">
+        <div class="arch-node"><div class="an-icon">🧠</div><div class="an-name">CEO</div></div>
+        <div class="arch-node"><div class="an-icon">⚖️</div><div class="an-name">Legal</div></div>
+        <div class="arch-node"><div class="an-icon">🔮</div><div class="an-name">Oracle</div></div>
+        <div class="arch-node"><div class="an-icon">💰</div><div class="an-name">CFO</div></div>
+        <div class="arch-node"><div class="an-icon">🛡️</div><div class="an-name">CISO</div></div>
+      </div>
+      <div class="arch-layer">
+        <div class="arch-node"><div class="an-icon">📝</div><div class="an-name">CCO</div></div>
+        <div class="arch-node"><div class="an-icon">📢</div><div class="an-name">CMO</div></div>
+        <div class="arch-node"><div class="an-icon">🏪</div><div class="an-name">CPO</div></div>
+        <div class="arch-node"><div class="an-icon">📈</div><div class="an-name">Trader</div></div>
+        <div class="arch-node"><div class="an-icon">🔧</div><div class="an-name">CTO</div></div>
+      </div>
+
+      <div class="arch-arrow-down">⬇ API Calls</div>
+
+      <div class="arch-layer">
+        <div class="arch-node" style="border-color:#444"><div class="an-icon">🤖</div><div class="an-name">Claude Sonnet</div><div class="an-tech">Complex Tasks</div></div>
+        <div class="arch-node" style="border-color:#444"><div class="an-icon">⚡</div><div class="an-name">Claude Haiku</div><div class="an-tech">Simple Tasks</div></div>
+        <div class="arch-node" style="border-color:#444"><div class="an-icon">🗄️</div><div class="an-name">Supabase</div><div class="an-tech">State + Logs</div></div>
+        <div class="arch-node" style="border-color:#444"><div class="an-icon">🌐</div><div class="an-name">External APIs</div><div class="an-tech">CoinGecko, Serper, etc.</div></div>
+      </div>
+    </div>
+  </div>
+
+  <div style="max-width:900px;margin:20px auto">
+    <h4 style="color:#fff;text-align:center;margin-bottom:16px">Kommunikations-Protokoll: Wie Agenten "reden"</h4>
+    <div style="background:#0d0d18;border:1px solid #1a1a2e;border-radius:14px;padding:20px;font-family:monospace;font-size:.8rem;color:#aaa;line-height:1.8;overflow-x:auto">
+<pre style="color:#bbb">{
+  <span style="color:#00f5d4">"id"</span>: "msg_20260401_143022_oracle_001",
+  <span style="color:#00f5d4">"timestamp"</span>: "2026-04-01T14:30:22Z",
+  <span style="color:#00f5d4">"from"</span>: { "agent": "oracle", "role": "CIO" },
+  <span style="color:#00f5d4">"to"</span>: ["#market-intel", "@publisher", "@trader"],
+  <span style="color:#00f5d4">"type"</span>: "intelligence_briefing",
+  <span style="color:#00f5d4">"priority"</span>: "high",
+  <span style="color:#00f5d4">"content"</span>: {
+    <span style="color:#00f5d4">"summary"</span>: "BTC hat $95k durchbrochen. Volumen +340% vs 24h avg.",
+    <span style="color:#00f5d4">"data"</span>: { "btc_price": 95420, "volume_24h": "42.3B", ... },
+    <span style="color:#00f5d4">"opportunity_score"</span>: 8.2,
+    <span style="color:#00f5d4">"recommended_actions"</span>: [
+      { "agent": "publisher", "action": "Breaking news article" },
+      { "agent": "trader", "action": "Review long positions" }
+    ]
+  },
+  <span style="color:#00f5d4">"requires_legal_review"</span>: true,
+  <span style="color:#00f5d4">"confidence"</span>: 0.89
+}</pre>
+    </div>
+  </div>
+</div>
+
+<!-- LIVE DEMO -->
+<div class="panel" id="p-demo">
+  <div class="demo-container">
+    <h3 style="text-align:center;color:#fff;margin-bottom:16px;font-size:1rem">Agent Boardroom — So sieht es in Echtzeit aus</h3>
+    <div class="boardroom">
+      <div class="br-header">
+        <div class="dot" style="background:#ff4444"></div>
+        <div class="dot" style="background:#ffcc00"></div>
+        <div class="dot" style="background:#00ff88"></div>
+        <h4>Ghost Protocol Boardroom</h4>
+        <span class="live">● LIVE</span>
+      </div>
+      <div class="br-channels">
+        <div class="br-sidebar">
+          <div style="font-size:.7rem;color:#444;padding:4px 10px;text-transform:uppercase;letter-spacing:1px">Channels</div>
+          <div class="br-channel active"><span class="ch-icon">#</span> market-intel</div>
+          <div class="br-channel"><span class="ch-icon">#</span> strategy</div>
+          <div class="br-channel"><span class="ch-icon">#</span> content</div>
+          <div class="br-channel"><span class="ch-icon">#</span> legal-review</div>
+          <div class="br-channel"><span class="ch-icon">#</span> trading</div>
+          <div class="br-channel"><span class="ch-icon">#</span> revenue</div>
+          <div class="br-channel"><span class="ch-icon">#</span> ops</div>
+          <div class="br-channel" style="color:#ff4444"><span class="ch-icon">🚨</span> emergency</div>
+          <div style="font-size:.7rem;color:#444;padding:8px 10px 4px;text-transform:uppercase;letter-spacing:1px">Direct</div>
+          <div class="br-channel"><span class="ch-icon">👤</span> Christian (du)</div>
+        </div>
+        <div class="br-messages" id="msgArea">
+          <!-- Messages will be injected -->
+        </div>
+      </div>
+    </div>
+    <p style="text-align:center;color:#666;font-size:.78rem;margin-top:12px">Simulation einer typischen Agenten-Kommunikation im #market-intel Channel</p>
+  </div>
+</div>
+
+<!-- ROADMAP -->
+<div class="panel" id="p-roadmap">
+  <h3 style="text-align:center;color:#fff;margin-bottom:8px;font-size:1.1rem">Roadmap: 14 Meilensteine zum Agent Boardroom</h3>
+  <p style="text-align:center;color:#666;font-size:.82rem;margin-bottom:24px">Von Foundation bis Full Autonomous C-Suite · Geschätzte Gesamtdauer: 10-14 Wochen</p>
+
+  <div class="roadmap">
+
+    <div class="phase">
+      <div class="phase-dot current"></div>
+      <h3>Phase 1: Legal Foundation</h3>
+      <div class="duration">Woche 1 · Voraussetzung für alles</div>
+      <ul class="deliverables">
+        <li>Gewerbeanmeldung Magdeburg (Einzelunternehmen, ~€30)</li>
+        <li>Impressum + Datenschutzerklärung (DSGVO-konform)</li>
+        <li>Disclaimer-Templates für alle Content-Typen</li>
+        <li>Affiliate-Werbekennzeichnung nach TMG §6</li>
+        <li>Counsel-Agent: Knowledge Base mit BaFin, MiCA, GlüStV, DAC8, DSGVO laden</li>
+      </ul>
+      <div class="tech-stack"><span class="tech">Gewerbeanmeldung</span><span class="tech">DSGVO</span><span class="tech">MiCA</span></div>
+    </div>
+
+    <div class="phase">
+      <div class="phase-dot"></div>
+      <h3>Phase 2: Infrastructure</h3>
+      <div class="duration">Woche 1-2 · Server + Database + Repo</div>
+      <ul class="deliverables">
+        <li>Hetzner VPS CX22 bestellen + Docker Setup</li>
+        <li>Supabase Projekt: agents_messages, agents_state, agents_logs Tabellen</li>
+        <li>Supabase Realtime aktivieren (WebSocket für Dashboard)</li>
+        <li>Redis auf VPS installieren (internes Pub/Sub)</li>
+        <li>GitHub Actions CI/CD Pipeline</li>
+        <li>Domain registrieren + Cloudflare DNS</li>
+      </ul>
+      <div class="tech-stack"><span class="tech">Docker</span><span class="tech">Supabase</span><span class="tech">Redis</span><span class="tech">GitHub Actions</span><span class="tech">Cloudflare</span></div>
+    </div>
+
+    <div class="phase">
+      <div class="phase-dot"></div>
+      <h3>Phase 3: Message Bus ("Der Konferenzraum")</h3>
+      <div class="duration">Woche 2-3 · KERN-INNOVATION</div>
+      <ul class="deliverables">
+        <li>Agent Message Protocol definieren (JSON Schema)</li>
+        <li>Supabase Realtime Channels: #strategy, #market-intel, #content, #legal, #trading, #ops, #emergency</li>
+        <li>Python SDK: AgentMessage Klasse (send, subscribe, broadcast)</li>
+        <li>Message Routing: @mention für Direct, #channel für Broadcast</li>
+        <li>Priority System: normal / high / emergency (Guardian-Alerts)</li>
+        <li>Message Persistence in Supabase (Audit Trail)</li>
+      </ul>
+      <div class="tech-stack"><span class="tech">Supabase Realtime</span><span class="tech">Redis Pub/Sub</span><span class="tech">Python SDK</span><span class="tech">JSON Schema</span></div>
+    </div>
+
+    <div class="phase">
+      <div class="phase-dot"></div>
+      <h3>Phase 4: Agent Base Class</h3>
+      <div class="duration">Woche 3 · Das Framework für alle Agenten</div>
+      <ul class="deliverables">
+        <li>BaseAgent Klasse: lifecycle (init → think → act → report → sleep)</li>
+        <li>LLM-Integration: Claude Sonnet/Haiku via Anthropic SDK</li>
+        <li>Knowledge Injection: Jeder Agent bekommt sein Fach-Wissen als System Prompt</li>
+        <li>Tool-System: Jeder Agent kann externe APIs aufrufen</li>
+        <li>Circuit Breaker: Max-Retries, Timeout, Token-Limits</li>
+        <li>State Management: Agent-State in Supabase (persistent über Restarts)</li>
+      </ul>
+      <div class="tech-stack"><span class="tech">Python 3.12</span><span class="tech">Anthropic SDK</span><span class="tech">asyncio</span><span class="tech">Pydantic</span></div>
+    </div>
+
+    <div class="phase">
+      <div class="phase-dot"></div>
+      <h3>Phase 5: Boardroom Dashboard v1</h3>
+      <div class="duration">Woche 3-4 · Echtzeit-Visualisierung</div>
+      <ul class="deliverables">
+        <li>Next.js App mit Supabase Realtime Client</li>
+        <li>Channel-basierte Ansicht (wie Slack/Discord)</li>
+        <li>Agent-Avatare mit Status (🟢 active, 🟡 thinking, 🔴 error, ⚪ idle)</li>
+        <li>Message-Stream: Neue Nachrichten erscheinen live (WebSocket)</li>
+        <li>Parallel-View: Mehrere Channels gleichzeitig sichtbar</li>
+        <li>Filter: Nach Agent, Channel, Priority, Zeitraum</li>
+        <li>Deploy auf Cloudflare Pages (€0)</li>
+      </ul>
+      <div class="tech-stack"><span class="tech">Next.js 14</span><span class="tech">Tailwind CSS</span><span class="tech">Supabase Realtime</span><span class="tech">Cloudflare Pages</span></div>
+    </div>
+
+    <div class="phase">
+      <div class="phase-dot"></div>
+      <h3>Phase 6: Guardian Agent (CISO)</h3>
+      <div class="duration">Woche 4 · Muss VOR allen anderen Agenten live sein</div>
+      <ul class="deliverables">
+        <li>Health-Check alle 15 Minuten (alle Subsysteme)</li>
+        <li>Kill-Switch: Kann jeden Agent stoppen via #emergency Channel</li>
+        <li>Token-Budget-Monitor: Alert bei >80% des Daily Budgets</li>
+        <li>API-Key-Validierung</li>
+        <li>Telegram Alert Bot für Christian</li>
+        <li>Compliance-Scan: Prüft ob Disclaimer in Output vorhanden</li>
+      </ul>
+      <div class="tech-stack"><span class="tech">Claude Haiku</span><span class="tech">Telegram Bot API</span><span class="tech">Uptime Robot</span></div>
+    </div>
+
+    <div class="phase">
+      <div class="phase-dot"></div>
+      <h3>Phase 7: Oracle Agent (CIO) + Counsel Agent (CLO)</h3>
+      <div class="duration">Woche 4-5 · Intelligence + Legal als Basis</div>
+      <ul class="deliverables">
+        <li>Oracle: Scannt alle 4h News (Serper), Preise (CoinGecko), Sentiment (LunarCrush)</li>
+        <li>Oracle: Postet Intelligence Briefing in #market-intel</li>
+        <li>Oracle: Tagged relevante Agenten (@publisher, @trader)</li>
+        <li>Counsel: Knowledge Base mit deutschem Recht (BaFin, MiCA, DSGVO, DAC8, StGB §284/285)</li>
+        <li>Counsel: Prüft jeden Content-Draft in #legal-review</li>
+        <li>Counsel: Approved/Rejected mit Begründung → zurück an Publisher</li>
+      </ul>
+      <div class="tech-stack"><span class="tech">Claude Sonnet</span><span class="tech">Serper API</span><span class="tech">CoinGecko API</span></div>
+    </div>
+
+    <div class="phase">
+      <div class="phase-dot"></div>
+      <h3>Phase 8: Content Pipeline (Publisher + Amplifier)</h3>
+      <div class="duration">Woche 5-6 · Erster Revenue-relevanter Output</div>
+      <ul class="deliverables">
+        <li>Publisher: Empfängt Oracle-Feed → erstellt SEO-Artikel → sendet an #legal-review</li>
+        <li>Publisher: Nach Legal-Approval → Deploy auf Astro Blog</li>
+        <li>Amplifier: Empfängt Published-Content → erstellt Social Posts</li>
+        <li>Amplifier: Postet auf X, LinkedIn mit Scheduling</li>
+        <li>Erster vollständiger Flow: Oracle → Publisher → Counsel → Publish → Amplify</li>
+        <li>Im Dashboard sichtbar: Agent-zu-Agent Kommunikation in Echtzeit</li>
+      </ul>
+      <div class="tech-stack"><span class="tech">Astro</span><span class="tech">X API</span><span class="tech">LinkedIn API</span></div>
+      <div class="dep">⚡ Abhängigkeit: Phase 6 + 7 müssen laufen</div>
+    </div>
+
+    <div class="phase">
+      <div class="phase-dot"></div>
+      <h3>Phase 9: Revenue Agents (Merchant + Treasurer)</h3>
+      <div class="duration">Woche 6-7 · Geld verdienen</div>
+      <ul class="deliverables">
+        <li>Merchant: Digital Products auf Gumroad erstellen + listen</li>
+        <li>Merchant: Postet neue Produkte in #revenue → Amplifier promoted</li>
+        <li>Treasurer: Aggregiert täglich: Gumroad Sales, Affiliate Conversions, Trading P&L</li>
+        <li>Treasurer: Daily P&L Summary in #revenue + Telegram an Christian</li>
+        <li>Treasurer: Wöchentlicher Financial Report in #strategy für CEO</li>
+        <li>Affiliate-Accounts: Binance, MEXC, Bitget, Bybit, CoinLedger</li>
+      </ul>
+      <div class="tech-stack"><span class="tech">Gumroad API</span><span class="tech">Stripe API</span><span class="tech">Exchange APIs</span></div>
+    </div>
+
+    <div class="phase">
+      <div class="phase-dot"></div>
+      <h3>Phase 10: Trading Integration</h3>
+      <div class="duration">Woche 7-8 · Nur mit Guardian-Absicherung</div>
+      <ul class="deliverables">
+        <li>Trader: Empfängt Oracle-Signals → analysiert → gibt Bot-Befehle</li>
+        <li>Trading-Bot: Deterministische Execution (KEIN LLM!) auf Bitget/Binance</li>
+        <li>Hard Stop-Loss auf Exchange-Ebene (unabhängig vom Agent)</li>
+        <li>Trader postet alle Trades + Reasoning in #trading</li>
+        <li>Guardian überwacht Drawdown → Kill-Switch bei >20%</li>
+        <li>Counsel prüft: Nur eigenes Kapital, keine Anlageberatung</li>
+      </ul>
+      <div class="tech-stack"><span class="tech">Binance API</span><span class="tech">Bitget API</span><span class="tech">3Commas</span></div>
+      <div class="dep">⚡ Abhängigkeit: Guardian MUSS laufen + Legal-Review bestanden</div>
+    </div>
+
+    <div class="phase">
+      <div class="phase-dot"></div>
+      <h3>Phase 11: CEO Agent (Strategist)</h3>
+      <div class="duration">Woche 8-9 · Das Gehirn des Unternehmens</div>
+      <ul class="deliverables">
+        <li>Weekly Strategy Review: Liest alle Reports aus #revenue, #market-intel, #ops</li>
+        <li>Generiert Strategy Memo mit Prioritäts-Anpassungen</li>
+        <li>Kann Agenten-Budgets adjustieren (mehr/weniger API-Spend pro Agent)</li>
+        <li>Kann neue Initiativen starten (z.B. "Publisher: Fokus diese Woche auf DAC8-Content")</li>
+        <li>Debate-Protokoll: Kann andere Agenten "befragen" und Antworten auswerten</li>
+        <li>Christians Veto-Recht: Jede CEO-Entscheidung wird in #strategy gepostet + wartet 24h</li>
+      </ul>
+      <div class="tech-stack"><span class="tech">Claude Sonnet (höchste Reasoning-Qualität)</span></div>
+    </div>
+
+    <div class="phase">
+      <div class="phase-dot"></div>
+      <h3>Phase 12: Boardroom Dashboard v2 — Full Experience</h3>
+      <div class="duration">Woche 9-10 · Premium-Visualisierung</div>
+      <ul class="deliverables">
+        <li>Agent-Status-Dashboard: Alle 10 Agenten mit Live-Status</li>
+        <li>Parallel-Channel-View: 3 Channels nebeneinander</li>
+        <li>Decision Timeline: Wie wurde eine Entscheidung getroffen? (Agent A → Agent B → Legal → Published)</li>
+        <li>Revenue Dashboard: Echtzeit P&L mit Attribution</li>
+        <li>Agent Performance: Token-Spend, Task-Completion, Quality-Score pro Agent</li>
+        <li>Intervention-Panel: Christian kann direkt Agents ansprechen</li>
+        <li>Mobile-optimiert (responsive)</li>
+      </ul>
+      <div class="tech-stack"><span class="tech">Next.js</span><span class="tech">Recharts</span><span class="tech">Supabase Realtime</span><span class="tech">PWA</span></div>
+    </div>
+
+    <div class="phase">
+      <div class="phase-dot"></div>
+      <h3>Phase 13: AI Agency Launch (Primär-Revenue)</h3>
+      <div class="duration">Woche 10-12 · Ghost Protocol wird zum Produkt</div>
+      <ul class="deliverables">
+        <li>Landing Page: "Wir bauen AI-Agenten-Systeme für Ihr Unternehmen"</li>
+        <li>Ghost Protocol als Live-Showcase / Case Study</li>
+        <li>Boardroom Dashboard als Demo für Kunden</li>
+        <li>Pricing: €3.500-7.500 pro Projekt oder €2-5k/Mo Retainer</li>
+        <li>Cold Outreach: 100+ Emails/Woche an B2B-Zielgruppe</li>
+        <li>LinkedIn Positioning: "AI Automation Specialist, DACH"</li>
+      </ul>
+      <div class="tech-stack"><span class="tech">Landing Page</span><span class="tech">Cold Outreach</span><span class="tech">LinkedIn</span></div>
+    </div>
+
+    <div class="phase">
+      <div class="phase-dot"></div>
+      <h3>Phase 14: Scale + Optimize</h3>
+      <div class="duration">Woche 12-14+ · Continuous Improvement</div>
+      <ul class="deliverables">
+        <li>Agent-Performance-Tuning: Prompts optimieren basierend auf Output-Qualität</li>
+        <li>A/B-Testing: Newsletter-Subjects, Landing Page, Pricing</li>
+        <li>Newsletter Beehiiv: Welcome Sequence + Weekly Intelligence Report</li>
+        <li>Signal Community (Telegram) starten wenn Track Record vorhanden</li>
+        <li>Evaluierung: CrewAI → LangGraph Migration (wenn Stabilitätsprobleme)</li>
+        <li>UG-Gründung wenn Revenue >€2.000/Mo</li>
+        <li>Boardroom Dashboard als eigenständiges SaaS-Produkt evaluieren</li>
+      </ul>
+      <div class="tech-stack"><span class="tech">LangGraph (optional)</span><span class="tech">Beehiiv</span><span class="tech">Telegram</span></div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+function showP(n){
+  document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
+  document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
+  document.getElementById('p-'+n).classList.add('active');
+  event.target.classList.add('active');
+  if(n==='demo')startDemo();
+}
+
+const messages=[
+  {agent:'Oracle',icon:'🔮',color:'#7b2ff7',role:'CIO',text:'<span class="data">ALERT: BTC durchbricht $95.000.</span> Volumen +340% vs. 24h-Durchschnitt. Sentiment-Score: 82/100 (Extreme Greed). On-Chain: Whale-Akkumulation +12% in letzten 6h. Opportunity Score: <span class="data">8.2/10</span>. @publisher @trader — Action required.'},
+  {agent:'Counsel',icon:'⚖️',color:'#ff4444',role:'CLO',text:'Rechtlicher Hinweis an @publisher: Bei Marktbewegungen dieser Größe <span class="alert">keine konkreten Kaufempfehlungen</span>. Erlaubt: Faktenbasierte Berichterstattung + Bildungskontext. Pflicht-Disclaimer muss im ersten Absatz stehen. MiCA Art. 7 beachten: Keine irreführende Darstellung der Volatilität.'},
+  {agent:'Publisher',icon:'📝',color:'#00f5d4',role:'CCO',text:'Oracle-Intel empfangen. Erstelle Breaking-Analyse: "BTC bei $95k — Was DACH-Investoren jetzt wissen müssen". Struktur: Fakten → On-Chain-Daten → Steuerliche Implikation (DAC8) → Risiken. Affiliate-Links zu CoinLedger (Tax-Tool) natürlich eingebettet. Draft geht in 12min an <span class="action">#legal-review</span>.'},
+  {agent:'Trader',icon:'📈',color:'#ff8800',role:'Head of Trading',text:'Oracle-Signal analysiert. Aktuelle Position: 60% Cash, 25% BTC Long (Entry $88.200), 15% ETH. <span class="data">Kein neuer Trade.</span> Begründung: RSI bei 78 (überkauft), Funding Rate +0.08% (Long-Heavy). Warte auf Pullback zu $92k-93k für möglichen Add. Stop-Loss bleibt bei $84.500 (Exchange-Level). @guardian Status: ✅ innerhalb Risikoparameter.'},
+  {agent:'Guardian',icon:'🛡️',color:'#ff4444',role:'CISO',text:'System Health Check ✅ Alle 10 Agenten operational. API-Budget heute: €3,20 von €6,00 (53%). Trading-Drawdown: 2.8% (Limit: 20%). <span class="action">Counsel-Review für Publisher-Draft: PENDING.</span> Keine Anomalien. Nächster Check: 14:45 UTC.'},
+  {agent:'Treasurer',icon:'💰',color:'#00ff88',role:'CFO',text:'Revenue Update 14:30 UTC: Heute bisher <span class="data">€47,00</span> — Gumroad: 1x Steuer-Guide (€49, -10% = €44,10), Affiliate: 1x MEXC Signup (€2,90 estimated). MTD: €892. Laufende Kosten MTD: €52. <span class="data">Net: +€840.</span> On track für €1.200 Monatsziel.'},
+  {agent:'Amplifier',icon:'📢',color:'#ffcc00',role:'CMO',text:'Publisher-Artikel wird nach Legal-Approval in 3 Formaten distribuiert: (1) X Thread — 5 Tweets mit Key-Daten, (2) LinkedIn Post — Professional Angle mit DAC8-Kontext, (3) Telegram Teaser → Newsletter. Scheduling: X sofort, LinkedIn +2h, Telegram +4h. Engagement-optimierte Zeiten für DACH.'},
+  {agent:'Strategist',icon:'🧠',color:'#ff8800',role:'CEO',text:'Beobachtung an alle: Die BTC-Rally könnte kurzfristigen Traffic-Spike auslösen. <span class="action">Prioritätsanpassung für diese Woche:</span> Publisher → 2 zusätzliche Artikel zu BTC-Rallye-Themen. Merchant → Prüfe ob "BTC Tax Guide 2026" als Quick-Product machbar. Treasurer → Tracke Traffic-Spike-zu-Revenue-Conversion separat. Nächstes Strategy Memo: Sonntag 20:00.'}
+];
+
+let demoStarted=false;
+function startDemo(){
+  if(demoStarted)return;
+  demoStarted=true;
+  const area=document.getElementById('msgArea');
+  area.innerHTML='';
+  messages.forEach((m,i)=>{
+    setTimeout(()=>{
+      const div=document.createElement('div');
+      div.className='msg';
+      div.innerHTML=`
+        <div class="msg-avatar" style="background:${m.color}20;border:1px solid ${m.color}40">${m.icon}</div>
+        <div class="msg-body">
+          <div class="msg-header">
+            <span class="msg-name" style="color:${m.color}">${m.agent}</span>
+            <span class="msg-role">${m.role}</span>
+            <span class="msg-time">${new Date(Date.now()+i*120000).toLocaleTimeString('de',{hour:'2-digit',minute:'2-digit'})}</span>
+          </div>
+          <div class="msg-text">${m.text}</div>
+        </div>
+      `;
+      area.appendChild(div);
+      area.scrollTop=area.scrollHeight;
+    },i*2500);
+  });
+}
+</script>
+
+</body>
+</html>

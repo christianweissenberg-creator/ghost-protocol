@@ -1,0 +1,928 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GHOST PROTOCOL — Knowledge Architecture & Social Media Masterplan</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600&display=swap');
+:root {
+  --bg: #0a0a0f; --bg2: #12121a; --card: #1a1a2e; --card-h: #222240;
+  --green: #76b900; --blue: #00d4ff; --purple: #a855f7; --pink: #f472b6;
+  --orange: #fb923c; --red: #ef4444; --gold: #fbbf24; --cyan: #22d3ee;
+  --text: #e8e8f0; --text2: #8888a8; --dim: #55556a; --border: #2a2a3e;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: 'Inter', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
+
+.header {
+  background: linear-gradient(135deg, #0a0a0f, #1a1a2e, #0a0a0f);
+  border-bottom: 1px solid var(--border); padding: 20px 32px; position: relative;
+}
+.header::before {
+  content: ''; position: absolute; top: 0; left: 0; right: 0; height: 2px;
+  background: linear-gradient(90deg, transparent, var(--purple), var(--blue), var(--green), transparent);
+  animation: glow 3s ease-in-out infinite;
+}
+@keyframes glow { 0%,100%{opacity:.5} 50%{opacity:1} }
+.header h1 {
+  font-size: 22px; font-weight: 800; letter-spacing: 2px;
+  background: linear-gradient(90deg, var(--green), var(--blue), var(--purple));
+  -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+}
+.header span { font-size: 12px; color: var(--text2); letter-spacing: 3px; text-transform: uppercase; }
+
+.tabs {
+  display: flex; gap: 4px; padding: 12px 32px; background: var(--bg2);
+  border-bottom: 1px solid var(--border); overflow-x: auto;
+}
+.tab {
+  padding: 10px 18px; border: 1px solid var(--border); border-radius: 8px; cursor: pointer;
+  font-size: 12px; font-weight: 600; letter-spacing: 1px; text-transform: uppercase;
+  color: var(--text2); background: transparent; transition: all .3s; white-space: nowrap;
+}
+.tab:hover { color: var(--text); border-color: var(--dim); }
+.tab.active {
+  background: linear-gradient(135deg, rgba(118,185,0,.15), rgba(0,212,255,.1));
+  border-color: var(--green); color: var(--green);
+  box-shadow: 0 0 20px rgba(118,185,0,.3);
+}
+
+.content { max-width: 1600px; margin: 0 auto; padding: 24px 32px; }
+.tc { display: none; } .tc.active { display: block; animation: fadeIn .4s ease; }
+@keyframes fadeIn { from{opacity:0;transform:translateY(8px)} to{opacity:1;transform:translateY(0)} }
+
+.title {
+  font-size: 26px; font-weight: 800; margin-bottom: 6px;
+  background: linear-gradient(90deg, var(--green), var(--blue));
+  -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+}
+.subtitle { font-size: 14px; color: var(--text2); margin-bottom: 24px; line-height: 1.6; }
+.quote {
+  font-style: italic; color: var(--gold); border-left: 3px solid var(--gold);
+  padding: 12px 20px; margin: 16px 0 24px; background: rgba(251,191,36,.04);
+  border-radius: 0 8px 8px 0; font-size: 14px;
+}
+
+/* CARDS */
+.grid { display: grid; gap: 16px; margin-bottom: 24px; }
+.grid-2 { grid-template-columns: repeat(auto-fill, minmax(450px, 1fr)); }
+.grid-3 { grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); }
+.grid-4 { grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); }
+
+.card {
+  background: var(--card); border: 1px solid var(--border); border-radius: 12px;
+  padding: 24px; transition: all .3s; position: relative; overflow: hidden;
+}
+.card:hover { border-color: var(--dim); transform: translateY(-2px); box-shadow: 0 8px 32px rgba(0,0,0,.3); }
+.card h3 { font-size: 16px; font-weight: 700; margin-bottom: 8px; }
+.card p { font-size: 13px; color: var(--text2); line-height: 1.7; }
+.card .tag-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.tag {
+  padding: 3px 8px; border-radius: 4px; font-size: 10px; font-weight: 600;
+  background: rgba(255,255,255,.05); color: var(--text2); letter-spacing: .5px;
+}
+.accent { margin-top: 12px; padding: 10px 14px; border-radius: 8px; font-size: 12px; font-weight: 500; }
+.card-icon { font-size: 28px; margin-bottom: 10px; }
+.badge {
+  position: absolute; top: 12px; right: 12px; font-family: 'JetBrains Mono', monospace;
+  font-size: 9px; padding: 2px 8px; border-radius: 4px;
+}
+
+/* PLATFORM CARDS */
+.platform-card { position: relative; overflow: hidden; }
+.platform-card::before {
+  content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px;
+}
+.platform-stats {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 12px 0;
+}
+.ps { text-align: center; padding: 8px; background: rgba(0,0,0,.2); border-radius: 6px; }
+.ps .num { font-family: 'JetBrains Mono', monospace; font-size: 16px; font-weight: 700; }
+.ps .lbl { font-size: 9px; color: var(--text2); text-transform: uppercase; letter-spacing: 1px; }
+
+/* KNOWLEDGE TABLE */
+.k-table {
+  width: 100%; border-collapse: collapse; margin: 16px 0;
+}
+.k-table th {
+  padding: 10px 14px; text-align: left; font-size: 11px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: 1px; color: var(--text2);
+  border-bottom: 2px solid var(--border); background: var(--bg2);
+}
+.k-table td {
+  padding: 10px 14px; font-size: 12px; border-bottom: 1px solid var(--border);
+  color: var(--text2); vertical-align: top; line-height: 1.6;
+}
+.k-table tr:hover td { background: rgba(118,185,0,.03); }
+.k-table .agent-col { font-weight: 700; color: var(--text); white-space: nowrap; }
+
+/* PIPELINE */
+.pipeline { display: flex; gap: 0; margin: 20px 0; flex-wrap: wrap; }
+.pipe-stage {
+  flex: 1; min-width: 160px; padding: 16px; background: var(--card);
+  border: 1px solid var(--border); position: relative;
+}
+.pipe-stage:first-child { border-radius: 12px 0 0 12px; }
+.pipe-stage:last-child { border-radius: 0 12px 12px 0; }
+.pipe-stage::after {
+  content: '→'; position: absolute; right: -12px; top: 50%; transform: translateY(-50%);
+  font-size: 18px; color: var(--green); z-index: 2;
+}
+.pipe-stage:last-child::after { display: none; }
+.pipe-stage h4 { font-size: 12px; font-weight: 700; margin-bottom: 4px; }
+.pipe-stage p { font-size: 11px; color: var(--text2); }
+
+/* SECTION BLOCKS */
+.section-block {
+  background: var(--card); border: 1px solid var(--border); border-radius: 12px;
+  padding: 24px; margin-bottom: 20px;
+}
+.section-block h3 { font-size: 17px; font-weight: 700; margin-bottom: 12px; }
+
+/* SCROLLBAR */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: var(--bg2); }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+@media (max-width: 900px) {
+  .grid-2, .grid-3 { grid-template-columns: 1fr; }
+  .pipeline { flex-direction: column; }
+  .pipe-stage { border-radius: 8px !important; }
+  .pipe-stage::after { display: none; }
+}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>GHOST PROTOCOL — Knowledge & Skill Architecture</h1>
+  <span>Wie 17 Agenten Weltklasse-Expertise erlangen</span>
+</div>
+
+<div class="tabs" id="tabs">
+  <div class="tab active" data-tab="problem">🎯 Das Problem</div>
+  <div class="tab" data-tab="social">📱 Social Media Masterplan</div>
+  <div class="tab" data-tab="knowledge">🧠 Knowledge Architecture</div>
+  <div class="tab" data-tab="skills">⚔️ Skill Matrix</div>
+  <div class="tab" data-tab="sources">📚 Wissensquellen</div>
+  <div class="tab" data-tab="pipeline">🔄 Learning Pipeline</div>
+  <div class="tab" data-tab="implementation">🛠️ Implementation</div>
+</div>
+
+<div class="content">
+
+<!-- ===== TAB 1: DAS PROBLEM ===== -->
+<div class="tc active" id="tab-problem">
+  <div class="title">Das Kernproblem</div>
+  <div class="subtitle">Ein AI-Agent ist nur so gut wie sein Wissen + seine Skills + seine Tools. Ohne Weltklasse-Knowledge sind unsere 17 Agenten nur teure Textgeneratoren.</div>
+
+  <div class="quote">"Garbage In, Garbage Out" — gilt für AI mehr als für jedes andere System. Die Qualität des Inputs definiert die Qualität des Outputs. Kein Prompt Engineering der Welt kompensiert fehlendes Fachwissen.</div>
+
+  <div class="grid grid-3">
+    <div class="card" style="border-top: 3px solid var(--red);">
+      <div class="card-icon">❌</div>
+      <h3 style="color: var(--red);">Aktueller Stand: Schwach</h3>
+      <p>Unsere Agenten nutzen aktuell nur das Basis-Wissen von Claude (Training bis Mai 2025). Kein aktuelles Marktwissen, keine spezialisierten Frameworks, keine DACH-spezifische Regulatorik-Tiefe, keine Platform-Algorithmus-Expertise.</p>
+      <div class="accent" style="background: rgba(239,68,68,.08); color: var(--red);">
+        → Ein ORACLE ohne aktuelle On-Chain-Daten ist blind. Ein PUBLISHER ohne Platform-Algorithmus-Wissen verschwendet Content.
+      </div>
+    </div>
+    <div class="card" style="border-top: 3px solid var(--gold);">
+      <div class="card-icon">⚡</div>
+      <h3 style="color: var(--gold);">Was fehlt: 3 Ebenen</h3>
+      <p><strong>1. Echtzeit-Daten:</strong> Marktpreise, On-Chain, Sentiment, Trending Topics<br>
+      <strong>2. Domänen-Expertise:</strong> Whitepapers, Frameworks, Best Practices, Regulatorik<br>
+      <strong>3. Platform-Intelligence:</strong> Algorithmen, Timing, Format-Specs, Viral Mechanics</p>
+      <div class="accent" style="background: rgba(251,191,36,.08); color: var(--gold);">
+        → Weltklasse = Echtzeit × Expertise × Platform-Wissen
+      </div>
+    </div>
+    <div class="card" style="border-top: 3px solid var(--green);">
+      <div class="card-icon">✅</div>
+      <h3 style="color: var(--green);">Die Lösung: RAG + Tools + System Prompts</h3>
+      <p><strong>RAG (Retrieval Augmented Generation):</strong> Curated Knowledge Bases pro Agent — Whitepapers, Frameworks, Best Practices als Vektor-Datenbank.<br>
+      <strong>API Tools:</strong> Echtzeit-Daten via APIs — CoinGecko, Glassnode, Twitter, YouTube etc.<br>
+      <strong>Elite System Prompts:</strong> Entscheidungs-Frameworks der Weltbesten pro Rolle.</p>
+      <div class="accent" style="background: rgba(118,185,0,.08); color: var(--green);">
+        → Ergebnis: Agenten die denken wie Jim Simons, schreiben wie Gary Vee, und die DACH-Gesetze kennen wie ein Top-Anwalt.
+      </div>
+    </div>
+  </div>
+
+  <div class="section-block">
+    <h3>🏗️ Die 3-Säulen-Architektur für Weltklasse-Agenten</h3>
+    <div class="pipeline">
+      <div class="pipe-stage">
+        <h4 style="color: var(--blue);">1. Knowledge Base (RAG)</h4>
+        <p>Supabase Vector DB mit curated Docs pro Agent. Whitepapers, Regulatorik, Frameworks, Case Studies. Wird wöchentlich aktualisiert.</p>
+      </div>
+      <div class="pipe-stage">
+        <h4 style="color: var(--purple);">2. Real-Time Tools (APIs)</h4>
+        <p>Live-Daten via API-Calls: Marktdaten, On-Chain, Social Metrics, Trending Topics, Plattform-Analytics. Wird bei jedem Task abgerufen.</p>
+      </div>
+      <div class="pipe-stage">
+        <h4 style="color: var(--green);">3. Elite System Prompts</h4>
+        <p>Entscheidungs-Frameworks der Top-Performer: Dalio's Principles, Buffett's Moats, Musk's First Principles, Vee's Content Matrix. Hardcoded in Agent-DNA.</p>
+      </div>
+      <div class="pipe-stage">
+        <h4 style="color: var(--gold);">4. Feedback Loop</h4>
+        <p>Performance-Tracking pro Output: Was performt? Was konvertiert? Agenten lernen aus eigenen Ergebnissen. Continuous Improvement.</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ===== TAB 2: SOCIAL MEDIA MASTERPLAN ===== -->
+<div class="tc" id="tab-social">
+  <div class="title">Social Media Masterplan — Alle Plattformen</div>
+  <div class="subtitle">Du hast recht — wir haben Social Media bisher vernachlässigt. Hier ist der vollständige Plan für maximale Reichweite über alle relevanten Plattformen.</div>
+
+  <div class="quote">Short-Form Video ist King: 5.91% Engagement Rate auf YouTube Shorts (höchste aller Plattformen). 21% der Marketer sagen es liefert den höchsten ROI. Wer das 2026 ignoriert, verliert.</div>
+
+  <div class="grid grid-2">
+    <!-- YOUTUBE -->
+    <div class="card platform-card" style="border-top: 3px solid #ff0000;">
+      <div class="badge" style="background: rgba(255,0,0,.15); color: #ff0000;">PRIORITÄT 1</div>
+      <div class="card-icon">📺</div>
+      <h3 style="color: #ff0000;">YouTube — Das Fundament</h3>
+      <div class="platform-stats">
+        <div class="ps"><div class="num" style="color: #ff0000;">2B+</div><div class="lbl">Monthly Users</div></div>
+        <div class="ps"><div class="num" style="color: #ff0000;">5.91%</div><div class="lbl">Shorts Engage</div></div>
+        <div class="ps"><div class="num" style="color: #ff0000;">SEO ∞</div><div class="lbl">Evergreen</div></div>
+      </div>
+      <p><strong>Warum #1:</strong> YouTube ist die zweitgrößte Suchmaschine der Welt. Content bleibt JAHRE lang discoverable. Krypto-Suchvolumen auf Deutsch ist massiv unterversorgt.</p>
+      <p style="margin-top: 8px;"><strong>Strategie:</strong></p>
+      <p>• <strong>Shorts (60s):</strong> Tägliche Market Updates, "BTC in 60 Sekunden", Steuertipps. Algorithmus belohnt Watch-Through-Rate und Satisfaction Score.<br>
+      • <strong>Long-Form (8-15min):</strong> Wöchentliche Deep Dives, "Ghost Protocol Intelligence Report" als Video. SEO-optimierte Titel auf Deutsch.<br>
+      • <strong>Community Tab:</strong> Polls, Quick Takes, Engagement-Booster.</p>
+      <div class="accent" style="background: rgba(255,0,0,.06); color: #ff0000;">
+        → Agent: AMPLIFIER produziert Skripte, SCRIBE schreibt, PUBLISHER optimiert SEO. YouTube wird der Haupt-Discovery-Channel.
+      </div>
+    </div>
+
+    <!-- TIKTOK -->
+    <div class="card platform-card" style="border-top: 3px solid #69c9d0;">
+      <div class="badge" style="background: rgba(105,201,208,.15); color: #69c9d0;">PRIORITÄT 1</div>
+      <div class="card-icon">🎵</div>
+      <h3 style="color: #69c9d0;">TikTok — Virale Reichweite</h3>
+      <div class="platform-stats">
+        <div class="ps"><div class="num" style="color: #69c9d0;">1.59B</div><div class="lbl">Monthly Users</div></div>
+        <div class="ps"><div class="num" style="color: #69c9d0;">40%↑</div><div class="lbl">Engagement Boost</div></div>
+        <div class="ps"><div class="num" style="color: #69c9d0;">#1</div><div class="lbl">Ad Spend Growth</div></div>
+      </div>
+      <p><strong>Warum #1:</strong> TikTok ist wo Krypto-Brands ihre nächste Million User finden (CoinDesk 2026). Algorithmus favoriziert neue Creator — perfekt für Ghost Protocol's Launch.</p>
+      <p style="margin-top: 8px;"><strong>Strategie:</strong></p>
+      <p>• <strong>Native Content:</strong> 15-20s Videos mit Trending Sounds. Keine YouTube-Reposts — TikTok erkennt das und straft es ab.<br>
+      • <strong>Edu-tainment:</strong> "Wusstest du dass..." Format. Komplexe Krypto-Themen in 30s erklären. Binance hat damit 30% Retention Growth erreicht.<br>
+      • <strong>Engagement-Loop:</strong> Täglich 10-15 Krypto-Videos liken/kommentieren → Algorithmus versteht deine Nische.</p>
+      <div class="accent" style="background: rgba(105,201,208,.06); color: #69c9d0;">
+        → Agent: AMPLIFIER + SCRIBE produzieren TikTok-native Scripts. LOCALIZER passt für DACH an. Trending Sound Detection via API.
+      </div>
+    </div>
+
+    <!-- INSTAGRAM -->
+    <div class="card platform-card" style="border-top: 3px solid #e1306c;">
+      <div class="badge" style="background: rgba(225,48,108,.15); color: #e1306c;">PRIORITÄT 2</div>
+      <div class="card-icon">📸</div>
+      <h3 style="color: #e1306c;">Instagram — Visual Authority</h3>
+      <div class="platform-stats">
+        <div class="ps"><div class="num" style="color: #e1306c;">1.8B</div><div class="lbl">Reels Users</div></div>
+        <div class="ps"><div class="num" style="color: #e1306c;">Carousels</div><div class="lbl">Best Format</div></div>
+        <div class="ps"><div class="num" style="color: #e1306c;">DM</div><div class="lbl">Sales Channel</div></div>
+      </div>
+      <p><strong>Strategie:</strong></p>
+      <p>• <strong>Reels:</strong> Cross-Post von TikTok-Content (leicht angepasst). Instagram belohnt Reels massiv im Algorithmus 2026.<br>
+      • <strong>Carousels:</strong> "5 Krypto-Steuerfehler die Deutsche machen" — Carousels haben die höchste Save-Rate, was den Algorithmus triggert.<br>
+      • <strong>Stories:</strong> Behind-the-Scenes von Ghost Protocol, "AI baut ein Unternehmen" Narrative, Polls.<br>
+      • <strong>DMs:</strong> Automatisierte Welcome-Messages für neue Follower → Newsletter Conversion.</p>
+      <div class="accent" style="background: rgba(225,48,108,.06); color: #e1306c;">
+        → Agent: SCRIBE erstellt Carousel-Texte, AMPLIFIER managed Posting-Zeiten. Visual Templates werden einmalig designed.
+      </div>
+    </div>
+
+    <!-- X/TWITTER -->
+    <div class="card platform-card" style="border-top: 3px solid var(--text);">
+      <div class="badge" style="background: rgba(255,255,255,.1); color: var(--text);">PRIORITÄT 1</div>
+      <div class="card-icon">𝕏</div>
+      <h3>X/Twitter — Crypto Home Base</h3>
+      <div class="platform-stats">
+        <div class="ps"><div class="num">CT</div><div class="lbl">Crypto Twitter</div></div>
+        <div class="ps"><div class="num">Real-Time</div><div class="lbl">Alpha Channel</div></div>
+        <div class="ps"><div class="num">#1</div><div class="lbl">Crypto Platform</div></div>
+      </div>
+      <p><strong>Warum #1:</strong> X bleibt der unbestrittene Hub für Krypto-Marketing 2026. Echtzeit-Infos, Founder-Announcements, Community-Koordination. MUSS der Kern sein.</p>
+      <p style="margin-top: 8px;"><strong>Strategie:</strong></p>
+      <p>• <strong>Threads:</strong> Daily Market Thread (5-8 Tweets), Deep-Dive Threads wöchentlich. Threads performen 2-5x besser als Einzel-Tweets.<br>
+      • <strong>Quick Takes:</strong> Echtzeit-Reaktionen auf Marktbewegungen. Oracle-Signal → Tweet in &lt;5 Minuten.<br>
+      • <strong>Engagement:</strong> Reply-Game auf großen Krypto-Accounts. Qualitative Antworten = Free Exposure.</p>
+      <div class="accent" style="background: rgba(255,255,255,.04); color: var(--text);">
+        → Agent: ORACLE liefert Signale, SCRIBE schreibt Threads, AMPLIFIER managed Engagement. 24/7 Presence.
+      </div>
+    </div>
+
+    <!-- LINKEDIN -->
+    <div class="card platform-card" style="border-top: 3px solid #0077b5;">
+      <div class="badge" style="background: rgba(0,119,181,.15); color: #0077b5;">PRIORITÄT 2</div>
+      <div class="card-icon">💼</div>
+      <h3 style="color: #0077b5;">LinkedIn — B2B & AI Agency</h3>
+      <div class="platform-stats">
+        <div class="ps"><div class="num" style="color: #0077b5;">B2B</div><div class="lbl">Decision Makers</div></div>
+        <div class="ps"><div class="num" style="color: #0077b5;">AI Story</div><div class="lbl">Viral Potential</div></div>
+        <div class="ps"><div class="num" style="color: #0077b5;">DACH</div><div class="lbl">Starke Präsenz</div></div>
+      </div>
+      <p><strong>Strategie:</strong></p>
+      <p>• <strong>Personal Brand (Christian):</strong> "Ich baue ein AI-Unternehmen mit 17 digitalen Mitarbeitern" — das ist LinkedIn-Gold. Build-in-Public Narrative.<br>
+      • <strong>AI Agency Akquise:</strong> Decision Makers sind auf LinkedIn. Case Studies, Thought Leadership über AI-Automation.<br>
+      • <strong>DACH-Netzwerk:</strong> FinTech-Gruppen, Krypto-Profis, Tech-Entscheider.</p>
+      <div class="accent" style="background: rgba(0,119,181,.06); color: #0077b5;">
+        → Dual Purpose: Krypto-Reichweite + AI Agency Client Acquisition. PUBLISHER + AMPLIFIER.
+      </div>
+    </div>
+
+    <!-- TELEGRAM -->
+    <div class="card platform-card" style="border-top: 3px solid #0088cc;">
+      <div class="badge" style="background: rgba(0,136,204,.15); color: #0088cc;">PRIORITÄT 1</div>
+      <div class="card-icon">✈️</div>
+      <h3 style="color: #0088cc;">Telegram — Community Core</h3>
+      <div class="platform-stats">
+        <div class="ps"><div class="num" style="color: #0088cc;">Direkt</div><div class="lbl">Instant Delivery</div></div>
+        <div class="ps"><div class="num" style="color: #0088cc;">Gruppen</div><div class="lbl">Community</div></div>
+        <div class="ps"><div class="num" style="color: #0088cc;">Bots</div><div class="lbl">Automation</div></div>
+      </div>
+      <p>• <strong>Channel:</strong> Ghost Protocol Alerts — automatisierte Markt-Signals, Daily Briefings, Breaking News.<br>
+      • <strong>Gruppe:</strong> Premium-Community für zahlende Subscriber. Diskussion, Q&A, exklusive Insights.<br>
+      • <strong>Bot:</strong> CONCIERGE als Telegram-Bot — beantwortet Fragen, liefert On-Demand Reports, managed Onboarding.</p>
+      <div class="accent" style="background: rgba(0,136,204,.06); color: #0088cc;">
+        → Höchste Conversion-Rate aller Kanäle für Premium-Upsell. CONCIERGE + GUARDIAN managed Bot.
+      </div>
+    </div>
+
+    <!-- FACEBOOK -->
+    <div class="card platform-card" style="border-top: 3px solid #1877f2;">
+      <div class="badge" style="background: rgba(24,119,242,.15); color: #1877f2;">PRIORITÄT 3</div>
+      <div class="card-icon">👥</div>
+      <h3 style="color: #1877f2;">Facebook — Gruppen & Ältere Zielgruppe</h3>
+      <div class="platform-stats">
+        <div class="ps"><div class="num" style="color: #1877f2;">Gruppen</div><div class="lbl">Community Hub</div></div>
+        <div class="ps"><div class="num" style="color: #1877f2;">35+</div><div class="lbl">Alter Demografie</div></div>
+        <div class="ps"><div class="num" style="color: #1877f2;">DACH</div><div class="lbl">Immer noch groß</div></div>
+      </div>
+      <p>• <strong>Gruppen:</strong> Existierende DACH-Krypto-Gruppen bespielen + eigene Gruppe aufbauen. Facebook-Gruppen sind für die 35+ Zielgruppe in DACH noch sehr relevant.<br>
+      • <strong>Cross-Post:</strong> Instagram Reels automatisch zu Facebook Reels. Minimaler Extra-Aufwand, zusätzliche Reichweite.<br>
+      • <strong>Ads (später):</strong> Facebook Ads für Lead Generation → Newsletter Conversion. Erst ab positivem ROAS.</p>
+      <div class="accent" style="background: rgba(24,119,242,.06); color: #1877f2;">
+        → Niedrige Priorität, aber: Cross-Post ist fast kostenlos. DACH 35+ Zielgruppe ist kaufkräftig.
+      </div>
+    </div>
+
+    <!-- REDDIT -->
+    <div class="card platform-card" style="border-top: 3px solid #ff4500;">
+      <div class="badge" style="background: rgba(255,69,0,.15); color: #ff4500;">PRIORITÄT 2</div>
+      <div class="card-icon">🔥</div>
+      <h3 style="color: #ff4500;">Reddit — Deep Engagement</h3>
+      <div class="platform-stats">
+        <div class="ps"><div class="num" style="color: #ff4500;">r/crypto</div><div class="lbl">7.6M Members</div></div>
+        <div class="ps"><div class="num" style="color: #ff4500;">Trust</div><div class="lbl">High Credibility</div></div>
+        <div class="ps"><div class="num" style="color: #ff4500;">SEO</div><div class="lbl">Google zeigt Reddit</div></div>
+      </div>
+      <p>• <strong>r/Kryptostrassenwetten, r/CryptoCurrency, r/Finanzen:</strong> Hochwertige Posts mit echtem Mehrwert. KEIN Spam — Reddit killt Spammer sofort.<br>
+      • <strong>AMA:</strong> "Ich baue eine AI-Firma mit 17 Agenten" — Reddit liebt solche Stories.<br>
+      • <strong>SEO-Bonus:</strong> Google ranked Reddit-Posts jetzt direkt in den Suchergebnissen. Jeder gute Reddit-Post = Free SEO.</p>
+      <div class="accent" style="background: rgba(255,69,0,.06); color: #ff4500;">
+        → RESEARCHER identifiziert Top-Threads, SCRIBE schreibt wertvolle Antworten. Slow Burn, aber hochwertige Leads.
+      </div>
+    </div>
+  </div>
+
+  <div class="section-block">
+    <h3>📊 Content-Recycling-Maschine: 1 Input → 8 Outputs</h3>
+    <p style="font-size: 13px; color: var(--text2); margin-bottom: 16px;">Jeder Intelligence Report wird automatisch zu Content für ALLE Plattformen transformiert. Das ist der Hebel.</p>
+    <div class="pipeline">
+      <div class="pipe-stage">
+        <h4 style="color: var(--blue);">🔮 ORACLE</h4>
+        <p>Markt-Signal + Daten</p>
+      </div>
+      <div class="pipe-stage">
+        <h4 style="color: var(--purple);">✍️ SCRIBE</h4>
+        <p>Intelligence Report (1000 Wörter)</p>
+      </div>
+      <div class="pipe-stage">
+        <h4 style="color: var(--green);">📢 PUBLISHER</h4>
+        <p>Content wird zu:<br>
+        • Blog Post<br>
+        • Newsletter<br>
+        • X Thread (8 Tweets)<br>
+        • YouTube Script (10min)<br>
+        • 3× Shorts/Reels (60s)<br>
+        • TikTok (15-20s)<br>
+        • LinkedIn Post<br>
+        • Telegram Alert</p>
+      </div>
+      <div class="pipe-stage">
+        <h4 style="color: var(--red);">⚖️ COUNSEL</h4>
+        <p>Legal Review aller Outputs → Disclaimer Check</p>
+      </div>
+      <div class="pipe-stage">
+        <h4 style="color: var(--cyan);">📈 AMPLIFIER</h4>
+        <p>Distribution auf alle Plattformen zum optimalen Zeitpunkt</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ===== TAB 3: KNOWLEDGE ARCHITECTURE ===== -->
+<div class="tc" id="tab-knowledge">
+  <div class="title">Knowledge Architecture — RAG + Tools + Prompts</div>
+  <div class="subtitle">So bauen wir Weltklasse-Expertise in jeden einzelnen Agenten ein. 3 Schichten, 4 Datentypen, kontinuierliche Aktualisierung.</div>
+
+  <div class="quote">Gartner 2026: "Über 60% aller Enterprise-AI-Anwendungen werden Agentic Components haben — aber 40% der Projekte scheitern an schlechter Architektur." Wir bauen es richtig.</div>
+
+  <div class="section-block">
+    <h3>🧬 Die 3-Schichten-Architektur pro Agent</h3>
+    <div class="grid grid-3" style="margin-top: 16px;">
+      <div class="card" style="border-left: 3px solid var(--blue);">
+        <h3 style="color: var(--blue);">Schicht 1: Statische Knowledge Base</h3>
+        <p><strong>Was:</strong> Curated Documents in Supabase Vector DB (pgvector). Whitepapers, Regulatorik-Texte, Frameworks, Best Practices, Steuergesetze, Platform-Guides.</p>
+        <p style="margin-top: 8px;"><strong>Wie:</strong> Dokumente werden gechunkt (512-1024 Tokens), embeddet (OpenAI ada-002 oder Anthropic Embeddings), und in Supabase gespeichert. Bei jedem Task: Semantic Search → Top 5 relevante Chunks → Context Injection.</p>
+        <p style="margin-top: 8px;"><strong>Update-Zyklus:</strong> Wöchentlich — RESEARCHER scannt nach neuen Whitepapers, Regulatorik-Updates, Platform-Änderungen.</p>
+        <div class="accent" style="background: rgba(0,212,255,.06); color: var(--blue);">
+          Kosten: €0 (Supabase Free Tier, 500MB Vektor-Storage reicht für ~50.000 Chunks)
+        </div>
+      </div>
+      <div class="card" style="border-left: 3px solid var(--purple);">
+        <h3 style="color: var(--purple);">Schicht 2: Real-Time APIs & Tools</h3>
+        <p><strong>Was:</strong> Live-Daten die bei jedem Task-Execution frisch abgerufen werden. Marktpreise, On-Chain-Metriken, Social Trends, Platform Analytics.</p>
+        <p style="margin-top: 8px;"><strong>APIs:</strong></p>
+        <p>• CoinGecko (Free): Preise, Volumen, Market Cap<br>
+        • Glassnode/CryptoQuant: On-Chain (Free Tier)<br>
+        • Alternative.me: Fear & Greed Index<br>
+        • Serper: Web Search für Breaking News<br>
+        • Twitter/X API: Trending, Sentiment<br>
+        • YouTube Data API: Trending Topics, Competitor Analysis<br>
+        • Beehiiv API: Newsletter Metrics<br>
+        • Gumroad API: Sales Data</p>
+        <div class="accent" style="background: rgba(168,85,247,.06); color: var(--purple);">
+          Kosten: ~€10-15/Mo (meiste APIs haben Free Tiers, Serper €5, Rest gratis)
+        </div>
+      </div>
+      <div class="card" style="border-left: 3px solid var(--green);">
+        <h3 style="color: var(--green);">Schicht 3: Elite System Prompts</h3>
+        <p><strong>Was:</strong> Hardcoded Decision Frameworks der Weltbesten. Jeder Agent bekommt die Denkweise eines Top-Performers seiner Domäne einprogrammiert.</p>
+        <p style="margin-top: 8px;"><strong>Wie:</strong> Multi-Layer System Prompts:</p>
+        <p>• <strong>Identity Layer:</strong> Wer bist du, was ist deine Rolle<br>
+        • <strong>Expertise Layer:</strong> Fachspezifisches Framework<br>
+        • <strong>Decision Layer:</strong> Wie triffst du Entscheidungen<br>
+        • <strong>Quality Layer:</strong> Standards, Checks, Selbstkritik<br>
+        • <strong>Output Layer:</strong> Format, Ton, Zielgruppe</p>
+        <div class="accent" style="background: rgba(118,185,0,.06); color: var(--green);">
+          Kosten: €0 — reine Prompt-Engineering-Arbeit. Höchster ROI aller Maßnahmen.
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="section-block">
+    <h3>🔍 GraphRAG: Das Nächste Level</h3>
+    <p style="font-size: 13px; color: var(--text2); line-height: 1.7;">
+      Standard-RAG sucht nach ähnlichen Textpassagen. <strong style="color: var(--text);">GraphRAG</strong> versteht Beziehungen zwischen Konzepten — z.B. "MiCA Regulierung" → "betrifft" → "Token-Klassifizierung" → "relevant für" → "Disclaimer-Formulierung". Das ermöglicht Reasoning über verknüpftes Wissen, nicht nur Keyword-Matching.
+    </p>
+    <p style="font-size: 13px; color: var(--green); margin-top: 8px; font-weight: 500;">
+      → Phase 2: Nach dem MVP bauen wir einen Knowledge Graph in Supabase (Nodes + Edges Tabellen). Das macht unsere Agenten 10x intelligenter bei komplexen Fragestellungen.
+    </p>
+  </div>
+</div>
+
+<!-- ===== TAB 4: SKILL MATRIX ===== -->
+<div class="tc" id="tab-skills">
+  <div class="title">Skill Matrix — Weltklasse-Expertise pro Agent</div>
+  <div class="subtitle">Jeder Agent hat spezifische Skills, Wissensquellen, und Vorbilder. Hier ist die vollständige Matrix.</div>
+
+  <div style="overflow-x: auto;">
+    <table class="k-table">
+      <thead>
+        <tr>
+          <th>Agent</th>
+          <th>Vorbild</th>
+          <th>Core Skills</th>
+          <th>Knowledge Base (RAG)</th>
+          <th>Real-Time Tools</th>
+          <th>Elite Framework</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td class="agent-col" style="color: var(--green);">👑 STRATEGIST<br><small style="color:var(--text2)">CEO</small></td>
+          <td>Elon Musk<br>Jeff Bezos<br>Jensen Huang</td>
+          <td>Strategie, Ressourcen-Allokation, Vision, Pivots</td>
+          <td>• Bezos' Shareholder Letters<br>• "The Hard Thing About Hard Things"<br>• First Principles Frameworks<br>• DACH Startup Ecosystem Data</td>
+          <td>Revenue Dashboard<br>Agent Performance Metrics<br>Market Opportunity Scanner</td>
+          <td><strong>Bezos 6-Pager Method:</strong> Jede strategische Entscheidung als 6-Pager-Memo mit Daten, nicht PowerPoint.<br><strong>Musk First Principles:</strong> Was ist fundamental wahr? Alle Annahmen hinterfragen.</td>
+        </tr>
+        <tr>
+          <td class="agent-col" style="color: var(--pink);">💎 DONNA<br><small style="color:var(--text2)">CoS</small></td>
+          <td>Donna Paulsen<br>Sheryl Sandberg<br>Tim Ferriss</td>
+          <td>Orchestrierung, Antizipation, Priorisierung, Human Interface</td>
+          <td>• Agent-Interaction-History<br>• Priority Frameworks<br>• Conflict Resolution Patterns<br>• Christians Preferences</td>
+          <td>All Agent Status<br>Message Bus Analytics<br>Bottleneck Detection</td>
+          <td><strong>Donna Protocol:</strong> Antizipiere. Löse Probleme bevor sie eskalieren. Halte den Überblick wenn alle anderen in Details versinken.</td>
+        </tr>
+        <tr>
+          <td class="agent-col" style="color: var(--orange);">⚙️ OPERATOR<br><small style="color:var(--text2)">COO</small></td>
+          <td>Tim Cook<br>Gwynne Shotwell<br>Andy Jassy</td>
+          <td>Workflow-Mgmt, SLAs, QA, Effizienz, Eskalation</td>
+          <td>• Operations Management Playbooks<br>• SLA Frameworks<br>• Bottleneck Analysis<br>• Toyota Production System</td>
+          <td>Pipeline Status<br>Agent Utilization<br>Error Rates<br>SLA Tracking</td>
+          <td><strong>Toyota Way:</strong> Continuous Improvement (Kaizen). Waste eliminieren. Jeder Prozess hat einen Owner und ein SLA.</td>
+        </tr>
+        <tr>
+          <td class="agent-col" style="color: var(--blue);">🔮 ORACLE<br><small style="color:var(--text2)">CIO</small></td>
+          <td>Jim Simons<br>Willy Woo<br>Glassnode</td>
+          <td>On-Chain Analysis, Sentiment, Macro, Signal Detection</td>
+          <td>• Bitcoin Whitepaper<br>• Ethereum Whitepaper<br>• Glassnode Academy<br>• On-Chain Metrics Guides<br>• Macro Playbooks (Lyn Alden)</td>
+          <td>CoinGecko API<br>Glassnode/CryptoQuant<br>Fear&Greed Index<br>Twitter Sentiment<br>ETF Flow Data</td>
+          <td><strong>Renaissance Approach:</strong> Quantitativ, emotionslos, datengetrieben. Kein Narrativ — nur Zahlen. Signal vs. Noise trennen.</td>
+        </tr>
+        <tr>
+          <td class="agent-col" style="color: var(--cyan);">🏗️ ARCHITECT<br><small style="color:var(--text2)">CTO</small></td>
+          <td>Jensen Huang<br>Linus Torvalds<br>Andrej Karpathy</td>
+          <td>System Design, Performance, Scaling, Innovation</td>
+          <td>• CrewAI Docs<br>• LangGraph Papers<br>• Multi-Agent Architecture Papers<br>• Supabase/Redis Best Practices</td>
+          <td>System Metrics<br>API Costs<br>Performance Benchmarks</td>
+          <td><strong>Huang-Prinzip:</strong> Die Plattform IST das Produkt. Infrastruktur-Entscheidungen sind Produkt-Entscheidungen.</td>
+        </tr>
+        <tr>
+          <td class="agent-col" style="color: var(--gold);">💰 TREASURER<br><small style="color:var(--text2)">CFO</small></td>
+          <td>Warren Buffett<br>Ray Dalio<br>Charlie Munger</td>
+          <td>P&L, Unit Economics, Budget, Revenue Attribution</td>
+          <td>• Unit Economics Frameworks<br>• SaaS Metrics Guide<br>• DE Steuerrecht Krypto<br>• FIFO Berechnungen</td>
+          <td>Gumroad API<br>Beehiiv API<br>API Cost Tracker<br>Revenue Dashboard</td>
+          <td><strong>Buffett Rule:</strong> Never lose money. Jeder Euro wird getrackt. ROI pro Output messen. Nur skalieren was profitabel ist.</td>
+        </tr>
+        <tr>
+          <td class="agent-col" style="color: var(--purple);">📢 PUBLISHER<br><small style="color:var(--text2)">CMO</small></td>
+          <td>Gary Vaynerchuk<br>Seth Godin<br>Alex Hormozi</td>
+          <td>Content Strategy, SEO, Newsletter, Brand Voice</td>
+          <td>• "100M Offers" (Hormozi)<br>• SEO Best Practices 2026<br>• YouTube/TikTok/IG Algorithm Guides<br>• Headline Formulas<br>• DACH Content Marketing</td>
+          <td>Google Trends<br>YouTube Analytics<br>SEMrush/Ahrefs (Free)<br>Social Media Metrics</td>
+          <td><strong>Vee's Content Matrix:</strong> 1 Pillar → 30+ Micro-Content Pieces. Quantity + Quality. Document, don't create.</td>
+        </tr>
+        <tr>
+          <td class="agent-col" style="color: var(--red);">⚖️ COUNSEL<br><small style="color:var(--text2)">CLO</small></td>
+          <td>Top DACH Finanzanwalt<br>BaFin Experten<br>EU MiCA Autoren</td>
+          <td>BaFin, MiCA, DSGVO, DAC8, Disclaimer, Steuerrecht</td>
+          <td>• MiCA Verordnung (Volltext)<br>• BaFin Merkblätter Krypto<br>• DSGVO Texte<br>• DAC8 Richtlinie<br>• GlüStV 2021<br>• EStG §23, §22</td>
+          <td>BaFin News RSS<br>EU Law Updates<br>Steuer-News DE</td>
+          <td><strong>Zero-Tolerance:</strong> Kein Output verlässt das System ohne Legal Check. Im Zweifel: Nicht publizieren. Disclaimer ist Pflicht, nicht optional.</td>
+        </tr>
+        <tr>
+          <td class="agent-col" style="color: var(--purple);">📈 AMPLIFIER<br><small style="color:var(--text2)">Growth</small></td>
+          <td>Alex Hormozi<br>Mr. Beast<br>MKBHD</td>
+          <td>Virale Distribution, Community, Timing, Engagement</td>
+          <td>• Platform Algorithm Deep-Dives<br>• Viral Mechanics Research<br>• Community Building Playbooks<br>• Posting-Zeiten DACH</td>
+          <td>Social APIs<br>Trending Topics<br>Hashtag Analytics<br>Competitor Tracking</td>
+          <td><strong>Hormozi Reach Framework:</strong> Warm Outreach → Free Value → Trust → Offer. KEIN Cold Spam.</td>
+        </tr>
+        <tr>
+          <td class="agent-col" style="color: var(--gold);">✍️ SCRIBE<br><small style="color:var(--text2)">Content</small></td>
+          <td>Tim Urban (Wait But Why)<br>Morgan Housel<br>Packy McCormick</td>
+          <td>Schreiben, Storytelling, Report-Erstellung, Multi-Format</td>
+          <td>• Top Crypto Newsletter Samples<br>• Copywriting Frameworks<br>• German Writing Style Guide<br>• Ghost Protocol Brand Voice</td>
+          <td>Oracle Data Feed<br>Publisher Briefs<br>Template Library</td>
+          <td><strong>Housel-Methode:</strong> Komplexes einfach erklären. Storytelling + Daten. Leser soll denken "das wusste ich nicht" nicht "das ist kompliziert".</td>
+        </tr>
+        <tr>
+          <td class="agent-col" style="color: var(--gold);">📊 TRADER<br><small style="color:var(--text2)">Analyst</small></td>
+          <td>Peter Brandt<br>Raoul Pal<br>Benjamin Cowen</td>
+          <td>Chart-Analyse, Setups, Risk Levels, Signal Generation</td>
+          <td>• Technical Analysis Mastery<br>• Elliott Wave Theory<br>• Smart Money Concepts<br>• Risk Management Frameworks</td>
+          <td>TradingView API<br>Exchange Data<br>Funding Rates<br>Liquidation Maps</td>
+          <td><strong>Brandt-Disziplin:</strong> Risk/Reward immer definieren. Kein Trade ohne Invalidierungslevel. Position Sizing > Entry Timing.</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ===== TAB 5: WISSENSQUELLEN ===== -->
+<div class="tc" id="tab-sources">
+  <div class="title">Wissensquellen — Die Bibliothek der Eliten</div>
+  <div class="subtitle">Konkrete Dokumente, Whitepapers, und Ressourcen die in die Knowledge Base jedes Agenten fließen. Sortiert nach Priorität.</div>
+
+  <div class="grid grid-2">
+    <div class="card" style="border-top: 3px solid var(--blue);">
+      <div class="badge" style="background: rgba(0,212,255,.15); color: var(--blue);">CRYPTO & FINANCE</div>
+      <h3>🔮 Market Intelligence Quellen</h3>
+      <p><strong>Foundational Whitepapers:</strong></p>
+      <p>• Bitcoin Whitepaper (Satoshi Nakamoto, 2008)<br>
+      • Ethereum Whitepaper (Vitalik Buterin, 2014)<br>
+      • Lightning Network Paper (Poon & Dryja)<br>
+      • Uniswap V3 Whitepaper (mechanisches DeFi-Verständnis)</p>
+      <p style="margin-top: 8px;"><strong>On-Chain Analytics:</strong></p>
+      <p>• Glassnode Academy (komplettes Kurs-Material)<br>
+      • CryptoQuant Research Reports<br>
+      • Dune Analytics Community Dashboards<br>
+      • Chainalysis State of Crypto Reports</p>
+      <p style="margin-top: 8px;"><strong>Macro-Frameworks:</strong></p>
+      <p>• Lyn Alden's "Broken Money" Frameworks<br>
+      • Ray Dalio "Principles for Dealing with the Changing World Order"<br>
+      • Raoul Pal's Global Macro Investor</p>
+      <div class="accent" style="background: rgba(0,212,255,.06); color: var(--blue);">
+        → Für ORACLE, TRADER, RESEARCHER. ~30 Kern-Dokumente, ~200 Seiten nach Chunking.
+      </div>
+    </div>
+
+    <div class="card" style="border-top: 3px solid var(--red);">
+      <div class="badge" style="background: rgba(239,68,68,.15); color: var(--red);">LEGAL / DACH</div>
+      <h3>⚖️ Regulatorik-Bibliothek</h3>
+      <p><strong>EU-Ebene:</strong></p>
+      <p>• MiCA Verordnung (EU 2023/1114) — Volltext<br>
+      • DAC8 Richtlinie (Meldepflichten Krypto)<br>
+      • DORA Verordnung (Digitale Resilienz)<br>
+      • EU AI Act (relevant für unsere AI-Agenten!)</p>
+      <p style="margin-top: 8px;"><strong>Deutschland:</strong></p>
+      <p>• BaFin Merkblatt: Erlaubnispflicht Kryptoverwahrung<br>
+      • BaFin Hinweise zu ICOs/Token-Klassifizierung<br>
+      • EStG §23 (Private Veräußerungsgeschäfte)<br>
+      • EStG §22 Nr. 3 (Sonstige Einkünfte — Staking)<br>
+      • GlüStV 2021 (Prediction Markets = Glücksspiel)<br>
+      • DSGVO Kerntexte + DACH-Interpretationen<br>
+      • TMG / TTDSG (Telemedien, Impressumspflicht)</p>
+      <div class="accent" style="background: rgba(239,68,68,.06); color: var(--red);">
+        → Für COUNSEL. ~20 Kern-Dokumente. KRITISCH: Muss aktuell gehalten werden (Regulatorik ändert sich schnell).
+      </div>
+    </div>
+
+    <div class="card" style="border-top: 3px solid var(--purple);">
+      <div class="badge" style="background: rgba(168,85,247,.15); color: var(--purple);">CONTENT & MARKETING</div>
+      <h3>📢 Content-Intelligence Quellen</h3>
+      <p><strong>Frameworks & Bücher:</strong></p>
+      <p>• "$100M Offers" (Alex Hormozi) — Value Equation<br>
+      • "Permission Marketing" (Seth Godin)<br>
+      • "Building a StoryBrand" (Donald Miller)<br>
+      • "They Ask, You Answer" (Marcus Sheridan)</p>
+      <p style="margin-top: 8px;"><strong>Platform-Spezifisch:</strong></p>
+      <p>• YouTube Creator Academy (offiziell)<br>
+      • YouTube Shorts Algorithm Guide 2026<br>
+      • TikTok Creator Portal Best Practices<br>
+      • Instagram Creator Handbook<br>
+      • Twitter/X Growth Playbooks<br>
+      • LinkedIn Algorithm Updates 2026</p>
+      <p style="margin-top: 8px;"><strong>Copywriting:</strong></p>
+      <p>• AIDA, PAS, BAB Frameworks<br>
+      • Headline-Formeln (130+ Templates)<br>
+      • Email Subject Line Data (1M+ Tests)</p>
+      <div class="accent" style="background: rgba(168,85,247,.06); color: var(--purple);">
+        → Für PUBLISHER, AMPLIFIER, SCRIBE. ~25 Dokumente. Platform-Guides werden monatlich aktualisiert.
+      </div>
+    </div>
+
+    <div class="card" style="border-top: 3px solid var(--green);">
+      <div class="badge" style="background: rgba(118,185,0,.15); color: var(--green);">STRATEGIE & BUSINESS</div>
+      <h3>👑 CEO-Level Wissen</h3>
+      <p><strong>Entscheidungs-Frameworks:</strong></p>
+      <p>• Bezos' Shareholder Letters (1997-2025) — Customer Obsession<br>
+      • "Principles" (Ray Dalio) — Radical Transparency<br>
+      • "Zero to One" (Peter Thiel) — Monopoly Theory<br>
+      • "The Lean Startup" (Eric Ries) — Build-Measure-Learn<br>
+      • "Blitzscaling" (Reid Hoffman) — When to scale aggressively</p>
+      <p style="margin-top: 8px;"><strong>AI & Tech Strategie:</strong></p>
+      <p>• "Prediction Machines" (Agrawal et al.)<br>
+      • Anthropic Research Papers (RLHF, Constitutional AI)<br>
+      • Multi-Agent System Architectures (arXiv 2503.12687)<br>
+      • CrewAI Documentation + Examples</p>
+      <div class="accent" style="background: rgba(118,185,0,.06); color: var(--green);">
+        → Für STRATEGIST, DONNA, ARCHITECT. ~20 Dokumente. Fokus auf Decision Frameworks die zeitlos sind.
+      </div>
+    </div>
+
+    <div class="card" style="border-top: 3px solid var(--gold);">
+      <div class="badge" style="background: rgba(251,191,36,.15); color: var(--gold);">PRODUKT & CONVERSION</div>
+      <h3>🛒 Product & Sales Intelligence</h3>
+      <p><strong>Produkt-Development:</strong></p>
+      <p>• "Inspired" (Marty Cagan) — Product Discovery<br>
+      • Gumroad Creator Playbook<br>
+      • Digital Product Best Practices 2026<br>
+      • Pricing Psychology Research</p>
+      <p style="margin-top: 8px;"><strong>Conversion & Sales:</strong></p>
+      <p>• "$100M Leads" (Alex Hormozi) — Lead Generation<br>
+      • Landing Page Optimization Research<br>
+      • Email Marketing Benchmarks DACH<br>
+      • A/B Testing Statistical Significance</p>
+      <div class="accent" style="background: rgba(251,191,36,.06); color: var(--gold);">
+        → Für MERCHANT, AMPLIFIER, PUBLISHER. ~15 Dokumente.
+      </div>
+    </div>
+
+    <div class="card" style="border-top: 3px solid var(--cyan);">
+      <div class="badge" style="background: rgba(34,211,238,.15); color: var(--cyan);">DACH MARKTDATEN</div>
+      <h3>🌐 DACH-Spezifische Intelligence</h3>
+      <p><strong>Marktdaten:</strong></p>
+      <p>• BTC-ECHO Jahresberichte<br>
+      • Coincub Crypto Ranking (DE aktuell Platz 8)<br>
+      • Chainalysis Crypto Adoption Index DACH<br>
+      • Statista Krypto-Nutzung Deutschland</p>
+      <p style="margin-top: 8px;"><strong>Wettbewerb:</strong></p>
+      <p>• Top 20 DACH Krypto-Influencer Analyse<br>
+      • Deutsche Krypto-Newsletter Landscape<br>
+      • Krypto-Community-Map (Telegram, Discord, Reddit)</p>
+      <p style="margin-top: 8px;"><strong>Kultur & Sprache:</strong></p>
+      <p>• Deutsche Finanz-Terminologie Guide<br>
+      • DACH Communication Style Guide<br>
+      • Trust-Building Patterns für Deutsche Zielgruppe</p>
+      <div class="accent" style="background: rgba(34,211,238,.06); color: var(--cyan);">
+        → Für LOCALIZER, CONCIERGE, RESEARCHER. ~15 Dokumente. Der DACH-Moat.
+      </div>
+    </div>
+  </div>
+
+  <div class="section-block">
+    <h3 style="color: var(--gold);">📊 Gesamt-Knowledge-Base: Die Zahlen</h3>
+    <div class="grid grid-4" style="margin-top: 12px;">
+      <div style="text-align: center; padding: 16px; background: rgba(0,0,0,.2); border-radius: 8px;">
+        <div style="font-family: 'JetBrains Mono'; font-size: 28px; font-weight: 700; color: var(--green);">~125</div>
+        <div style="font-size: 11px; color: var(--text2); text-transform: uppercase; letter-spacing: 1px;">Kern-Dokumente</div>
+      </div>
+      <div style="text-align: center; padding: 16px; background: rgba(0,0,0,.2); border-radius: 8px;">
+        <div style="font-family: 'JetBrains Mono'; font-size: 28px; font-weight: 700; color: var(--blue);">~50.000</div>
+        <div style="font-size: 11px; color: var(--text2); text-transform: uppercase; letter-spacing: 1px;">Chunks in Vector DB</div>
+      </div>
+      <div style="text-align: center; padding: 16px; background: rgba(0,0,0,.2); border-radius: 8px;">
+        <div style="font-family: 'JetBrains Mono'; font-size: 28px; font-weight: 700; color: var(--purple);">12+</div>
+        <div style="font-size: 11px; color: var(--text2); text-transform: uppercase; letter-spacing: 1px;">Live APIs</div>
+      </div>
+      <div style="text-align: center; padding: 16px; background: rgba(0,0,0,.2); border-radius: 8px;">
+        <div style="font-family: 'JetBrains Mono'; font-size: 28px; font-weight: 700; color: var(--gold);">€0</div>
+        <div style="font-size: 11px; color: var(--text2); text-transform: uppercase; letter-spacing: 1px;">Zusatzkosten</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ===== TAB 6: LEARNING PIPELINE ===== -->
+<div class="tc" id="tab-pipeline">
+  <div class="title">Learning Pipeline — Continuous Improvement</div>
+  <div class="subtitle">Weltklasse-Agenten werden nicht gebaut — sie werden trainiert. Hier ist der Prozess wie unsere Agenten kontinuierlich besser werden.</div>
+
+  <div class="section-block">
+    <h3>🔄 Der Improvement Cycle</h3>
+    <div class="pipeline" style="margin-top: 16px;">
+      <div class="pipe-stage" style="border-top: 3px solid var(--blue);">
+        <h4 style="color: var(--blue);">1. COLLECT</h4>
+        <p>RESEARCHER scannt wöchentlich:<br>• Neue Whitepapers<br>• Regulatorik-Updates<br>• Platform-Algorithmus-Changes<br>• Competitor-Content<br>• Community-Fragen</p>
+      </div>
+      <div class="pipe-stage" style="border-top: 3px solid var(--purple);">
+        <h4 style="color: var(--purple);">2. CURATE</h4>
+        <p>DONNA priorisiert:<br>• Relevanz für Ghost Protocol<br>• Qualität der Quelle<br>• Aktualität<br>• Welcher Agent braucht das?</p>
+      </div>
+      <div class="pipe-stage" style="border-top: 3px solid var(--green);">
+        <h4 style="color: var(--green);">3. INJECT</h4>
+        <p>ARCHITECT verarbeitet:<br>• Chunking & Embedding<br>• Supabase Vector Upload<br>• System Prompt Update<br>• Tool-Integration Test</p>
+      </div>
+      <div class="pipe-stage" style="border-top: 3px solid var(--gold);">
+        <h4 style="color: var(--gold);">4. VALIDATE</h4>
+        <p>OPERATOR testet:<br>• Output-Qualität vorher/nachher<br>• Factual Accuracy Check<br>• Performance Benchmarks<br>• A/B Test gegen Baseline</p>
+      </div>
+      <div class="pipe-stage" style="border-top: 3px solid var(--pink);">
+        <h4 style="color: var(--pink);">5. MEASURE</h4>
+        <p>TREASURER trackt:<br>• Content Performance (Views, Engagement)<br>• Conversion Impact<br>• API Cost per Improvement<br>• ROI des Wissens-Updates</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="grid grid-2">
+    <div class="card" style="border-left: 3px solid var(--green);">
+      <h3 style="color: var(--green);">📈 Output-basiertes Lernen</h3>
+      <p>Jeder Content-Output wird getrackt: Views, Engagement, Conversion, Revenue. Die besten Outputs werden analysiert — was hat funktioniert? Welche Daten, welcher Ton, welches Format? Diese Learnings fließen zurück in die System Prompts.</p>
+      <p style="margin-top: 8px; color: var(--green); font-size: 12px; font-weight: 500;">→ "Unser BTC-Report mit On-Chain-Daten hatte 3x mehr Engagement als der rein technische Report. ORACLE soll zukünftig immer On-Chain-Kontext liefern."</p>
+    </div>
+    <div class="card" style="border-left: 3px solid var(--purple);">
+      <h3 style="color: var(--purple);">🏆 Competitor Benchmarking</h3>
+      <p>RESEARCHER analysiert wöchentlich die Top-Performer in unserem Markt: Welche Themen covern sie? Welche Formate nutzen sie? Was können wir besser machen? Nicht kopieren — besser machen.</p>
+      <p style="margin-top: 8px; color: var(--purple); font-size: 12px; font-weight: 500;">→ "BTC-ECHO hat ein Steuerthema coverat das 50k Views hat. Unser Guide ist tiefer — aber wir haben kein Video dazu. SCRIBE + AMPLIFIER: Video-Version produzieren."</p>
+    </div>
+  </div>
+
+  <div class="section-block" style="border-left: 3px solid var(--gold);">
+    <h3>⚠️ Wichtig: Was AI NICHT kann (und wo Christian eingreift)</h3>
+    <p style="font-size: 13px; color: var(--text2); line-height: 1.7;">
+      <strong style="color: var(--text);">Halluzination-Risiko:</strong> AI kann "kreativ" mit Fakten umgehen. Deshalb: Jeder Report durchläuft den COUNSEL Legal Check UND Christian macht stichprobenartige Factual Accuracy Reviews (15 Min/Tag).<br><br>
+      <strong style="color: var(--text);">Geschmack & Intuition:</strong> AI kann Daten analysieren, aber Christian's Markt-Intuition und Community-Gespür sind unersetzlich. Die Agenten liefern Optionen — Christian entscheidet bei strategischen Weichenstellungen.<br><br>
+      <strong style="color: var(--text);">Beziehungen:</strong> Echte Partnerships, Podcast-Auftritte, Netzwerk-Events — das ist Christian's Job. Die Agenten bereiten vor, Christian liefert den menschlichen Touch.
+    </p>
+  </div>
+</div>
+
+<!-- ===== TAB 7: IMPLEMENTATION ===== -->
+<div class="tc" id="tab-implementation">
+  <div class="title">Implementation — Von der Theorie zur Praxis</div>
+  <div class="subtitle">Konkrete nächste Schritte um die Knowledge Architecture aufzubauen. Priorisiert nach Impact und Machbarkeit.</div>
+
+  <div class="grid grid-2">
+    <div class="card" style="border-top: 3px solid var(--green);">
+      <div class="badge" style="background: rgba(118,185,0,.15); color: var(--green);">WOCHE 1-2</div>
+      <h3>Phase A: Elite System Prompts</h3>
+      <p><strong>Aufwand:</strong> ~8h (Claude hilft)<br>
+      <strong>Kosten:</strong> €0<br>
+      <strong>Impact:</strong> SOFORT spürbar — 10x bessere Outputs</p>
+      <p style="margin-top: 8px;">Für jeden der 17 Agenten einen multi-layer System Prompt schreiben der die Expertise des Weltbesten in dieser Rolle encodiert. Das ist der höchste ROI aller Maßnahmen — kein Geld, nur Zeit.</p>
+      <div class="tag-row">
+        <span class="tag" style="color: var(--green);">✅ Kein Budget nötig</span>
+        <span class="tag" style="color: var(--green);">✅ Sofort umsetzbar</span>
+        <span class="tag" style="color: var(--green);">✅ Höchster ROI</span>
+      </div>
+    </div>
+
+    <div class="card" style="border-top: 3px solid var(--blue);">
+      <div class="badge" style="background: rgba(0,212,255,.15); color: var(--blue);">WOCHE 2-3</div>
+      <h3>Phase B: Core Knowledge Base (RAG)</h3>
+      <p><strong>Aufwand:</strong> ~12h Setup + 4h/Woche Pflege<br>
+      <strong>Kosten:</strong> €0 (Supabase Free Tier)<br>
+      <strong>Impact:</strong> Agenten haben Zugriff auf curated Expertise</p>
+      <p style="margin-top: 8px;">Supabase Vector Extension aktivieren. Top-Priority Dokumente (BTC Whitepaper, MiCA, BaFin Merkblätter, SEO Guides) chunken und embedden. RAG-Funktion in Agent Base Class integrieren.</p>
+      <div class="tag-row">
+        <span class="tag" style="color: var(--blue);">✅ Kein Budget nötig</span>
+        <span class="tag" style="color: var(--blue);">✅ Skaliert unbegrenzt</span>
+        <span class="tag" style="color: var(--blue);">⚠️ Einmalig Aufwand</span>
+      </div>
+    </div>
+
+    <div class="card" style="border-top: 3px solid var(--purple);">
+      <div class="badge" style="background: rgba(168,85,247,.15); color: var(--purple);">WOCHE 3-4</div>
+      <h3>Phase C: API Tool Integration</h3>
+      <p><strong>Aufwand:</strong> ~6h pro API<br>
+      <strong>Kosten:</strong> ~€10/Mo (Serper €5, Rest Free Tiers)<br>
+      <strong>Impact:</strong> Echtzeit-Daten für alle Agenten</p>
+      <p style="margin-top: 8px;">CoinGecko, Fear&Greed, Serper Web Search, Twitter API, YouTube Data API als CrewAI Tools implementieren. Jeder Agent bekommt die Tools die er braucht.</p>
+      <div class="tag-row">
+        <span class="tag" style="color: var(--purple);">✅ Meiste APIs gratis</span>
+        <span class="tag" style="color: var(--purple);">✅ CrewAI Tool-System</span>
+        <span class="tag" style="color: var(--purple);">⚠️ API Rate Limits beachten</span>
+      </div>
+    </div>
+
+    <div class="card" style="border-top: 3px solid var(--gold);">
+      <div class="badge" style="background: rgba(251,191,36,.15); color: var(--gold);">WOCHE 4+</div>
+      <h3>Phase D: Social Media Automation</h3>
+      <p><strong>Aufwand:</strong> ~10h Setup<br>
+      <strong>Kosten:</strong> €0-20/Mo (Tools mit Free Tiers)<br>
+      <strong>Impact:</strong> 8 Plattformen, automatisierte Distribution</p>
+      <p style="margin-top: 8px;">Content-Recycling-Pipeline: 1 Intelligence Report → 8 Platform-spezifische Outputs. AMPLIFIER managed Scheduling und Platform-Optimierung. Jede Plattform bekommt nativen Content.</p>
+      <div class="tag-row">
+        <span class="tag" style="color: var(--gold);">✅ Skaliert Content 8x</span>
+        <span class="tag" style="color: var(--gold);">✅ Maximale Reichweite</span>
+        <span class="tag" style="color: var(--gold);">⚠️ Video erfordert manuellen Input</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="section-block" style="border: 2px solid var(--green); background: linear-gradient(135deg, var(--card), rgba(118,185,0,.05));">
+    <h3 style="color: var(--green);">🎯 Sofort umsetzbar: Top 3 Quick Wins</h3>
+    <div class="grid grid-3" style="margin-top: 12px;">
+      <div style="padding: 16px; background: rgba(0,0,0,.2); border-radius: 8px; border-left: 3px solid var(--green);">
+        <div style="font-size: 13px; font-weight: 700; color: var(--green); margin-bottom: 6px;">1. System Prompts schreiben</div>
+        <div style="font-size: 12px; color: var(--text2);">Für die Top 5 Agenten (ORACLE, PUBLISHER, SCRIBE, COUNSEL, AMPLIFIER). Sofort 10x bessere Outputs. 0€ Kosten.</div>
+      </div>
+      <div style="padding: 16px; background: rgba(0,0,0,.2); border-radius: 8px; border-left: 3px solid var(--blue);">
+        <div style="font-size: 13px; font-weight: 700; color: var(--blue); margin-bottom: 6px;">2. MiCA + BaFin Docs embedden</div>
+        <div style="font-size: 12px; color: var(--text2);">COUNSEL wird sofort Weltklasse wenn er die echten Gesetzestexte als RAG-Context hat. Schützt vor rechtlichen Fehlern.</div>
+      </div>
+      <div style="padding: 16px; background: rgba(0,0,0,.2); border-radius: 8px; border-left: 3px solid var(--purple);">
+        <div style="font-size: 13px; font-weight: 700; color: var(--purple); margin-bottom: 6px;">3. TikTok + YouTube Shorts starten</div>
+        <div style="font-size: 12px; color: var(--text2);">Tägliche 15-60s Videos aus Intelligence Reports. Algorithmus favoriziert neue Creator. Schnellster Weg zu Reichweite.</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="section-block" style="border-left: 3px solid var(--pink);">
+    <h3>🎭 Die "Steigerung der Elite" — Unser Unfair Advantage</h3>
+    <p style="font-size: 13px; color: var(--text2); line-height: 1.8; margin-top: 8px;">
+      Ein einzelner Mensch kann nicht gleichzeitig Weltklasse-Analyst, Weltklasse-Anwalt, Weltklasse-Marketer und Weltklasse-Trader sein. Aber 17 AI-Agenten — jeder mit einer curated Knowledge Base von 10-20 Dokumenten der weltweit besten Köpfe in seinem Fachgebiet — können das.
+    </p>
+    <p style="font-size: 13px; color: var(--text); line-height: 1.8; margin-top: 8px; font-weight: 500;">
+      <strong>Der ORACLE</strong> analysiert wie Jim Simons — weil er die gleichen Frameworks kennt.<br>
+      <strong>Der COUNSEL</strong> prüft wie der beste DACH-Finanzanwalt — weil er die echten Gesetzestexte hat.<br>
+      <strong>Der PUBLISHER</strong> plant wie Gary Vee — weil er die Content Matrix verinnerlicht hat.<br>
+      <strong>Der SCRIBE</strong> schreibt wie Morgan Housel — weil er die Storytelling-Frameworks kennt.<br>
+      <strong>Der AMPLIFIER</strong> verteilt wie MrBeast — weil er die Algorithmen versteht.
+    </p>
+    <p style="font-size: 14px; color: var(--green); line-height: 1.8; margin-top: 12px; font-weight: 700;">
+      Das ist die Steigerung der Elite: 17 Weltbeste in 17 Disziplinen, die 24/7 zusammenarbeiten. Kein menschliches Unternehmen kann das replizieren.
+    </p>
+  </div>
+</div>
+
+</div><!-- /content -->
+
+<script>
+document.querySelectorAll('.tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.tc').forEach(tc => tc.classList.remove('active'));
+    tab.classList.add('active');
+    document.getElementById('tab-' + tab.dataset.tab).classList.add('active');
+  });
+});
+</script>
+</body>
+</html>

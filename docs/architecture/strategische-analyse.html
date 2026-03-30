@@ -1,0 +1,423 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ghost Protocol — Strategische Branchenanalyse</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#0a0a0f;color:#e0e0e0;font-family:'Segoe UI',system-ui,sans-serif}
+.header{text-align:center;padding:40px 20px 10px}
+.header h1{font-size:2rem;background:linear-gradient(135deg,#ff4444,#ff8800,#00f5d4);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.header p{color:#666;margin-top:6px;font-size:.85rem}
+.verdict-box{max-width:800px;margin:20px auto;background:linear-gradient(135deg,#1a0a2e,#0a1a1e);border:1px solid #7b2ff740;border-radius:16px;padding:24px 32px;text-align:center}
+.verdict-box h2{color:#ff8800;font-size:1.1rem;margin-bottom:12px}
+.verdict-box .big{font-size:1.8rem;font-weight:700;color:#fff;line-height:1.4}
+.verdict-box .big em{color:#ff4444;font-style:normal}
+.verdict-box .sub{color:#888;margin-top:12px;font-size:.9rem;line-height:1.6}
+
+.tabs{display:flex;justify-content:center;gap:6px;padding:20px;flex-wrap:wrap}
+.tab{padding:8px 20px;border-radius:8px;border:1px solid #333;background:#111;color:#aaa;cursor:pointer;transition:.3s;font-size:.85rem}
+.tab:hover{border-color:#555;color:#fff}
+.tab.active{background:linear-gradient(135deg,#ff4444,#ff8800);color:#fff;border-color:transparent;font-weight:600}
+
+.panel{display:none;max-width:1100px;margin:0 auto;padding:20px}
+.panel.active{display:block}
+
+/* Comparison Grid */
+.cmp-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px}
+.cmp-card{background:#111118;border:1px solid #222;border-radius:14px;padding:20px;position:relative;transition:.3s}
+.cmp-card:hover{border-color:#444;transform:translateY(-2px)}
+.cmp-card.recommended{border-color:#00f5d4}
+.cmp-card.not-recommended{opacity:.5}
+.cmp-card .tier{position:absolute;top:10px;right:10px;padding:3px 10px;border-radius:10px;font-size:.65rem;font-weight:700}
+.tier-1{background:#00ff8830;color:#00ff88}
+.tier-2{background:#ffaa0030;color:#ffaa00}
+.tier-3{background:#ff444430;color:#ff4444}
+.cmp-card h3{font-size:1rem;color:#fff;margin-bottom:2px}
+.cmp-card .subtitle{font-size:.75rem;color:#00f5d4;margin-bottom:12px}
+.metric-row{display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #1a1a2e;font-size:.8rem}
+.metric-row .label{color:#888}
+.metric-row .value{color:#fff;font-weight:600}
+.metric-row .value.good{color:#00ff88}
+.metric-row .value.warn{color:#ffaa00}
+.metric-row .value.bad{color:#ff4444}
+.bar-mini{width:100%;height:6px;background:#1a1a2e;border-radius:3px;margin-top:4px;overflow:hidden}
+.bar-mini .fill{height:100%;border-radius:3px;transition:width 1s}
+
+/* Radar placeholder */
+.radar-container{max-width:700px;margin:20px auto;text-align:center}
+.radar-canvas{background:#111118;border:1px solid #222;border-radius:16px;padding:20px}
+
+/* Why Crypto Section */
+.why-section{max-width:800px;margin:20px auto}
+.why-card{background:#111118;border:1px solid #222;border-radius:12px;padding:20px;margin:12px 0}
+.why-card h4{color:#00f5d4;margin-bottom:8px;font-size:.95rem}
+.why-card p{color:#aaa;font-size:.85rem;line-height:1.6}
+.why-card .data{color:#ff8800;font-weight:600}
+
+/* Dual Track */
+.dual-track{display:grid;grid-template-columns:1fr 1fr;gap:20px;max-width:900px;margin:20px auto}
+.track{background:#111118;border:1px solid #222;border-radius:14px;padding:24px}
+.track.primary{border-color:#7b2ff7}
+.track.secondary{border-color:#00f5d4}
+.track h3{margin-bottom:4px}
+.track .pct{font-size:2rem;font-weight:700;margin:8px 0}
+.track .pct.purple{color:#7b2ff7}
+.track .pct.teal{color:#00f5d4}
+.track ul{list-style:none;padding:0;margin-top:12px}
+.track li{padding:6px 0;border-bottom:1px solid #1a1a2e;font-size:.85rem;color:#aaa}
+.track li span{color:#fff;font-weight:600}
+
+/* Time Reality */
+.time-box{max-width:700px;margin:20px auto;background:#1a0a0a;border:1px solid #ff444440;border-radius:14px;padding:24px;text-align:center}
+.time-box h3{color:#ff4444;margin-bottom:12px}
+.time-box .compare{display:flex;justify-content:center;gap:40px;margin:16px 0}
+.time-box .col{text-align:center}
+.time-box .col .num{font-size:2.5rem;font-weight:700}
+.time-box .col .lbl{font-size:.8rem;color:#888;margin-top:4px}
+.time-box .col .num.red{color:#ff4444}
+.time-box .col .num.green{color:#00ff88}
+
+/* Revenue Chart */
+.chart-area{max-width:800px;margin:20px auto}
+canvas{width:100%!important;max-height:400px}
+
+@media(max-width:768px){.dual-track{grid-template-columns:1fr}.cmp-grid{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>STRATEGISCHE BRANCHENANALYSE</h1>
+  <p>Ghost Protocol — Datengetriebene Entscheidung über 8 Business-Modelle · 61 Quellen · 2025-2026</p>
+</div>
+
+<div class="verdict-box">
+  <h2>KRITISCHER BEFUND DES STRATEGISTEN</h2>
+  <div class="big">Der ursprüngliche Plan hatte <em>keinen branchenübergreifenden Vergleich.</em><br>Krypto wurde als Annahme übernommen, nicht validiert.</div>
+  <div class="sub">
+    Nach Analyse von 8 Branchen über 10 Kriterien: <strong>Krypto bleibt die richtige Sekundär-Branche</strong> — aber der Plan braucht ein <strong>stärkeres Primär-Standbein: AI Agency.</strong><br>
+    Größtes Problem: Die 2-5h/Woche-Annahme ist unrealistisch für €5k+/Mo Revenue.
+  </div>
+</div>
+
+<div class="tabs">
+  <div class="tab active" onclick="showP('compare')">8 Branchen im Vergleich</div>
+  <div class="tab" onclick="showP('why')">Warum (nicht nur) Krypto</div>
+  <div class="tab" onclick="showP('dual')">Optimale Dual-Track-Strategie</div>
+  <div class="tab" onclick="showP('time')">Realitäts-Check: Zeit</div>
+  <div class="tab" onclick="showP('projection')">Revenue-Projektion</div>
+</div>
+
+<!-- COMPARE -->
+<div class="panel active" id="p-compare">
+  <div class="cmp-grid">
+
+    <div class="cmp-card recommended">
+      <div class="tier tier-1">TIER 1 — TOP</div>
+      <h3>🤖 AI Agency / Freelancing</h3>
+      <div class="subtitle">B2B Automation Services mit CrewAI</div>
+      <div class="metric-row"><span class="label">Startup-Kosten</span><span class="value">€500–2.000</span></div>
+      <div class="metric-row"><span class="label">Zeit bis €500/Mo</span><span class="value good">2–3 Monate</span></div>
+      <div class="metric-row"><span class="label">Revenue Ceiling</span><span class="value good">€10–15k/Mo</span></div>
+      <div class="metric-row"><span class="label">AI Automation</span><span class="value good">90% (Delivery)</span></div>
+      <div class="bar-mini"><div class="fill" style="width:90%;background:linear-gradient(90deg,#7b2ff7,#00f5d4)"></div></div>
+      <div class="metric-row"><span class="label">Failure Rate</span><span class="value good">20%</span></div>
+      <div class="metric-row"><span class="label">Wochenstunden @€5k</span><span class="value warn">25–35h</span></div>
+      <div class="metric-row"><span class="label">P(€5k/Mo in 12 Mo)</span><span class="value good">75%</span></div>
+    </div>
+
+    <div class="cmp-card recommended">
+      <div class="tier tier-1">TIER 1 — TOP</div>
+      <h3>₿ Crypto Content + Affiliate</h3>
+      <div class="subtitle">DACH Krypto-Markt · Intelligence Reports</div>
+      <div class="metric-row"><span class="label">Startup-Kosten</span><span class="value good">€300–500</span></div>
+      <div class="metric-row"><span class="label">Zeit bis €500/Mo</span><span class="value warn">3–4 Monate</span></div>
+      <div class="metric-row"><span class="label">Revenue Ceiling</span><span class="value">€2–5k/Mo</span></div>
+      <div class="metric-row"><span class="label">AI Automation</span><span class="value">70%</span></div>
+      <div class="bar-mini"><div class="fill" style="width:70%;background:linear-gradient(90deg,#ff8800,#00f5d4)"></div></div>
+      <div class="metric-row"><span class="label">Failure Rate</span><span class="value warn">70%</span></div>
+      <div class="metric-row"><span class="label">Wochenstunden @€2k</span><span class="value good">9–14h</span></div>
+      <div class="metric-row"><span class="label">P(€5k/Mo in 12 Mo)</span><span class="value warn">40%</span></div>
+    </div>
+
+    <div class="cmp-card">
+      <div class="tier tier-2">TIER 2</div>
+      <h3>💻 Micro-SaaS</h3>
+      <div class="subtitle">Eigenes Software-Produkt</div>
+      <div class="metric-row"><span class="label">Startup-Kosten</span><span class="value good">€0–500</span></div>
+      <div class="metric-row"><span class="label">Zeit bis €500/Mo</span><span class="value bad">6–9 Monate</span></div>
+      <div class="metric-row"><span class="label">Revenue Ceiling</span><span class="value">€3–7.5k/Mo</span></div>
+      <div class="metric-row"><span class="label">AI Automation</span><span class="value">80%</span></div>
+      <div class="bar-mini"><div class="fill" style="width:80%;background:#ffaa00"></div></div>
+      <div class="metric-row"><span class="label">Failure Rate</span><span class="value bad">50%</span></div>
+      <div class="metric-row"><span class="label">Wochenstunden @€5k</span><span class="value warn">20–30h</span></div>
+      <div class="metric-row"><span class="label">P(€5k/Mo in 12 Mo)</span><span class="value warn">25%</span></div>
+    </div>
+
+    <div class="cmp-card">
+      <div class="tier tier-2">TIER 2</div>
+      <h3>👕 Print-on-Demand</h3>
+      <div class="subtitle">Nische-fokussiert</div>
+      <div class="metric-row"><span class="label">Startup-Kosten</span><span class="value good">€0–500</span></div>
+      <div class="metric-row"><span class="label">Zeit bis €500/Mo</span><span class="value warn">3–6 Monate</span></div>
+      <div class="metric-row"><span class="label">Revenue Ceiling</span><span class="value bad">€500–2k/Mo</span></div>
+      <div class="metric-row"><span class="label">AI Automation</span><span class="value">60%</span></div>
+      <div class="bar-mini"><div class="fill" style="width:60%;background:#ffaa00"></div></div>
+      <div class="metric-row"><span class="label">Failure Rate</span><span class="value bad">75%</span></div>
+      <div class="metric-row"><span class="label">Wochenstunden @€1k</span><span class="value warn">15–25h</span></div>
+      <div class="metric-row"><span class="label">P(€5k/Mo in 12 Mo)</span><span class="value bad">15%</span></div>
+    </div>
+
+    <div class="cmp-card not-recommended">
+      <div class="tier tier-3">❌ RAUS</div>
+      <h3>📦 Amazon FBA</h3>
+      <div class="subtitle">Physische Produkte kaufen/verkaufen</div>
+      <div class="metric-row"><span class="label">Startup-Kosten</span><span class="value bad">€3.500+ (Budget: €400)</span></div>
+      <div class="metric-row"><span class="label">Failure Rate</span><span class="value bad">42%</span></div>
+      <div class="metric-row"><span class="label">AI Automation</span><span class="value bad">40% (Logistik!)</span></div>
+      <div class="metric-row"><span class="label">Ausschlussgrund</span><span class="value bad">Budget reicht nicht</span></div>
+    </div>
+
+    <div class="cmp-card not-recommended">
+      <div class="tier tier-3">❌ RAUS</div>
+      <h3>🔍 Generisches SEO Affiliate</h3>
+      <div class="subtitle">Klassisches Content-Affiliate ohne Nische</div>
+      <div class="metric-row"><span class="label">Problem 2026</span><span class="value bad">AI Overviews: -50% CTR</span></div>
+      <div class="metric-row"><span class="label">Failure Rate</span><span class="value bad">80%+</span></div>
+      <div class="metric-row"><span class="label">Ausschlussgrund</span><span class="value bad">Modell gebrochen</span></div>
+    </div>
+
+    <div class="cmp-card not-recommended">
+      <div class="tier tier-3">❌ RAUS</div>
+      <h3>📊 Trading Bots / Signals</h3>
+      <div class="subtitle">Standalone als Hauptprodukt</div>
+      <div class="metric-row"><span class="label">Failure Rate</span><span class="value bad">85%</span></div>
+      <div class="metric-row"><span class="label">Churn Rate</span><span class="value bad">50%+ monatlich</span></div>
+      <div class="metric-row"><span class="label">Ausschlussgrund</span><span class="value bad">Regulatorisch + unsustainable</span></div>
+    </div>
+
+    <div class="cmp-card not-recommended">
+      <div class="tier tier-3">❌ RAUS</div>
+      <h3>🎓 Online Kurse (standalone)</h3>
+      <div class="subtitle">Ohne bestehende Audience</div>
+      <div class="metric-row"><span class="label">Vorlaufzeit</span><span class="value bad">6–12 Monate</span></div>
+      <div class="metric-row"><span class="label">Voraussetzung</span><span class="value bad">Bestehende Audience</span></div>
+      <div class="metric-row"><span class="label">Ausschlussgrund</span><span class="value bad">Kein Publikum vorhanden</span></div>
+    </div>
+
+  </div>
+</div>
+
+<!-- WHY CRYPTO -->
+<div class="panel" id="p-why">
+  <div class="why-section">
+    <h3 style="text-align:center;color:#ff8800;margin-bottom:20px;font-size:1.1rem">Warum Krypto als Sekundär-Channel überlebt — und warum AI Agency dazukommt</h3>
+
+    <div class="why-card" style="border-color:#ff4444">
+      <h4>⚠️ Was der alte Plan FALSCH gemacht hat</h4>
+      <p>Krypto wurde als einzige Branche gesetzt, ohne Alternativen zu prüfen. Die 2-5h/Woche-Annahme war unrealistisch. Trading als Revenue-Channel bringt bei €200 Kapital nur ~€4/Mo Return. Der Plan hat die Sales-Komponente komplett ignoriert. Ein "100% autonomes" Business existiert nicht — 95% autonom + 10-30h/Woche Oversight ist die Realität.</p>
+    </div>
+
+    <div class="why-card">
+      <h4>✅ Warum Krypto trotzdem richtig ist (als Sekundär-Stream)</h4>
+      <p>
+        <strong>1. DACH-Markt wächst:</strong> <span class="data">€2,35 Mrd. (2025) → €2,73 Mrd. (2026), 16,3% CAGR, 27 Mio. Nutzer in DE</span><br>
+        <strong>2. Höchste Affiliate-Commissions aller Branchen:</strong> <span class="data">MEXC 50-70%, Binance 50%, Bybit 30-50% — lifetime recurring</span><br>
+        <strong>3. Deine Expertise ist der Moat:</strong> Krypto-Analyst + AI-Wissen = einzigartige Kombination im DACH-Raum<br>
+        <strong>4. AI-Agenten können echten Mehrwert liefern:</strong> On-Chain-Daten, Sentiment, News-Scanning — hier ist AI nicht Gimmick, sondern Kernvorteil<br>
+        <strong>5. DAC8 (2026) treibt Nachfrage:</strong> Automatische Meldung ans Finanzamt → massiver Bedarf an Steuer-Guides, Tools, Beratung<br>
+        <strong>6. Wenig deutsche Konkurrenz:</strong> An der Schnittstelle AI + Krypto + Steuern + DACH ist die Nische offen<br>
+        <strong>7. Passt perfekt zu 8-12h/Woche:</strong> Content-Produktion mit AI-Agenten skaliert bei moderatem Zeitaufwand
+      </p>
+    </div>
+
+    <div class="why-card">
+      <h4>🤖 Warum AI Agency als Primär-Channel DAZU muss</h4>
+      <p>
+        <strong>1. Schnellster Weg zu Revenue:</strong> <span class="data">2-3 Monate bis €500/Mo, 4-6 Monate bis €2k/Mo</span><br>
+        <strong>2. Höchstes Ceiling:</strong> <span class="data">€10-15k/Mo als Solo-Operator (vs. €2-5k/Mo bei Crypto Affiliate)</span><br>
+        <strong>3. Niedrigste Failure Rate:</strong> <span class="data">20% (vs. 50-75% bei anderen Modellen)</span><br>
+        <strong>4. CrewAI = dein Produkt:</strong> Du baust Agenten für Ghost Protocol → verkaufst dieselbe Expertise an B2B-Kunden<br>
+        <strong>5. Ghost Protocol wird zum Showcase:</strong> "Schau, was meine AI-Agenten für mein eigenes Krypto-Business machen — das baue ich für dich"<br>
+        <strong>6. 90% der Delivery ist automatisierbar:</strong> Die 50% die nicht automatisierbar sind = Sales. Aber die Delivery? Perfekt für CrewAI.
+      </p>
+    </div>
+
+    <div class="why-card">
+      <h4>📦 Warum NICHT physische Produkte (Amazon FBA / Dropshipping)</h4>
+      <p>
+        <strong>Budget-Kill:</strong> <span class="data">Minimum €3.500 für Erstbestellung + Amazon-Gebühren. Du hast €400.</span><br>
+        <strong>Nicht automatisierbar:</strong> Logistik, Retouren, Qualitätskontrolle, Supplier-Management — das kann kein AI-Agent.<br>
+        <strong>Margendruck:</strong> Amazon FBA Margen nach allen Kosten: 15-25%. Affiliate: 50-70%. Digital Products: 80-90%.<br>
+        <strong>42% Failure Rate</strong> selbst mit ausreichendem Kapital.<br>
+        <strong>Kein Expertise-Match:</strong> Dein Wissen liegt in Krypto + AI, nicht in Supply Chain Management.
+      </p>
+    </div>
+  </div>
+</div>
+
+<!-- DUAL TRACK -->
+<div class="panel" id="p-dual">
+  <h3 style="text-align:center;color:#fff;margin:10px 0 20px;font-size:1.1rem">Empfohlene Dual-Track-Strategie</h3>
+  <div class="dual-track">
+    <div class="track primary">
+      <h3 style="color:#7b2ff7">🤖 PRIMARY: AI Agency</h3>
+      <div class="pct purple">75% Effort</div>
+      <p style="color:#aaa;font-size:.85rem;margin:8px 0">B2B AI-Automation-Services mit CrewAI. Schnellster Weg zu substanziellem Revenue.</p>
+      <ul>
+        <li><span>Mo 1-2:</span> Landing Page + Portfolio + Cold Outreach (€0)</li>
+        <li><span>Mo 3-4:</span> Erste 1-2 Kunden → €3-5k/Mo</li>
+        <li><span>Mo 5-8:</span> Scale auf 3-5 Kunden → €7,5-12k/Mo</li>
+        <li><span>Mo 9-12:</span> Stabilisierung → €10-15k/Mo</li>
+      </ul>
+      <div style="margin-top:16px;padding:12px;background:#7b2ff710;border-radius:8px;font-size:.8rem;color:#b388ff">
+        Ghost Protocol = dein Live-Showcase-Projekt.<br>
+        "Das System, das mein Krypto-Business automatisiert, baue ich auch für Sie."
+      </div>
+    </div>
+    <div class="track secondary">
+      <h3 style="color:#00f5d4">₿ SECONDARY: Crypto Affiliate</h3>
+      <div class="pct teal">25% Effort</div>
+      <p style="color:#aaa;font-size:.85rem;margin:8px 0">DACH Krypto-Content + Affiliate. Passiver Revenue-Stream der über Zeit wächst.</p>
+      <ul>
+        <li><span>Mo 1-4:</span> Content-Aufbau, 8-12 Artikel (€0-100)</li>
+        <li><span>Mo 5-8:</span> Erste Conversions → €200-500/Mo</li>
+        <li><span>Mo 9-12:</span> Momentum → €500-1.500/Mo</li>
+        <li><span>Jahr 2+:</span> Compounding → €1.500-3k/Mo (zunehmend passiv)</li>
+      </ul>
+      <div style="margin-top:16px;padding:12px;background:#00f5d410;border-radius:8px;font-size:.8rem;color:#00f5d4">
+        Ghost Protocol Agenten produzieren den Content automatisch.<br>
+        Oracle → Publisher → Broadcaster → Amplifier Pipeline.
+      </div>
+    </div>
+  </div>
+
+  <div style="max-width:900px;margin:20px auto;background:#111118;border:1px solid #222;border-radius:14px;padding:24px;text-align:center">
+    <div style="color:#888;font-size:.85rem">Combined Revenue Monat 12</div>
+    <div style="font-size:2.5rem;font-weight:700;background:linear-gradient(135deg,#7b2ff7,#00f5d4);-webkit-background-clip:text;-webkit-text-fill-color:transparent;margin:8px 0">€10.500 – 16.500/Mo</div>
+    <div style="color:#888;font-size:.85rem">Annual Run Rate: €126k – €198k · Net Margin: 75%+</div>
+  </div>
+</div>
+
+<!-- TIME REALITY -->
+<div class="panel" id="p-time">
+  <div class="time-box">
+    <h3>⚠️ REALITÄTS-CHECK: Zeitaufwand</h3>
+    <p style="color:#aaa;margin:12px 0;font-size:.9rem">Das größte Risiko im Plan ist nicht die Branchenwahl — es ist die Zeitannahme.</p>
+    <div class="compare">
+      <div class="col">
+        <div class="num red">2-5h</div>
+        <div class="lbl">Geplant pro Woche</div>
+      </div>
+      <div class="col" style="color:#666;font-size:2rem;padding-top:12px">vs.</div>
+      <div class="col">
+        <div class="num green">30-40h</div>
+        <div class="lbl">Realität für €10k+/Mo</div>
+      </div>
+    </div>
+    <p style="color:#888;font-size:.85rem;margin-top:16px;line-height:1.6">
+      Kein einziges Business-Modell erreicht €5k+/Mo bei 2-5h/Woche.<br>
+      Die "passive income" Narrative ist ein Mythos — zumindest in den ersten 12 Monaten.<br>
+      <strong style="color:#ff8800">Option A:</strong> 30-40h/Woche → €10-15k/Mo (Dual Track)<br>
+      <strong style="color:#ffaa00">Option B:</strong> 10-15h/Woche → €1-3k/Mo (nur Crypto Affiliate)<br>
+      <strong style="color:#ff4444">Option C:</strong> 2-5h/Woche → €200-500/Mo (unrealistisch für mehr)
+    </p>
+  </div>
+
+  <div style="max-width:700px;margin:20px auto">
+    <h4 style="color:#fff;text-align:center;margin:20px 0">Realer Zeitaufwand nach Modell</h4>
+    <div style="background:#111118;border:1px solid #222;border-radius:12px;padding:20px">
+      <div style="margin:12px 0">
+        <div style="display:flex;justify-content:space-between;font-size:.85rem;margin-bottom:4px"><span style="color:#aaa">AI Agency @€10k/Mo</span><span style="color:#fff">25-35h/Woche</span></div>
+        <div class="bar-mini"><div class="fill" style="width:82%;background:linear-gradient(90deg,#7b2ff7,#ff4444)"></div></div>
+      </div>
+      <div style="margin:12px 0">
+        <div style="display:flex;justify-content:space-between;font-size:.85rem;margin-bottom:4px"><span style="color:#aaa">Micro-SaaS @€5k/Mo</span><span style="color:#fff">20-30h/Woche</span></div>
+        <div class="bar-mini"><div class="fill" style="width:62%;background:#ffaa00"></div></div>
+      </div>
+      <div style="margin:12px 0">
+        <div style="display:flex;justify-content:space-between;font-size:.85rem;margin-bottom:4px"><span style="color:#aaa">Print-on-Demand @€1k/Mo</span><span style="color:#fff">15-25h/Woche</span></div>
+        <div class="bar-mini"><div class="fill" style="width:50%;background:#ffaa00"></div></div>
+      </div>
+      <div style="margin:12px 0">
+        <div style="display:flex;justify-content:space-between;font-size:.85rem;margin-bottom:4px"><span style="color:#aaa">Crypto Affiliate @€2k/Mo</span><span style="color:#fff">9-14h/Woche</span></div>
+        <div class="bar-mini"><div class="fill" style="width:30%;background:#00f5d4"></div></div>
+      </div>
+      <div style="margin:12px 0">
+        <div style="display:flex;justify-content:space-between;font-size:.85rem;margin-bottom:4px"><span style="color:#aaa">Ghost Protocol "2-5h" Annahme</span><span style="color:#ff4444">NICHT AUSREICHEND</span></div>
+        <div class="bar-mini"><div class="fill" style="width:12%;background:#ff4444"></div></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- PROJECTION -->
+<div class="panel" id="p-projection">
+  <h3 style="text-align:center;color:#fff;margin:10px 0 20px">Revenue-Projektion: Dual-Track (Monat 1–12)</h3>
+  <div style="max-width:800px;margin:0 auto">
+    <div id="projBars"></div>
+  </div>
+  <div style="display:flex;justify-content:center;gap:24px;margin-top:16px">
+    <div style="display:flex;align-items:center;gap:6px;font-size:.8rem;color:#aaa"><div style="width:12px;height:12px;border-radius:2px;background:#7b2ff7"></div>AI Agency</div>
+    <div style="display:flex;align-items:center;gap:6px;font-size:.8rem;color:#aaa"><div style="width:12px;height:12px;border-radius:2px;background:#00f5d4"></div>Crypto Affiliate</div>
+  </div>
+
+  <div style="max-width:600px;margin:30px auto;overflow-x:auto">
+    <table style="width:100%;border-collapse:collapse;font-size:.85rem">
+      <tr style="border-bottom:1px solid #333"><th style="text-align:left;padding:8px;color:#00f5d4">Monat</th><th style="text-align:right;padding:8px;color:#7b2ff7">AI Agency</th><th style="text-align:right;padding:8px;color:#00f5d4">Crypto</th><th style="text-align:right;padding:8px;color:#fff">TOTAL</th></tr>
+      <tr style="border-bottom:1px solid #1a1a2e"><td style="padding:8px">1-2</td><td style="text-align:right;padding:8px;color:#666">€0</td><td style="text-align:right;padding:8px;color:#666">€0</td><td style="text-align:right;padding:8px;color:#888">€0</td></tr>
+      <tr style="border-bottom:1px solid #1a1a2e"><td style="padding:8px">3</td><td style="text-align:right;padding:8px">€3.000</td><td style="text-align:right;padding:8px">€50</td><td style="text-align:right;padding:8px;color:#fff;font-weight:600">€3.050</td></tr>
+      <tr style="border-bottom:1px solid #1a1a2e"><td style="padding:8px">4</td><td style="text-align:right;padding:8px">€5.000</td><td style="text-align:right;padding:8px">€100</td><td style="text-align:right;padding:8px;color:#fff;font-weight:600">€5.100</td></tr>
+      <tr style="border-bottom:1px solid #1a1a2e"><td style="padding:8px">6</td><td style="text-align:right;padding:8px">€8.000</td><td style="text-align:right;padding:8px">€350</td><td style="text-align:right;padding:8px;color:#fff;font-weight:600">€8.350</td></tr>
+      <tr style="border-bottom:1px solid #1a1a2e"><td style="padding:8px">9</td><td style="text-align:right;padding:8px">€12.000</td><td style="text-align:right;padding:8px">€800</td><td style="text-align:right;padding:8px;color:#fff;font-weight:600">€12.800</td></tr>
+      <tr style="border-bottom:2px solid #7b2ff7"><td style="padding:8px;font-weight:700">12</td><td style="text-align:right;padding:8px;font-weight:700;color:#7b2ff7">€12.500</td><td style="text-align:right;padding:8px;font-weight:700;color:#00f5d4">€1.500</td><td style="text-align:right;padding:8px;font-weight:700;color:#fff;font-size:1.1rem">€14.000</td></tr>
+    </table>
+  </div>
+</div>
+
+<script>
+function showP(name){
+  document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
+  document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
+  document.getElementById('p-'+name).classList.add('active');
+  event.target.classList.add('active');
+  if(name==='projection')renderProjBars();
+}
+
+function renderProjBars(){
+  const c=document.getElementById('projBars');
+  if(c.children.length>0)return;
+  const data=[
+    {m:'Mo 1-2',a:0,cr:0},{m:'Mo 3',a:3000,cr:50},{m:'Mo 4',a:5000,cr:100},
+    {m:'Mo 5',a:6000,cr:200},{m:'Mo 6',a:8000,cr:350},{m:'Mo 7',a:9000,cr:450},
+    {m:'Mo 8',a:10000,cr:600},{m:'Mo 9',a:12000,cr:800},{m:'Mo 10',a:12000,cr:1000},
+    {m:'Mo 11',a:12500,cr:1200},{m:'Mo 12',a:12500,cr:1500}
+  ];
+  const max=15000;
+  data.forEach((d,i)=>{
+    const row=document.createElement('div');
+    row.style.cssText='display:flex;align-items:center;margin:8px 0';
+    const aPct=Math.min(d.a/max*100,100);
+    const cPct=Math.min(d.cr/max*100,100);
+    const total=d.a+d.cr;
+    row.innerHTML=`
+      <div style="width:60px;font-size:.8rem;color:#aaa;text-align:right;padding-right:10px">${d.m}</div>
+      <div style="flex:1;position:relative;height:24px;background:#1a1a2e;border-radius:4px;overflow:hidden">
+        <div style="position:absolute;left:0;top:0;height:100%;width:0%;background:#7b2ff7;border-radius:4px 0 0 4px;transition:width 1s" class="afill"></div>
+        <div style="position:absolute;left:0;top:0;height:100%;width:0%;background:#00f5d4;border-radius:0;transition:width 1s .2s" class="cfill"></div>
+      </div>
+      <div style="width:70px;text-align:right;font-size:.8rem;color:#fff;font-weight:600;padding-left:8px">€${total>0?total.toLocaleString('de'):'-'}</div>
+    `;
+    c.appendChild(row);
+    setTimeout(()=>{
+      row.querySelector('.afill').style.width=aPct+'%';
+      row.querySelector('.cfill').style.width=(aPct+cPct)+'%';
+    },100+i*100);
+  });
+}
+</script>
+
+</body>
+</html>

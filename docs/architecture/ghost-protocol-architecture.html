@@ -1,0 +1,693 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ghost Protocol — Agenten-Architektur</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #0a0a0f; color: #e0e0e0; font-family: 'Segoe UI', system-ui, sans-serif; overflow-x: hidden; }
+
+  /* Header */
+  .header { text-align: center; padding: 40px 20px 20px; }
+  .header h1 { font-size: 2.2rem; background: linear-gradient(135deg, #00f5d4, #7b2ff7); -webkit-background-clip: text; -webkit-text-fill-color: transparent; letter-spacing: 2px; }
+  .header p { color: #888; margin-top: 8px; font-size: 0.95rem; }
+
+  /* Tab Navigation */
+  .tabs { display: flex; justify-content: center; gap: 8px; padding: 20px; flex-wrap: wrap; }
+  .tab { padding: 10px 24px; border-radius: 8px; border: 1px solid #333; background: #111; color: #aaa; cursor: pointer; transition: all 0.3s; font-size: 0.9rem; }
+  .tab:hover { border-color: #555; color: #fff; }
+  .tab.active { background: linear-gradient(135deg, #7b2ff7, #00f5d4); color: #fff; border-color: transparent; font-weight: 600; }
+
+  /* Panels */
+  .panel { display: none; max-width: 1200px; margin: 0 auto; padding: 20px; }
+  .panel.active { display: block; }
+
+  /* Agent Grid */
+  .agent-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 20px; padding: 20px 0; }
+  .agent-card { background: #111118; border: 1px solid #222; border-radius: 16px; padding: 24px; transition: all 0.3s; cursor: pointer; position: relative; overflow: hidden; }
+  .agent-card:hover { border-color: #444; transform: translateY(-2px); box-shadow: 0 8px 32px rgba(123,47,247,0.15); }
+  .agent-card .priority { position: absolute; top: 12px; right: 12px; padding: 3px 10px; border-radius: 12px; font-size: 0.7rem; font-weight: 700; }
+  .p0 { background: #ff4444; color: #fff; }
+  .p1 { background: #ff8800; color: #fff; }
+  .p2 { background: #4488ff; color: #fff; }
+  .agent-card .icon { font-size: 2rem; margin-bottom: 12px; }
+  .agent-card h3 { font-size: 1.1rem; color: #fff; margin-bottom: 4px; }
+  .agent-card .role { color: #00f5d4; font-size: 0.8rem; font-weight: 600; margin-bottom: 12px; }
+  .agent-card .desc { color: #888; font-size: 0.85rem; line-height: 1.5; }
+  .agent-card .llm-badge { display: inline-block; margin-top: 12px; padding: 4px 12px; border-radius: 6px; font-size: 0.75rem; font-weight: 600; }
+  .sonnet { background: #7b2ff720; color: #b388ff; border: 1px solid #7b2ff740; }
+  .haiku { background: #00f5d420; color: #00f5d4; border: 1px solid #00f5d440; }
+  .agent-card .tools-list { margin-top: 12px; display: flex; flex-wrap: wrap; gap: 6px; }
+  .agent-card .tool-tag { padding: 3px 8px; border-radius: 4px; font-size: 0.7rem; background: #1a1a2e; color: #aaa; border: 1px solid #2a2a3e; }
+  .agent-card .schedule { margin-top: 10px; font-size: 0.8rem; color: #666; }
+  .agent-card .schedule span { color: #ff8800; }
+
+  /* Flow Diagram */
+  .flow-container { padding: 20px 0; }
+  .flow-row { display: flex; align-items: center; justify-content: center; gap: 12px; margin: 16px 0; flex-wrap: wrap; }
+  .flow-node { background: #111118; border: 1px solid #333; border-radius: 12px; padding: 16px 24px; text-align: center; min-width: 140px; transition: all 0.3s; }
+  .flow-node:hover { border-color: #7b2ff7; box-shadow: 0 0 20px rgba(123,47,247,0.2); }
+  .flow-node .fn-icon { font-size: 1.5rem; margin-bottom: 6px; }
+  .flow-node .fn-name { font-size: 0.85rem; font-weight: 600; color: #fff; }
+  .flow-node .fn-detail { font-size: 0.7rem; color: #888; margin-top: 4px; }
+  .flow-arrow { font-size: 1.5rem; color: #7b2ff7; }
+  .flow-arrow-down { text-align: center; font-size: 1.5rem; color: #00f5d4; margin: 8px 0; }
+  .flow-section { margin: 32px 0; }
+  .flow-section h3 { color: #00f5d4; font-size: 1rem; margin-bottom: 16px; text-align: center; letter-spacing: 1px; text-transform: uppercase; }
+  .flow-group { display: flex; justify-content: center; gap: 16px; flex-wrap: wrap; }
+
+  /* Revenue Panel */
+  .revenue-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; padding: 20px 0; }
+  .revenue-card { background: #111118; border: 1px solid #222; border-radius: 12px; padding: 20px; }
+  .revenue-card h4 { color: #fff; margin-bottom: 8px; }
+  .revenue-card .amount { font-size: 1.4rem; font-weight: 700; background: linear-gradient(135deg, #00f5d4, #7b2ff7); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+  .revenue-card .auto { font-size: 0.8rem; color: #888; margin-top: 4px; }
+  .revenue-card .legal { font-size: 0.8rem; margin-top: 8px; padding: 4px 8px; border-radius: 4px; display: inline-block; }
+  .legal-ok { background: #00ff0020; color: #00ff88; }
+  .legal-no { background: #ff000020; color: #ff4444; text-decoration: line-through; }
+
+  /* Bar Chart */
+  .bar-chart { max-width: 700px; margin: 30px auto; }
+  .bar-row { display: flex; align-items: center; margin: 10px 0; }
+  .bar-label { width: 100px; font-size: 0.85rem; color: #aaa; text-align: right; padding-right: 12px; }
+  .bar-track { flex: 1; background: #1a1a2e; border-radius: 6px; height: 28px; position: relative; overflow: hidden; }
+  .bar-fill { height: 100%; border-radius: 6px; display: flex; align-items: center; padding-left: 12px; font-size: 0.75rem; font-weight: 600; color: #fff; transition: width 1s ease; }
+  .bar-value { position: absolute; right: 8px; top: 50%; transform: translateY(-50%); font-size: 0.75rem; color: #aaa; }
+
+  /* Cost Table */
+  .cost-table { width: 100%; max-width: 600px; margin: 20px auto; border-collapse: collapse; }
+  .cost-table th, .cost-table td { padding: 12px 16px; text-align: left; border-bottom: 1px solid #222; }
+  .cost-table th { color: #00f5d4; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 1px; }
+  .cost-table td { font-size: 0.9rem; }
+  .cost-table .total { font-weight: 700; color: #fff; border-top: 2px solid #7b2ff7; }
+
+  /* Sprint Timeline */
+  .timeline { max-width: 800px; margin: 20px auto; position: relative; padding-left: 40px; }
+  .timeline::before { content: ''; position: absolute; left: 18px; top: 0; bottom: 0; width: 2px; background: linear-gradient(180deg, #7b2ff7, #00f5d4); }
+  .tl-item { position: relative; margin: 24px 0; padding: 16px 20px; background: #111118; border: 1px solid #222; border-radius: 12px; }
+  .tl-item::before { content: ''; position: absolute; left: -30px; top: 20px; width: 12px; height: 12px; border-radius: 50%; background: #7b2ff7; border: 2px solid #0a0a0f; }
+  .tl-item h4 { color: #fff; margin-bottom: 4px; }
+  .tl-item .tl-time { font-size: 0.8rem; color: #00f5d4; margin-bottom: 8px; }
+  .tl-item .tl-tasks { font-size: 0.85rem; color: #888; line-height: 1.6; }
+
+  /* Legend */
+  .legend { display: flex; justify-content: center; gap: 24px; padding: 16px; flex-wrap: wrap; }
+  .legend-item { display: flex; align-items: center; gap: 6px; font-size: 0.8rem; color: #888; }
+  .legend-dot { width: 10px; height: 10px; border-radius: 50%; }
+
+  /* Interaction Matrix */
+  .matrix-container { overflow-x: auto; padding: 20px 0; }
+  .matrix { border-collapse: collapse; margin: 0 auto; font-size: 0.75rem; }
+  .matrix th, .matrix td { padding: 8px 6px; text-align: center; border: 1px solid #222; min-width: 70px; }
+  .matrix th { background: #1a1a2e; color: #00f5d4; font-size: 0.7rem; }
+  .matrix td.active { background: #7b2ff720; color: #b388ff; font-weight: 600; }
+  .matrix td.self { background: #333; color: #666; }
+
+  @media (max-width: 768px) {
+    .header h1 { font-size: 1.5rem; }
+    .agent-grid { grid-template-columns: 1fr; }
+    .flow-row { flex-direction: column; }
+    .flow-arrow { transform: rotate(90deg); }
+  }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>GHOST PROTOCOL</h1>
+  <p>Autonomous AI Corporation — Agenten-Architektur & Business Plan</p>
+</div>
+
+<div class="tabs">
+  <div class="tab active" onclick="showPanel('agents')">Agenten</div>
+  <div class="tab" onclick="showPanel('flow')">Datenfluss</div>
+  <div class="tab" onclick="showPanel('interactions')">Interaktionen</div>
+  <div class="tab" onclick="showPanel('revenue')">Revenue</div>
+  <div class="tab" onclick="showPanel('costs')">Kosten</div>
+  <div class="tab" onclick="showPanel('timeline')">Sprint Plan</div>
+</div>
+
+<!-- AGENTS PANEL -->
+<div class="panel active" id="panel-agents">
+  <div class="legend">
+    <div class="legend-item"><div class="legend-dot" style="background:#ff4444"></div> P0 — Kritisch</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#ff8800"></div> P1 — Wichtig</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#4488ff"></div> P2 — Optimierung</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#7b2ff7"></div> Sonnet 4</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#00f5d4"></div> Haiku</div>
+  </div>
+  <div class="agent-grid">
+    <div class="agent-card">
+      <div class="priority p0">P0</div>
+      <div class="icon">🔮</div>
+      <h3>THE ORACLE</h3>
+      <div class="role">Chief Analyst</div>
+      <div class="desc">Scannt alle 4h Krypto-News, On-Chain-Daten und Social Sentiment. Generiert Intelligence Briefings als Feed für alle anderen Agenten. Bewertet Opportunities mit Scoring-System.</div>
+      <div class="tools-list">
+        <span class="tool-tag">Serper API</span>
+        <span class="tool-tag">CoinGecko API</span>
+        <span class="tool-tag">LunarCrush</span>
+        <span class="tool-tag">On-Chain APIs</span>
+      </div>
+      <span class="llm-badge sonnet">Claude Sonnet 4</span>
+      <div class="schedule">⏰ Alle <span>4 Stunden</span></div>
+    </div>
+
+    <div class="agent-card">
+      <div class="priority p0">P0</div>
+      <div class="icon">📝</div>
+      <h3>THE PUBLISHER</h3>
+      <div class="role">Content Director</div>
+      <div class="desc">Erstellt 3-5 SEO-optimierte Blogartikel pro Woche auf Basis des Oracle-Feeds. Fokus auf DACH-Keywords. Deployed auf Astro/Cloudflare. Immer mit Disclaimer.</div>
+      <div class="tools-list">
+        <span class="tool-tag">Claude API</span>
+        <span class="tool-tag">Serper (Keywords)</span>
+        <span class="tool-tag">Astro CMS API</span>
+      </div>
+      <span class="llm-badge sonnet">Claude Sonnet 4</span>
+      <div class="schedule">⏰ Täglich <span>06:00 UTC</span></div>
+    </div>
+
+    <div class="agent-card">
+      <div class="priority p0">P0</div>
+      <div class="icon">🛡️</div>
+      <h3>THE GUARDIAN</h3>
+      <div class="role">CISO / Risk Manager</div>
+      <div class="desc">HÖCHSTE Priorität. Überwacht alle 15min den System-Health. Kann jeden Agenten stoppen. Compliance-Checks, Kill-Switches, Emergency Alerts via Telegram.</div>
+      <div class="tools-list">
+        <span class="tool-tag">Uptime Robot</span>
+        <span class="tool-tag">Supabase Logs</span>
+        <span class="tool-tag">Telegram Bot</span>
+      </div>
+      <span class="llm-badge haiku">Claude Haiku</span>
+      <div class="schedule">⏰ Alle <span>15 Minuten</span></div>
+    </div>
+
+    <div class="agent-card">
+      <div class="priority p1">P1</div>
+      <div class="icon">📡</div>
+      <h3>THE BROADCASTER</h3>
+      <div class="role">Newsletter Manager</div>
+      <div class="desc">Kuratiert 2 Newsletter/Woche (Di + Fr) über Beehiiv. Nutzt Oracle-Feed + Publisher-Content. A/B-Testing der Subject Lines. Double-Opt-In enforced.</div>
+      <div class="tools-list">
+        <span class="tool-tag">Beehiiv API</span>
+        <span class="tool-tag">Claude API</span>
+        <span class="tool-tag">Oracle Feed</span>
+      </div>
+      <span class="llm-badge sonnet">Claude Sonnet 4</span>
+      <div class="schedule">⏰ <span>Di + Fr 07:00 UTC</span></div>
+    </div>
+
+    <div class="agent-card">
+      <div class="priority p1">P1</div>
+      <div class="icon">📢</div>
+      <h3>THE AMPLIFIER</h3>
+      <div class="role">CMO / Growth Agent</div>
+      <div class="desc">Verteilt Content auf X, LinkedIn, Pinterest. 3-5 Posts/Tag, zeitversetzt. Wertvoller Content > Frequency. Engagement > Reichweite.</div>
+      <div class="tools-list">
+        <span class="tool-tag">X/Twitter API</span>
+        <span class="tool-tag">LinkedIn API</span>
+        <span class="tool-tag">Buffer/Zapier</span>
+      </div>
+      <span class="llm-badge haiku">Claude Haiku</span>
+      <div class="schedule">⏰ Alle <span>4 Stunden</span></div>
+    </div>
+
+    <div class="agent-card">
+      <div class="priority p1">P1</div>
+      <div class="icon">🏪</div>
+      <h3>THE MERCHANT</h3>
+      <div class="role">Digital Product Manager</div>
+      <div class="desc">Erstellt 2-3 neue Produkte/Monat (Trading Journals, Steuer-Guides, Prompt-Packs, Templates). Listing-Optimierung auf Gumroad. Qualität > Quantität.</div>
+      <div class="tools-list">
+        <span class="tool-tag">Gumroad API</span>
+        <span class="tool-tag">Canva</span>
+        <span class="tool-tag">Claude API</span>
+      </div>
+      <span class="llm-badge sonnet">Claude Sonnet 4</span>
+      <div class="schedule">⏰ Wöchentlich <span>Montag</span></div>
+    </div>
+
+    <div class="agent-card">
+      <div class="priority p1">P1</div>
+      <div class="icon">💰</div>
+      <h3>THE TREASURER</h3>
+      <div class="role">CFO</div>
+      <div class="desc">Trackt täglich alle Revenue-Streams: Gumroad, Exchange-P&L, Beehiiv-Stats, Affiliate-Dashboards. Aggregiert in Supabase. Daily Report via Telegram.</div>
+      <div class="tools-list">
+        <span class="tool-tag">Stripe API</span>
+        <span class="tool-tag">Exchange APIs</span>
+        <span class="tool-tag">Beehiiv API</span>
+        <span class="tool-tag">Supabase</span>
+      </div>
+      <span class="llm-badge haiku">Claude Haiku</span>
+      <div class="schedule">⏰ Täglich <span>22:00 UTC</span></div>
+    </div>
+
+    <div class="agent-card">
+      <div class="priority p2">P2</div>
+      <div class="icon">📈</div>
+      <h3>THE TRADER</h3>
+      <div class="role">Head of Trading</div>
+      <div class="desc">Analysiert Marktlage → generiert Signale → steuert Bot. KEIN LLM für Execution (deterministische Logik!). Hard Stop-Loss: 20% Drawdown = Auto-Shutdown.</div>
+      <div class="tools-list">
+        <span class="tool-tag">Binance API</span>
+        <span class="tool-tag">Bitget API</span>
+        <span class="tool-tag">TradingView</span>
+        <span class="tool-tag">3Commas</span>
+      </div>
+      <span class="llm-badge sonnet">Claude Sonnet 4 (nur Analyse)</span>
+      <div class="schedule">⏰ <span>Continuous + 4h Candles</span></div>
+    </div>
+
+    <div class="agent-card">
+      <div class="priority p2">P2</div>
+      <div class="icon">🧠</div>
+      <h3>THE STRATEGIST</h3>
+      <div class="role">CEO</div>
+      <div class="desc">Wöchentliches Strategy Memo basierend auf Treasurer-Reports + Oracle-Intelligence. Adjustiert Agenten-Prioritäten. Entscheidet NUR auf Daten, nie auf "Gefühl". Christian hat Veto-Recht.</div>
+      <div class="tools-list">
+        <span class="tool-tag">Supabase</span>
+        <span class="tool-tag">Claude API (Reasoning)</span>
+      </div>
+      <span class="llm-badge sonnet">Claude Sonnet 4</span>
+      <div class="schedule">⏰ <span>Sonntag 20:00 UTC</span></div>
+    </div>
+  </div>
+</div>
+
+<!-- FLOW PANEL -->
+<div class="panel" id="panel-flow">
+  <div class="flow-container">
+    <div class="flow-section">
+      <h3>📡 Intelligence Layer</h3>
+      <div class="flow-row">
+        <div class="flow-node" style="border-color:#ff4444">
+          <div class="fn-icon">🌐</div>
+          <div class="fn-name">External Data</div>
+          <div class="fn-detail">News, Preise, On-Chain, Sentiment</div>
+        </div>
+        <div class="flow-arrow">→</div>
+        <div class="flow-node" style="border-color:#7b2ff7">
+          <div class="fn-icon">🔮</div>
+          <div class="fn-name">ORACLE</div>
+          <div class="fn-detail">Alle 4h Scan + Scoring</div>
+        </div>
+        <div class="flow-arrow">→</div>
+        <div class="flow-node" style="border-color:#00f5d4">
+          <div class="fn-icon">🗄️</div>
+          <div class="fn-name">Supabase</div>
+          <div class="fn-detail">Intelligence Feed</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="flow-arrow-down">⬇</div>
+
+    <div class="flow-section">
+      <h3>📝 Content Layer</h3>
+      <div class="flow-group">
+        <div class="flow-node">
+          <div class="fn-icon">📝</div>
+          <div class="fn-name">PUBLISHER</div>
+          <div class="fn-detail">3-5 Artikel/Woche</div>
+        </div>
+        <div class="flow-node">
+          <div class="fn-icon">📡</div>
+          <div class="fn-name">BROADCASTER</div>
+          <div class="fn-detail">2 Newsletter/Woche</div>
+        </div>
+        <div class="flow-node">
+          <div class="fn-icon">📢</div>
+          <div class="fn-name">AMPLIFIER</div>
+          <div class="fn-detail">3-5 Posts/Tag</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="flow-arrow-down">⬇</div>
+
+    <div class="flow-section">
+      <h3>💰 Revenue Layer</h3>
+      <div class="flow-group">
+        <div class="flow-node" style="border-color:#00ff88">
+          <div class="fn-icon">🏪</div>
+          <div class="fn-name">MERCHANT</div>
+          <div class="fn-detail">Gumroad Products</div>
+        </div>
+        <div class="flow-node" style="border-color:#00ff88">
+          <div class="fn-icon">🔗</div>
+          <div class="fn-name">Affiliate Links</div>
+          <div class="fn-detail">In Content integriert</div>
+        </div>
+        <div class="flow-node" style="border-color:#00ff88">
+          <div class="fn-icon">📈</div>
+          <div class="fn-name">TRADER</div>
+          <div class="fn-detail">Bot auf CEXs</div>
+        </div>
+        <div class="flow-node" style="border-color:#00ff88">
+          <div class="fn-icon">💎</div>
+          <div class="fn-name">Premium Signals</div>
+          <div class="fn-detail">Telegram Community</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="flow-arrow-down">⬇</div>
+
+    <div class="flow-section">
+      <h3>🛡️ Operations Layer</h3>
+      <div class="flow-group">
+        <div class="flow-node" style="border-color:#ff4444">
+          <div class="fn-icon">🛡️</div>
+          <div class="fn-name">GUARDIAN</div>
+          <div class="fn-detail">15min Health Checks</div>
+        </div>
+        <div class="flow-node" style="border-color:#ff8800">
+          <div class="fn-icon">💰</div>
+          <div class="fn-name">TREASURER</div>
+          <div class="fn-detail">Daily P&L Close</div>
+        </div>
+        <div class="flow-node" style="border-color:#7b2ff7">
+          <div class="fn-icon">🧠</div>
+          <div class="fn-name">STRATEGIST</div>
+          <div class="fn-detail">Weekly Strategy Memo</div>
+        </div>
+        <div class="flow-node" style="border-color:#ffcc00">
+          <div class="fn-icon">👤</div>
+          <div class="fn-name">CHRISTIAN</div>
+          <div class="fn-detail">2-5h/Woche Oversight</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- INTERACTIONS PANEL -->
+<div class="panel" id="panel-interactions">
+  <h3 style="text-align:center;color:#00f5d4;margin:20px 0;font-size:0.9rem;text-transform:uppercase;letter-spacing:1px">Agenten-Interaktionsmatrix — Wer liefert an wen?</h3>
+  <div class="matrix-container">
+    <table class="matrix">
+      <tr>
+        <th>Von ↓ / An →</th><th>🔮 Oracle</th><th>📝 Publisher</th><th>📡 Broadcaster</th><th>📢 Amplifier</th><th>🏪 Merchant</th><th>📈 Trader</th><th>🛡️ Guardian</th><th>💰 Treasurer</th><th>🧠 Strategist</th>
+      </tr>
+      <tr>
+        <th>🔮 Oracle</th>
+        <td class="self">—</td>
+        <td class="active">Feed →</td>
+        <td class="active">Feed →</td>
+        <td class="active">Topics →</td>
+        <td class="active">Trends →</td>
+        <td class="active">Signals →</td>
+        <td></td>
+        <td></td>
+        <td class="active">Intel →</td>
+      </tr>
+      <tr>
+        <th>📝 Publisher</th>
+        <td></td>
+        <td class="self">—</td>
+        <td class="active">Articles →</td>
+        <td class="active">Content →</td>
+        <td></td>
+        <td></td>
+        <td></td>
+        <td></td>
+        <td></td>
+      </tr>
+      <tr>
+        <th>📡 Broadcaster</th>
+        <td></td>
+        <td></td>
+        <td class="self">—</td>
+        <td class="active">Teasers →</td>
+        <td></td>
+        <td></td>
+        <td></td>
+        <td class="active">Stats →</td>
+        <td></td>
+      </tr>
+      <tr>
+        <th>📢 Amplifier</th>
+        <td></td>
+        <td></td>
+        <td></td>
+        <td class="self">—</td>
+        <td></td>
+        <td></td>
+        <td></td>
+        <td class="active">Traffic →</td>
+        <td></td>
+      </tr>
+      <tr>
+        <th>🏪 Merchant</th>
+        <td></td>
+        <td class="active">Products →</td>
+        <td class="active">Promos →</td>
+        <td class="active">Links →</td>
+        <td class="self">—</td>
+        <td></td>
+        <td></td>
+        <td class="active">Sales →</td>
+        <td></td>
+      </tr>
+      <tr>
+        <th>📈 Trader</th>
+        <td></td>
+        <td class="active">Insights →</td>
+        <td></td>
+        <td></td>
+        <td></td>
+        <td class="self">—</td>
+        <td class="active">Risk →</td>
+        <td class="active">P&L →</td>
+        <td class="active">Perf →</td>
+      </tr>
+      <tr>
+        <th>🛡️ Guardian</th>
+        <td class="active">⚠️ Stop</td>
+        <td class="active">⚠️ Stop</td>
+        <td class="active">⚠️ Stop</td>
+        <td class="active">⚠️ Stop</td>
+        <td class="active">⚠️ Stop</td>
+        <td class="active">⚠️ Kill</td>
+        <td class="self">—</td>
+        <td></td>
+        <td class="active">Alerts →</td>
+      </tr>
+      <tr>
+        <th>💰 Treasurer</th>
+        <td></td>
+        <td></td>
+        <td></td>
+        <td></td>
+        <td></td>
+        <td></td>
+        <td></td>
+        <td class="self">—</td>
+        <td class="active">Reports →</td>
+      </tr>
+      <tr>
+        <th>🧠 Strategist</th>
+        <td class="active">← Prio</td>
+        <td class="active">← Prio</td>
+        <td class="active">← Prio</td>
+        <td class="active">← Prio</td>
+        <td class="active">← Prio</td>
+        <td class="active">← Budget</td>
+        <td></td>
+        <td class="active">← Budget</td>
+        <td class="self">—</td>
+      </tr>
+    </table>
+  </div>
+  <p style="text-align:center;color:#666;font-size:0.8rem;margin-top:16px">Guardian kann JEDEN Agenten stoppen (höchste Autorität) · Strategist adjustiert Prioritäten wöchentlich · Oracle füttert das gesamte System</p>
+</div>
+
+<!-- REVENUE PANEL -->
+<div class="panel" id="panel-revenue">
+  <div class="revenue-grid">
+    <div class="revenue-card">
+      <h4>🏪 Digital Products</h4>
+      <div class="amount">€100 – 500/Mo</div>
+      <div class="auto">98% automatisiert · Gumroad</div>
+      <div class="legal legal-ok">✅ Legal in DE</div>
+    </div>
+    <div class="revenue-card">
+      <h4>🔗 Affiliate Marketing</h4>
+      <div class="amount">€300 – 3.000/Mo</div>
+      <div class="auto">95% automatisiert · MEXC, Binance, Bybit</div>
+      <div class="legal legal-ok">✅ Legal (mit Disclaimer)</div>
+    </div>
+    <div class="revenue-card">
+      <h4>📡 AI Newsletter</h4>
+      <div class="amount">€200 – 2.000/Mo</div>
+      <div class="auto">90% automatisiert · Beehiiv</div>
+      <div class="legal legal-ok">✅ Legal (DSGVO beachten)</div>
+    </div>
+    <div class="revenue-card">
+      <h4>📝 SEO Blog</h4>
+      <div class="amount">€100 – 2.000/Mo</div>
+      <div class="auto">90% automatisiert · Astro/Cloudflare</div>
+      <div class="legal legal-ok">✅ Legal</div>
+    </div>
+    <div class="revenue-card">
+      <h4>📈 Trading Bot</h4>
+      <div class="amount">€50 – 500/Mo</div>
+      <div class="auto">85% automatisiert · Binance/Bitget API</div>
+      <div class="legal legal-ok">✅ Legal (eigenes Konto)</div>
+    </div>
+    <div class="revenue-card" style="opacity:0.4">
+      <h4>🎰 <s>Prediction Markets</s></h4>
+      <div class="amount" style="background:none;-webkit-text-fill-color:#ff4444">GESTRICHEN</div>
+      <div class="auto">— · Polymarket/Kalshi</div>
+      <div class="legal legal-no">❌ ILLEGAL in DE (GlüStV, §284/285 StGB)</div>
+    </div>
+    <div class="revenue-card">
+      <h4>💎 Premium Signals</h4>
+      <div class="amount">€200 – 2.000/Mo</div>
+      <div class="auto">70% automatisiert · Telegram</div>
+      <div class="legal legal-ok">✅ Legal (mit Disclaimer)</div>
+    </div>
+  </div>
+
+  <h3 style="text-align:center;color:#00f5d4;margin:30px 0 16px;font-size:0.9rem;text-transform:uppercase;letter-spacing:1px">Revenue-Projektion Monat 1–6 (konservativ)</h3>
+  <div class="bar-chart" id="revenue-bars"></div>
+</div>
+
+<!-- COSTS PANEL -->
+<div class="panel" id="panel-costs">
+  <h3 style="text-align:center;color:#00f5d4;margin:20px 0;font-size:0.9rem;text-transform:uppercase;letter-spacing:1px">Startup-Kosten (Monat 1)</h3>
+  <table class="cost-table">
+    <tr><th>Position</th><th style="text-align:right">Kosten</th></tr>
+    <tr><td>Gewerbeanmeldung Magdeburg</td><td style="text-align:right">€30</td></tr>
+    <tr><td>Domain (.de + .com)</td><td style="text-align:right">€20/Jahr</td></tr>
+    <tr><td>Hetzner VPS CX22</td><td style="text-align:right">€6/Mo</td></tr>
+    <tr><td>Claude API (Sonnet + Haiku)</td><td style="text-align:right">€40</td></tr>
+    <tr><td>Trading-Startkapital (Risk Capital)</td><td style="text-align:right">€200</td></tr>
+    <tr><td>Serper API (1.000 Searches)</td><td style="text-align:right">€5/Mo</td></tr>
+    <tr class="total"><td>TOTAL Monat 1</td><td style="text-align:right;color:#00f5d4">~€310</td></tr>
+  </table>
+
+  <h3 style="text-align:center;color:#00f5d4;margin:30px 0 16px;font-size:0.9rem;text-transform:uppercase;letter-spacing:1px">Laufende Kosten ab Monat 2</h3>
+  <table class="cost-table">
+    <tr><th>Position</th><th style="text-align:right">Kosten/Mo</th></tr>
+    <tr><td>Hetzner VPS CX22</td><td style="text-align:right">€6</td></tr>
+    <tr><td>Claude API (Multi-Model)</td><td style="text-align:right">€40–50</td></tr>
+    <tr><td>Serper API</td><td style="text-align:right">€5</td></tr>
+    <tr><td>Domain (anteilig)</td><td style="text-align:right">€2</td></tr>
+    <tr><td style="color:#00ff88">Beehiiv (Free Tier)</td><td style="text-align:right;color:#00ff88">€0</td></tr>
+    <tr><td style="color:#00ff88">Gumroad (10% Commission)</td><td style="text-align:right;color:#00ff88">€0</td></tr>
+    <tr><td style="color:#00ff88">Supabase (Free Tier)</td><td style="text-align:right;color:#00ff88">€0</td></tr>
+    <tr><td style="color:#00ff88">Cloudflare Pages</td><td style="text-align:right;color:#00ff88">€0</td></tr>
+    <tr class="total"><td>TOTAL laufend</td><td style="text-align:right;color:#00f5d4">~€55–65/Mo</td></tr>
+  </table>
+
+  <div style="text-align:center;margin:30px 0;padding:20px;background:#111118;border:1px solid #222;border-radius:12px;max-width:400px;margin-left:auto;margin-right:auto">
+    <div style="color:#888;font-size:0.85rem">Break-Even bei</div>
+    <div style="font-size:2rem;font-weight:700;color:#00f5d4;margin:8px 0">~€65/Mo</div>
+    <div style="color:#888;font-size:0.8rem">= 3 Digital Products à €19 + 2 Affiliate-Conversions</div>
+    <div style="color:#ff8800;font-size:0.85rem;margin-top:8px">Realistisch in Monat 1–2</div>
+  </div>
+</div>
+
+<!-- TIMELINE PANEL -->
+<div class="panel" id="panel-timeline">
+  <div class="timeline">
+    <div class="tl-item" style="border-color:#ff4444">
+      <h4>Sprint 0: Foundation</h4>
+      <div class="tl-time">Tag 1–3 · ← DU BIST HIER</div>
+      <div class="tl-tasks">
+        ✅ GitHub Repo erstellt (37 Dateien)<br>
+        ⬜ Gewerbeanmeldung Magdeburg<br>
+        ⬜ Domain registrieren<br>
+        ⬜ Hetzner VPS CX22 bestellen<br>
+        ⬜ Anthropic API Key<br>
+        ⬜ Supabase Projekt<br>
+        ⬜ CrewAI Setup auf VPS
+      </div>
+    </div>
+    <div class="tl-item">
+      <h4>Sprint 1: Skeleton Crew</h4>
+      <div class="tl-time">Tag 4–10</div>
+      <div class="tl-tasks">
+        Oracle-Agent (News + Trends) · Publisher-Agent (Content-Pipeline) · Guardian-Agent (Monitoring + Alerts) · Telegram-Bot · Erster Blog-Post live
+      </div>
+    </div>
+    <div class="tl-item">
+      <h4>Sprint 2: Revenue Online</h4>
+      <div class="tl-time">Tag 11–20</div>
+      <div class="tl-tasks">
+        5 Digital Products auf Gumroad · Affiliate-Accounts (Binance, MEXC, Bitget, Bybit) · Beehiiv Newsletter + Welcome Sequence · Amplifier-Agent · Lead-Magnet PDF
+      </div>
+    </div>
+    <div class="tl-item">
+      <h4>Sprint 3: Trading Integration</h4>
+      <div class="tl-time">Tag 21–30</div>
+      <div class="tl-tasks">
+        Trader-Agent (Marktanalyse → Signale) · Exchange API-Anbindung · Trading-Bot Setup · Stop-Loss-Mechanismen · Treasurer + Strategist Agent
+      </div>
+    </div>
+    <div class="tl-item">
+      <h4>Sprint 4: Optimization</h4>
+      <div class="tl-time">Tag 31–45</div>
+      <div class="tl-tasks">
+        SEO-Performance-Analyse · A/B-Testing Newsletter · Trading-Bot Backtesting · Content-Kalender 3 Monate · Performance-Dashboard
+      </div>
+    </div>
+    <div class="tl-item" style="border-color:#00f5d4">
+      <h4>Sprint 5: Scale</h4>
+      <div class="tl-time">Tag 46–90</div>
+      <div class="tl-tasks">
+        Content auf 5/Woche · YouTube-Pipeline (optional) · Signal-Community Telegram · Zweite Nische evaluieren · UG-Gründung bei >€2.000/Mo
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+function showPanel(name) {
+  document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.getElementById('panel-' + name).classList.add('active');
+  event.target.classList.add('active');
+
+  if (name === 'revenue') renderBars();
+}
+
+function renderBars() {
+  const data = [
+    { label: 'Monat 1', value: 70, color: '#ff4444' },
+    { label: 'Monat 2', value: 190, color: '#ff6644' },
+    { label: 'Monat 3', value: 410, color: '#ff8800' },
+    { label: 'Monat 4', value: 780, color: '#ffaa00' },
+    { label: 'Monat 5', value: 1250, color: '#00cc88' },
+    { label: 'Monat 6', value: 1970, color: '#00f5d4' },
+  ];
+  const max = 2000;
+  const container = document.getElementById('revenue-bars');
+  if (container.children.length > 0) return;
+
+  data.forEach((d, i) => {
+    const row = document.createElement('div');
+    row.className = 'bar-row';
+    const pct = Math.min((d.value / max) * 100, 100);
+    row.innerHTML = `
+      <div class="bar-label">${d.label}</div>
+      <div class="bar-track">
+        <div class="bar-fill" style="width:0%;background:${d.color}">${d.value > 200 ? '€' + d.value.toLocaleString('de') : ''}</div>
+        <div class="bar-value">€${d.value.toLocaleString('de')}</div>
+      </div>
+    `;
+    container.appendChild(row);
+
+    setTimeout(() => {
+      row.querySelector('.bar-fill').style.width = pct + '%';
+    }, 100 + i * 150);
+  });
+}
+</script>
+
+</body>
+</html>
