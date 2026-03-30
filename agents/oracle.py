@@ -1,9 +1,9 @@
-"""Ghost Protocol â Oracle Agent (THE ORACLE).
+"""Ghost Protocol — Oracle Agent (THE ORACLE).
 
-Scannt Krypto-MÃ¤rkte, News, On-Chain-Daten und Social Sentiment.
-Liefert tÃ¤gliches Intelligence Briefing als Feed fÃ¼r alle anderen Agenten.
+Scannt Krypto-Märkte, News, On-Chain-Daten und Social Sentiment.
+Liefert tägliches Intelligence Briefing als Feed für alle anderen Agenten.
 
-Wird tÃ¤glich via GitHub Actions oder Cron getriggert.
+Wird täglich via GitHub Actions oder Cron getriggert.
 Output: outputs/briefing_{YYYY-MM-DD}.md
 """
 
@@ -42,7 +42,7 @@ def search_crypto_news(query: str) -> str:
         ], ensure_ascii=False, indent=2)
     except httpx.TimeoutException:
         logger.error("Timeout bei Crypto News Search: %s", query)
-        return "Error: Request timeout â Serper API nicht erreichbar."
+        return "Error: Request timeout — Serper API nicht erreichbar."
     except httpx.HTTPStatusError as e:
         logger.error("HTTP-Fehler bei News Search: %s", e)
         return f"Error: HTTP {e.response.status_code}"
@@ -107,20 +107,20 @@ def search_dach_news(query: str) -> str:
 oracle: Agent = Agent(
     role="Chief Market Intelligence Analyst",
     goal=(
-        "Erstelle ein tÃ¤gliches Intelligence Briefing das die wichtigsten "
+        "Erstelle ein tägliches Intelligence Briefing das die wichtigsten "
         "Marktbewegungen, regulatorischen Entwicklungen und Opportunities "
-        "im Kryptomarkt zusammenfasst â mit Fokus auf den DACH-Raum. "
+        "im Kryptomarkt zusammenfasst — mit Fokus auf den DACH-Raum. "
         "Das Briefing muss in 3 Minuten lesbar sein und konkrete "
         "Handlungsimpulse liefern."
     ),
     backstory=(
         "Du bist ein erfahrener Krypto-Analyst mit 8 Jahren Markterfahrung. "
         "Du kombinierst On-Chain-Daten, Fundamentalanalyse, Makroanalyse und "
-        "Sentiment-Analyse zu einem ganzheitlichen Bild. Du bist bekannt fÃ¼r "
-        "prÃ¤zise, nÃ¼chterne Analysen ohne Hype. Dein Markenzeichen: Du "
+        "Sentiment-Analyse zu einem ganzheitlichen Bild. Du bist bekannt für "
+        "präzise, nüchterne Analysen ohne Hype. Dein Markenzeichen: Du "
         "identifizierst Risiken bevor sie eintreten und Chancen bevor der "
-        "Mainstream sie erkennt. Du schreibst auf Deutsch, prÃ¤gnant und "
-        "datengestÃ¼tzt."
+        "Mainstream sie erkennt. Du schreibst auf Deutsch, prägnant und "
+        "datengestützt."
     ),
     tools=[search_crypto_news, get_market_data, search_dach_news],
     verbose=True,
@@ -131,30 +131,30 @@ oracle: Agent = Agent(
 
 
 def create_daily_briefing_task() -> Task:
-    """Erstellt den tÃ¤glichen Intelligence Briefing Task."""
+    """Erstellt den täglichen Intelligence Briefing Task."""
     today: str = datetime.now().strftime("%d.%m.%Y")
     return Task(
         description=f"""
-        Erstelle das Daily Intelligence Briefing fÃ¼r {today}.
+        Erstelle das Daily Intelligence Briefing für {today}.
 
-        1. MARKTDATEN: Hole aktuelle Preise fÃ¼r bitcoin, ethereum, solana, bnb
+        1. MARKTDATEN: Hole aktuelle Preise für bitcoin, ethereum, solana, bnb
         2. TOP NEWS GLOBAL: Suche "crypto market news today"
         3. DACH NEWS: Suche "Krypto Nachrichten Deutschland" und "Bitcoin Regulierung EU"
         4. REGULATORIK: Suche "crypto regulation EU MiCA 2026"
 
         Erstelle ein Briefing mit:
-        - ð MarktÃ¼berblick (3-4 SÃ¤tze, mit exakten Zahlen)
-        - ð¥ Top 3 Nachrichten (je 2-3 SÃ¤tze, Relevanz-Bewertung)
-        - ð©ðª DACH-Relevanz (Was bedeutet das fÃ¼r deutsche Investoren?)
-        - â ï¸ Risiken / Red Flags (falls vorhanden)
-        - ð¡ Opportunity der Woche (1 konkreter, recherchierter Insight)
+        - 📊 Marktüberblick (3-4 Sätze, mit exakten Zahlen)
+        - 🔥 Top 3 Nachrichten (je 2-3 Sätze, Relevanz-Bewertung)
+        - 🇩🇪 DACH-Relevanz (Was bedeutet das für deutsche Investoren?)
+        - ⚠️ Risiken / Red Flags (falls vorhanden)
+        - 💡 Opportunity der Woche (1 konkreter, recherchierter Insight)
 
         Schreibe auf Deutsch. Faktenbasiert. Keine Spekulation als Fakt framen.
         Am Ende: {DISCLAIMER_DE}
         """,
         expected_output=(
-            "Ein vollstÃ¤ndiges Daily Intelligence Briefing auf Deutsch, "
-            "~400-600 WÃ¶rter, strukturiert mit Emoji-Headern."
+            "Ein vollständiges Daily Intelligence Briefing auf Deutsch, "
+            "~400-600 Wörter, strukturiert mit Emoji-Headern."
         ),
         agent=oracle,
     )
