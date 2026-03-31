@@ -69,12 +69,16 @@ const PLATFORM_ICONS: Record<string, string> = {
   youtube: "▶",
   twitter: "𝕏",
   newsletter: "✉",
+  tiktok: "♪",
+  instagram: "◎",
 };
 
 const PLATFORM_COLORS: Record<string, string> = {
   youtube: "#ff0000",
   twitter: "#1da1f2",
   newsletter: "#8b5cf6",
+  tiktok: "#00f2ea",
+  instagram: "#e1306c",
 };
 
 const WEEKDAYS = ["monday", "tuesday", "wednesday", "thursday", "friday"] as const;
@@ -288,28 +292,32 @@ export default function ContentPage() {
                 <label className="text-[10px] text-text-muted uppercase tracking-widest block mb-1">
                   Plattform
                 </label>
-                <div className="grid grid-cols-3 gap-2">
-                  {(["youtube", "twitter", "newsletter"] as const).map((p) => (
-                    <button
-                      key={p}
-                      onClick={() => {
-                        setCustomPlatform(p);
-                        setCustomFormat(p === "twitter" ? "thread" : p === "newsletter" ? "newsletter_issue" : "longform");
-                      }}
-                      className={`px-2 py-2 rounded-lg text-[11px] font-medium transition-all ${
-                        customPlatform === p
-                          ? "text-foreground"
-                          : "bg-surface-elevated text-text-muted hover:text-foreground"
-                      }`}
-                      style={customPlatform === p ? {
-                        background: `${PLATFORM_COLORS[p]}20`,
-                        border: `1px solid ${PLATFORM_COLORS[p]}40`,
-                        color: PLATFORM_COLORS[p],
-                      } : {}}
-                    >
-                      {PLATFORM_ICONS[p]} {p === "youtube" ? "YT" : p === "twitter" ? "X" : "Mail"}
-                    </button>
-                  ))}
+                <div className="grid grid-cols-5 gap-1.5">
+                  {(["youtube", "twitter", "tiktok", "instagram", "newsletter"] as const).map((p) => {
+                    const labels: Record<string, string> = { youtube: "YT", twitter: "X", tiktok: "TT", instagram: "IG", newsletter: "Mail" };
+                    const defaultFormats: Record<string, string> = { youtube: "longform", twitter: "thread", tiktok: "tiktok_short", instagram: "carousel", newsletter: "newsletter_issue" };
+                    return (
+                      <button
+                        key={p}
+                        onClick={() => {
+                          setCustomPlatform(p);
+                          setCustomFormat(defaultFormats[p]);
+                        }}
+                        className={`px-1.5 py-2 rounded-lg text-[10px] font-medium transition-all ${
+                          customPlatform === p
+                            ? "text-foreground"
+                            : "bg-surface-elevated text-text-muted hover:text-foreground"
+                        }`}
+                        style={customPlatform === p ? {
+                          background: `${PLATFORM_COLORS[p]}20`,
+                          border: `1px solid ${PLATFORM_COLORS[p]}40`,
+                          color: PLATFORM_COLORS[p],
+                        } : {}}
+                      >
+                        {PLATFORM_ICONS[p]} {labels[p]}
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
               <div>
@@ -330,6 +338,16 @@ export default function ContentPage() {
                   )}
                   {customPlatform === "twitter" && (
                     <option value="thread">Thread (5-8 Posts)</option>
+                  )}
+                  {customPlatform === "tiktok" && (
+                    <option value="tiktok_short">TikTok Short (30-60 Sek)</option>
+                  )}
+                  {customPlatform === "instagram" && (
+                    <>
+                      <option value="carousel">Carousel (5-10 Slides)</option>
+                      <option value="reel">Reel (30-90 Sek)</option>
+                      <option value="story">Story-Serie (3-5 Stories)</option>
+                    </>
                   )}
                   {customPlatform === "newsletter" && (
                     <option value="newsletter_issue">Newsletter-Ausgabe</option>
@@ -400,18 +418,30 @@ export default function ContentPage() {
           )}
 
           {/* Cost Overview */}
-          <div className="grid grid-cols-3 gap-3">
-            <div className="card-ghost p-3 text-center">
-              <div className="text-xl font-bold text-accent-violet font-[family-name:var(--font-outfit)]">~$0.04</div>
-              <div className="text-[9px] text-text-muted uppercase tracking-wider mt-1">Pro YouTube-Video</div>
+          <div className="grid grid-cols-3 lg:grid-cols-6 gap-2">
+            <div className="card-ghost p-2.5 text-center">
+              <div className="text-lg font-bold font-[family-name:var(--font-outfit)]" style={{ color: "#ff0000" }}>~$0.06</div>
+              <div className="text-[8px] text-text-muted uppercase tracking-wider mt-0.5">YouTube</div>
             </div>
-            <div className="card-ghost p-3 text-center">
-              <div className="text-xl font-bold text-accent-cyan font-[family-name:var(--font-outfit)]">~$0.02</div>
-              <div className="text-[9px] text-text-muted uppercase tracking-wider mt-1">Pro Twitter-Thread</div>
+            <div className="card-ghost p-2.5 text-center">
+              <div className="text-lg font-bold font-[family-name:var(--font-outfit)]" style={{ color: "#1da1f2" }}>~$0.03</div>
+              <div className="text-[8px] text-text-muted uppercase tracking-wider mt-0.5">X/Thread</div>
             </div>
-            <div className="card-ghost p-3 text-center">
-              <div className="text-xl font-bold text-accent-emerald font-[family-name:var(--font-outfit)]">~$3.20</div>
-              <div className="text-[9px] text-text-muted uppercase tracking-wider mt-1">Pro Woche</div>
+            <div className="card-ghost p-2.5 text-center">
+              <div className="text-lg font-bold font-[family-name:var(--font-outfit)]" style={{ color: "#00f2ea" }}>~$0.03</div>
+              <div className="text-[8px] text-text-muted uppercase tracking-wider mt-0.5">TikTok</div>
+            </div>
+            <div className="card-ghost p-2.5 text-center">
+              <div className="text-lg font-bold font-[family-name:var(--font-outfit)]" style={{ color: "#e1306c" }}>~$0.04</div>
+              <div className="text-[8px] text-text-muted uppercase tracking-wider mt-0.5">Instagram</div>
+            </div>
+            <div className="card-ghost p-2.5 text-center">
+              <div className="text-lg font-bold font-[family-name:var(--font-outfit)]" style={{ color: "#8b5cf6" }}>~$0.04</div>
+              <div className="text-[8px] text-text-muted uppercase tracking-wider mt-0.5">Newsletter</div>
+            </div>
+            <div className="card-ghost p-2.5 text-center">
+              <div className="text-lg font-bold text-accent-emerald font-[family-name:var(--font-outfit)]">~$4.60</div>
+              <div className="text-[8px] text-text-muted uppercase tracking-wider mt-0.5">Pro Woche</div>
             </div>
           </div>
         </div>
@@ -493,26 +523,30 @@ export default function ContentPage() {
           )}
 
           {/* Weekly Stats */}
-          <div className="grid grid-cols-4 gap-4">
-            <KPICard label="Content/Woche" value={5} color="#8b5cf6" icon="▣" />
-            <KPICard label="YouTube" value={2} subtitle="1 Longform + 1 Short" color="#ff0000" />
-            <KPICard label="X/Twitter" value={2} subtitle="Threads" color="#1da1f2" />
-            <KPICard label="Newsletter" value={1} subtitle="Dienstags" color="#8b5cf6" />
+          <div className="grid grid-cols-3 lg:grid-cols-6 gap-3">
+            <KPICard label="Pieces/Woche" value={"~23"} color="#8b5cf6" icon="▣" />
+            <KPICard label="YouTube" value={2} subtitle="Anchor Content" color="#ff0000" />
+            <KPICard label="X/Twitter" value={4} subtitle="Threads" color="#1da1f2" />
+            <KPICard label="TikTok" value={10} subtitle="Shorts" color="#00f2ea" />
+            <KPICard label="Instagram" value={6} subtitle="Carousels + Reels" color="#e1306c" />
+            <KPICard label="Newsletter" value={1} subtitle="Wöchentlich" color="#8b5cf6" />
           </div>
 
           {/* Monthly Overview */}
           <div className="card-ghost p-5">
             <h2 className="text-[10px] text-text-muted uppercase tracking-widest mb-3">
-              4-Wochen-Ziele
+              4-Wochen-Ziele — 1→6 Repurposing-Strategie
             </h2>
             <div className="grid grid-cols-2 gap-4 text-sm">
               <div>
-                <h3 className="text-accent-violet font-semibold text-xs mb-2">Output</h3>
+                <h3 className="text-accent-violet font-semibold text-xs mb-2">Wöchentlicher Output</h3>
                 <ul className="space-y-1 text-text-secondary text-xs">
-                  <li>20 Content-Pieces total</li>
-                  <li>4 YouTube Longform + 2 Shorts + 2 Deep Dives</li>
-                  <li>8 X/Twitter Threads</li>
-                  <li>4 Newsletter-Ausgaben</li>
+                  <li>2 YouTube Videos (Anchor) → Repurposing auf alle Plattformen</li>
+                  <li>4 X/Twitter Threads (2 original + 2 repurposed)</li>
+                  <li>~10 TikTok Shorts (Clips + Original)</li>
+                  <li>4 Instagram Carousels + 2 Reels</li>
+                  <li>1 Newsletter-Ausgabe</li>
+                  <li className="text-accent-violet font-medium">= ~23 Pieces/Woche, ~92/Monat</li>
                 </ul>
               </div>
               <div>
@@ -520,8 +554,10 @@ export default function ContentPage() {
                 <ul className="space-y-1 text-text-secondary text-xs">
                   <li>YouTube: 500+ Subscriber, 5.000+ Views</li>
                   <li>X/Twitter: 1.000+ Follower, 50k+ Impressions</li>
+                  <li>TikTok: 2.000+ Follower, 100k+ Views</li>
+                  <li>Instagram: 800+ Follower, 30k+ Reach</li>
                   <li>Newsletter: 200+ Subscriber</li>
-                  <li>Kosten: &lt;$15 API-Kosten total</li>
+                  <li>Kosten: &lt;$20 API-Kosten total</li>
                 </ul>
               </div>
             </div>

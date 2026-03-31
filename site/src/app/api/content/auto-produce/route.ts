@@ -24,13 +24,13 @@ function getCurrentWeek(launchDate: string): number {
 // Kategorie aus Topic erraten
 function guessCategory(topic: string): string {
   const lower = topic.toLowerCase();
-  if (lower.includes("krypto") || lower.includes("trading") || lower.includes("bitcoin") || lower.includes("elliott")) {
+  if (lower.includes("krypto") || lower.includes("trading") || lower.includes("bitcoin") || lower.includes("elliott") || lower.includes("fear") || lower.includes("greed")) {
     return "krypto_trading";
   }
-  if (lower.includes("business") || lower.includes("automat") || lower.includes("workflow")) {
+  if (lower.includes("business") || lower.includes("automat") || lower.includes("workflow") || lower.includes("stack") || lower.includes("tool")) {
     return "business_automation";
   }
-  if (lower.includes("ghost") || lower.includes("behind")) {
+  if (lower.includes("ghost") || lower.includes("behind") || lower.includes("gelernt")) {
     return "ghost_protocol";
   }
   return "ki_automation";
