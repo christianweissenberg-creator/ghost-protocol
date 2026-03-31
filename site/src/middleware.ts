@@ -49,6 +49,11 @@ export function middleware(request: NextRequest) {
     return NextResponse.next();
   }
 
+  // API routes — return 401 instead of login page
+  if (pathname.startsWith("/api/")) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
   // Not authenticated — show login page
   const loginUrl = request.nextUrl.clone();
   loginUrl.pathname = "/login";
