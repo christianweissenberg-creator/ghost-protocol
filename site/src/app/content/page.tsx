@@ -189,14 +189,14 @@ export default function ContentPage() {
   );
 
   return (
-    <div className="p-8 max-w-[1200px]">
+    <div className="p-6 lg:p-8 max-w-[1100px]">
       {/* Header */}
       <div className="mb-6">
-        <h1 className="text-3xl font-bold tracking-tight font-[family-name:var(--font-outfit)]">
+        <h1 className="text-2xl lg:text-3xl font-bold tracking-tight font-[family-name:var(--font-outfit)]">
           Content Pipeline
         </h1>
-        <p className="text-text-muted text-sm mt-1">
-          Content-First Strategie — RESEARCHER → SCRIBE → PUBLISHER → AMPLIFIER
+        <p className="text-text-muted text-xs mt-1">
+          RESEARCHER → SCRIBE → PUBLISHER → AMPLIFIER
         </p>
       </div>
 
@@ -225,31 +225,29 @@ export default function ContentPage() {
             <h2 className="text-[10px] text-text-muted uppercase tracking-widest mb-4">
               Agent-Pipeline Flow
             </h2>
-            <div className="flex items-center gap-2">
-              {["RESEARCHER", "SCRIBE", "PUBLISHER", "AMPLIFIER"].map((agent, i) => {
+            <div className="grid grid-cols-[1fr_auto_1fr_auto_1fr_auto_1fr] items-center gap-1">
+              {["RESEARCHER", "SCRIBE", "PUBLISHER", "AMPLIFIER"].flatMap((agent, i) => {
                 const step = pipelineResult?.steps?.[i];
                 const color = step?.status === "done" ? "#22c55e" : step?.status === "running" ? "#f59e0b" : step?.status === "error" ? "#ff3366" : "#6b6b7b";
-                return (
-                  <div key={agent} className="flex items-center gap-2 flex-1">
-                    <div className="flex-1">
-                      <div
-                        className="rounded-lg p-3 text-center transition-all"
-                        style={{ background: `${color}10`, border: `1px solid ${color}30` }}
-                      >
-                        <div className="text-[10px] font-mono mb-1" style={{ color }}>
-                          {step?.status === "running" ? "..." : step?.status === "done" ? "DONE" : step?.status === "error" ? "ERR" : "WAIT"}
-                        </div>
-                        <div className="text-xs font-semibold text-foreground">{agent}</div>
-                        {step?.cost !== undefined && (
-                          <div className="text-[9px] text-text-muted mt-1">
-                            ${(step.cost * 100).toFixed(2)}c
-                          </div>
-                        )}
-                      </div>
+                const items = [
+                  <div
+                    key={agent}
+                    className="rounded-lg p-2 text-center transition-all"
+                    style={{ background: `${color}10`, border: `1px solid ${color}30` }}
+                  >
+                    <div className="text-[9px] font-mono mb-0.5" style={{ color }}>
+                      {step?.status === "running" ? "..." : step?.status === "done" ? "DONE" : step?.status === "error" ? "ERR" : "WAIT"}
                     </div>
-                    {i < 3 && <span className="text-text-muted text-lg">→</span>}
-                  </div>
-                );
+                    <div className="text-[10px] font-semibold text-foreground truncate">{agent}</div>
+                    {step?.cost !== undefined && (
+                      <div className="text-[8px] text-text-muted mt-0.5">
+                        ${(step.cost * 100).toFixed(2)}c
+                      </div>
+                    )}
+                  </div>,
+                ];
+                if (i < 3) items.push(<span key={`arrow-${i}`} className="text-text-muted text-sm">→</span>);
+                return items;
               })}
             </div>
           </div>
@@ -290,7 +288,7 @@ export default function ContentPage() {
                 <label className="text-[10px] text-text-muted uppercase tracking-widest block mb-1">
                   Plattform
                 </label>
-                <div className="flex gap-2">
+                <div className="grid grid-cols-3 gap-2">
                   {(["youtube", "twitter", "newsletter"] as const).map((p) => (
                     <button
                       key={p}
@@ -298,7 +296,7 @@ export default function ContentPage() {
                         setCustomPlatform(p);
                         setCustomFormat(p === "twitter" ? "thread" : p === "newsletter" ? "newsletter_issue" : "longform");
                       }}
-                      className={`flex-1 px-3 py-2 rounded-lg text-xs font-medium transition-all ${
+                      className={`px-2 py-2 rounded-lg text-[11px] font-medium transition-all ${
                         customPlatform === p
                           ? "text-foreground"
                           : "bg-surface-elevated text-text-muted hover:text-foreground"
@@ -309,7 +307,7 @@ export default function ContentPage() {
                         color: PLATFORM_COLORS[p],
                       } : {}}
                     >
-                      {PLATFORM_ICONS[p]} {p === "youtube" ? "YouTube" : p === "twitter" ? "X/Twitter" : "Newsletter"}
+                      {PLATFORM_ICONS[p]} {p === "youtube" ? "YT" : p === "twitter" ? "X" : "Mail"}
                     </button>
                   ))}
                 </div>
@@ -402,21 +400,18 @@ export default function ContentPage() {
           )}
 
           {/* Cost Overview */}
-          <div className="grid grid-cols-3 gap-4">
-            <div className="card-ghost p-4 text-center">
-              <div className="text-2xl font-bold text-accent-violet font-[family-name:var(--font-outfit)]">~$0.04</div>
-              <div className="text-[10px] text-text-muted uppercase tracking-wider mt-1">Pro YouTube-Video</div>
-              <div className="text-[9px] text-text-muted mt-0.5">4 Agent-Calls (Sonnet)</div>
+          <div className="grid grid-cols-3 gap-3">
+            <div className="card-ghost p-3 text-center">
+              <div className="text-xl font-bold text-accent-violet font-[family-name:var(--font-outfit)]">~$0.04</div>
+              <div className="text-[9px] text-text-muted uppercase tracking-wider mt-1">Pro YouTube-Video</div>
             </div>
-            <div className="card-ghost p-4 text-center">
-              <div className="text-2xl font-bold text-accent-cyan font-[family-name:var(--font-outfit)]">~$0.02</div>
-              <div className="text-[10px] text-text-muted uppercase tracking-wider mt-1">Pro Twitter-Thread</div>
-              <div className="text-[9px] text-text-muted mt-0.5">2 Sonnet + 2 Haiku</div>
+            <div className="card-ghost p-3 text-center">
+              <div className="text-xl font-bold text-accent-cyan font-[family-name:var(--font-outfit)]">~$0.02</div>
+              <div className="text-[9px] text-text-muted uppercase tracking-wider mt-1">Pro Twitter-Thread</div>
             </div>
-            <div className="card-ghost p-4 text-center">
-              <div className="text-2xl font-bold text-accent-emerald font-[family-name:var(--font-outfit)]">~$3.20</div>
-              <div className="text-[10px] text-text-muted uppercase tracking-wider mt-1">Pro Woche (20 Pieces)</div>
-              <div className="text-[9px] text-text-muted mt-0.5">Budget: $13.80/Monat</div>
+            <div className="card-ghost p-3 text-center">
+              <div className="text-xl font-bold text-accent-emerald font-[family-name:var(--font-outfit)]">~$3.20</div>
+              <div className="text-[9px] text-text-muted uppercase tracking-wider mt-1">Pro Woche</div>
             </div>
           </div>
         </div>
@@ -426,23 +421,23 @@ export default function ContentPage() {
       {activeTab === "calendar" && calendar && (
         <div className="space-y-6">
           {/* Week Selector */}
-          <div className="flex gap-2">
+          <div className="grid grid-cols-4 gap-2">
             {(["week1", "week2", "week3", "week4"] as const).map((week, i) => {
               const weekData = calendar[week];
               return (
                 <button
                   key={week}
                   onClick={() => setSelectedWeek(week)}
-                  className={`flex-1 p-3 rounded-lg text-left transition-all ${
+                  className={`p-2.5 rounded-lg text-left transition-all ${
                     selectedWeek === week
                       ? "bg-accent-violet/10 border border-accent-violet/30"
                       : "card-ghost hover:border-border"
                   }`}
                 >
-                  <div className="text-[10px] text-text-muted uppercase tracking-widest">
-                    Woche {i + 1}
+                  <div className="text-[9px] text-text-muted uppercase tracking-widest">
+                    W{i + 1}
                   </div>
-                  <div className={`text-sm font-semibold mt-1 ${selectedWeek === week ? "text-accent-violet" : "text-foreground"}`}>
+                  <div className={`text-xs font-semibold mt-0.5 leading-tight ${selectedWeek === week ? "text-accent-violet" : "text-foreground"}`}>
                     {weekData?.theme}
                   </div>
                 </button>
@@ -464,7 +459,7 @@ export default function ContentPage() {
                   return (
                     <div
                       key={day}
-                      className="flex items-center gap-3 bg-surface-elevated rounded-lg p-3 hover:bg-surface-elevated/80 transition-all cursor-pointer group"
+                      className="bg-surface-elevated rounded-lg p-3 hover:bg-surface-elevated/80 transition-all cursor-pointer group"
                       onClick={() => {
                         setCustomTopic(entry.topic);
                         setCustomPlatform(entry.platform);
@@ -472,24 +467,24 @@ export default function ContentPage() {
                         setActiveTab("pipeline");
                       }}
                     >
-                      <div className="w-8 text-center">
-                        <span className="text-xs font-bold text-text-muted">{WEEKDAY_LABELS[day]}</span>
+                      <div className="flex items-center gap-2 mb-1.5">
+                        <span className="text-xs font-bold text-text-muted w-6">{WEEKDAY_LABELS[day]}</span>
+                        <div
+                          className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-mono uppercase"
+                          style={{ background: `${platformColor}15`, color: platformColor }}
+                        >
+                          {PLATFORM_ICONS[entry.platform]} {entry.platform}
+                        </div>
+                        <div className="text-[9px] px-1.5 py-0.5 rounded bg-surface text-text-muted">
+                          {entry.format}
+                        </div>
+                        <span className="text-text-muted text-[10px] opacity-0 group-hover:opacity-100 transition-opacity ml-auto">
+                          Produzieren →
+                        </span>
                       </div>
-                      <div
-                        className="flex items-center gap-1.5 px-2 py-0.5 rounded text-[10px] font-mono uppercase"
-                        style={{ background: `${platformColor}15`, color: platformColor }}
-                      >
-                        {PLATFORM_ICONS[entry.platform]} {entry.platform}
-                      </div>
-                      <div className="text-[10px] px-1.5 py-0.5 rounded bg-surface text-text-muted">
-                        {entry.format}
-                      </div>
-                      <div className="flex-1 text-sm text-foreground group-hover:text-accent-violet transition-colors">
+                      <div className="text-sm text-foreground group-hover:text-accent-violet transition-colors pl-8">
                         {entry.topic}
                       </div>
-                      <span className="text-text-muted text-xs opacity-0 group-hover:opacity-100 transition-opacity">
-                        Produzieren →
-                      </span>
                     </div>
                   );
                 })}
@@ -542,29 +537,29 @@ export default function ContentPage() {
             <h2 className="text-[10px] text-text-muted uppercase tracking-widest mb-4">
               Pipeline Status
             </h2>
-            <div className="flex items-center gap-2">
-              {STATUS_FLOW.map((step, i) => (
-                <div key={step.key} className="flex items-center gap-2 flex-1">
-                  <div className="flex-1">
-                    <div
-                      className="rounded-lg p-3 text-center transition-all"
-                      style={{ background: `${step.color}10`, border: `1px solid ${step.color}30` }}
-                    >
-                      <div className="text-2xl font-bold font-[family-name:var(--font-outfit)]" style={{ color: step.color }}>
-                        {statusCounts[step.key] ?? 0}
-                      </div>
-                      <div className="text-[10px] text-text-muted uppercase tracking-wider mt-1">{step.label}</div>
-                      <div className="text-[9px] mt-1 font-mono" style={{ color: step.color }}>{step.agent}</div>
+            <div className="grid grid-cols-[1fr_auto_1fr_auto_1fr_auto_1fr] items-center gap-1">
+              {STATUS_FLOW.flatMap((step, i) => {
+                const items = [
+                  <div
+                    key={step.key}
+                    className="rounded-lg p-2 text-center transition-all"
+                    style={{ background: `${step.color}10`, border: `1px solid ${step.color}30` }}
+                  >
+                    <div className="text-xl font-bold font-[family-name:var(--font-outfit)]" style={{ color: step.color }}>
+                      {statusCounts[step.key] ?? 0}
                     </div>
-                  </div>
-                  {i < STATUS_FLOW.length - 1 && <span className="text-text-muted text-lg">→</span>}
-                </div>
-              ))}
+                    <div className="text-[9px] text-text-muted uppercase tracking-wider mt-0.5">{step.label}</div>
+                    <div className="text-[8px] mt-0.5 font-mono" style={{ color: step.color }}>{step.agent}</div>
+                  </div>,
+                ];
+                if (i < STATUS_FLOW.length - 1) items.push(<span key={`a-${i}`} className="text-text-muted text-sm">→</span>);
+                return items;
+              })}
             </div>
           </div>
 
           {/* KPIs */}
-          <div className="grid grid-cols-4 gap-4">
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
             <KPICard label="Total Content" value={content.length} color="#8b5cf6" icon="▣" />
             <KPICard label="Published" value={statusCounts["published"] ?? 0} subtitle="Live & aktiv" color="#22c55e" />
             <KPICard label="In Review" value={statusCounts["review"] ?? 0} subtitle="Wartet auf Legal" color="#f59e0b" />
