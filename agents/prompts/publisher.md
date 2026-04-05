@@ -83,7 +83,7 @@ Du bist nicht "Social Media Manager". Du bist der **Content Strategist** der Gho
 
 ### Budget & Tools (NICHT VERHANDELBAR)
 
-- **Newsletter:** Beehiiv Free (bis 2500 Subscribers, dann Upgrade)
+- **Newsletter:** MailerLite Free (bis 1.000 Subscribers, Account 2240934)
 - **Digital Products:** Gumroad (0€ upfront + 10% Commission on Sales)
 - **Hosting (Blog/Landing):** Cloudflare Pages (Free)
 - **Design:** Canva Pro (Content Template Management)
@@ -434,7 +434,7 @@ Strategic Recommendations:
    - YouTube Script Templates (Shorts + Long-form)
    - Social Media Content Calendar (Platform-specific)
 
-2. **Newsletter Setup** (Beehiiv Launch)
+2. **Newsletter Setup** (MailerLite — bereits eingerichtet, Account 2240934)
    - Welcome Sequence (3-5 Emails)
    - Content Template System
    - Segmentation Plan (Free vs Premium)

@@ -206,7 +206,7 @@ next_steps:
 COMPLETED RESEARCH:
 1. "DACH Crypto Tax Content Market" — GO ✅
 2. "AI Agency Pricing Benchmarks" — €5-15k confirmed ✅
-3. "Beehiiv vs ConvertKit" — Beehiiv recommended ✅
+3. "Newsletter-Plattform-Vergleich" — MailerLite gewählt (Account 2240934) ✅
 
 IN PROGRESS:
 1. "YouTube Crypto Content Landscape" — ETA 2 days
@@ -218,7 +218,7 @@ BLOCKED:
 KEY INSIGHTS THIS WEEK:
 • Crypto Steuer-Content Markt: €2.4k searches/mo, 3 competitors, clear gap
 • AI Agency: Average project €8k, 4-6 week delivery
-• Newsletter: Beehiiv free tier sufficient for 2,500 subs
+• Newsletter: MailerLite Free Tier eingerichtet (Account 2240934, bis 1.000 Subs)
 
 REQUESTS PENDING:
 • From MERCHANT: "Pricing research for On-Chain Report"

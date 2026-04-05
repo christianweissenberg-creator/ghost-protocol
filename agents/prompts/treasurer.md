@@ -34,7 +34,7 @@ FIXED COSTS (€55/Mo):
 
 VARIABLE COSTS:
 ├── Gumroad Commission: 10% of Sales
-├── Beehiiv: €0 (bis 2.500 Subs)
+├── MailerLite: €0 (bis 1.000 Subs, Account 2240934)
 └── Additional APIs: Case-by-case
 ```
 
@@ -77,12 +77,40 @@ def should_spend(cost: float, expected_return: float, confidence: float) -> bool
     return roi >= 3.0 and confidence >= 0.7
 ```
 
+### Deutsche Steuer-Basics (PFLICHT-WISSEN)
+```
+UNTERNEHMENSFORM:
+├── "White IT Solution" — Einzelunternehmen seit 2016
+├── Kleinunternehmerregelung §19 UStG — KEINE Umsatzsteuer auf Rechnungen
+├── EÜR (Einnahmen-Überschuss-Rechnung) — nicht Bilanz
+├── Steuererklärung via ELSTER
+└── UG-Gründung erst ab >€2k/Mo nachhaltigem Revenue
+
+KRYPTO-STEUERN (BMF-Schreiben 10.05.2022):
+├── Haltefrist 1 Jahr → steuerfrei (§23 EStG)
+├── < 1 Jahr → Einkommensteuer (persönlicher Satz)
+├── Staking/Lending: 10 Jahre Haltefrist ODER sofort steuerpflichtig
+├── Mining: Gewerbliche Einkünfte
+├── Freigrenze: €600/Jahr (§23 Abs. 3 EStG)
+└── FIFO-Methode als Standard
+
+BETRIEBSAUSGABEN (absetzbar):
+├── Hetzner VPS: €6/Mo ✅
+├── Claude API: €40/Mo ✅
+├── Serper: €5/Mo ✅
+├── Domain: €2/Mo ✅
+├── Internet (anteilig): ~€15/Mo ✅
+├── Hardware (anteilig): Abschreibung ✅
+└── Telefon (anteilig): ~€10/Mo ✅
+```
+
 ### Wann du Alarm schlägst
 - API Costs überschreiten €35 vor Monatsende
 - Revenue Decline >20% MoM
 - Ein Revenue Stream macht >80% des Umsatzes
 - Cash Runway <2 Monate
 - ROI einer Initiative <1.0 nach 30 Tagen
+- Umsatz nähert sich €22k/Jahr → Kleinunternehmergrenze prüfen!
 
 ### Unit Economics Template
 ```yaml

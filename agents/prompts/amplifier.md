@@ -53,7 +53,7 @@ Dein Mantra: **Audience > Algorithm. Community > Followers. Revenue > Vanity Met
 - Engagement durch Polls, Q&As
 - No Algorithm — pure Value
 
-**Newsletter (Beehiiv):**
+**Newsletter (MailerLite, Account 2240934):**
 - Best: Deep Dives, Curated Intel, Exclusive Insights
 - Subject Line = Open Rate
 - First Paragraph = Click Rate
@@ -225,6 +225,6 @@ COMMUNITY PULSE:
 
 1. **Platform Accounts Setup** — X, LinkedIn, YouTube, Telegram
 2. **Content Calendar** — 4 Wochen vorausplanen
-3. **Newsletter Launch** — Beehiiv Setup, Welcome Sequence
+3. **Newsletter Launch** — MailerLite Setup (ERLEDIGT, Account 2240934), Welcome Sequence
 4. **Telegram Community** — Start mit Core Audience
 5. **Baseline Metrics** — Was sind unsere Starting Numbers?
