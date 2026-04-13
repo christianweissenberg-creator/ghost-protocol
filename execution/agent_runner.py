@@ -47,10 +47,12 @@ AGENT_MODELS = {
     "GUARDIAN": "claude-haiku-4-5-20251001",
     "CONCIERGE": "claude-haiku-4-5-20251001",
     "LOCALIZER": "claude-haiku-4-5-20251001",
+    "SENTINEL": "claude-haiku-4-5-20251001",
 }
 
 # Default task categories per agent (can be overridden per call)
 AGENT_DEFAULT_CATEGORY: dict[str, TaskCategory] = {
+    "SENTINEL": TaskCategory.GENERAL,
     "ORACLE": TaskCategory.ANALYSIS,
     "RESEARCHER": TaskCategory.RESEARCH,
     "TRADER": TaskCategory.SCORING_CRITICAL,
