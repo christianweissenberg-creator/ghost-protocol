@@ -20,6 +20,15 @@ LLM_COMPLEX: str = os.getenv("MODEL_COMPLEX", "claude-sonnet-4-20250514")
 LLM_SIMPLE: str = os.getenv("MODEL_SIMPLE", "claude-haiku-4-5-20251001")
 ANTHROPIC_API_KEY: Optional[str] = os.getenv("ANTHROPIC_API_KEY")
 
+# === Multi-Model Provider Keys ===
+PERPLEXITY_API_KEY: Optional[str] = os.getenv("PERPLEXITY_API_KEY")
+GOOGLE_AI_API_KEY: Optional[str] = os.getenv("GOOGLE_AI_API_KEY")
+DASHSCOPE_API_KEY: Optional[str] = os.getenv("DASHSCOPE_API_KEY")
+DASHSCOPE_BASE_URL: str = os.getenv(
+    "DASHSCOPE_BASE_URL",
+    "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+)
+
 # === API Keys ===
 SERPER_API_KEY: Optional[str] = os.getenv("SERPER_API_KEY")
 TELEGRAM_BOT_TOKEN: Optional[str] = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -84,3 +93,24 @@ def validate_config() -> list[str]:
     if missing:
         logger.warning("Fehlende Config-Keys: %s", ", ".join(missing))
     return missing
+
+
+def validate_providers() -> dict[str, bool]:
+    """Prüft welche LLM-Provider verfügbar sind.
+
+    Returns:
+        Dict mit Provider-Name → verfügbar (True/False)
+    """
+    status = {
+        "anthropic": bool(ANTHROPIC_API_KEY),
+        "perplexity": bool(PERPLEXITY_API_KEY),
+        "gemini": bool(GOOGLE_AI_API_KEY),
+        "qwen": bool(DASHSCOPE_API_KEY),
+    }
+    available = [k for k, v in status.items() if v]
+    unavailable = [k for k, v in status.items() if not v]
+    if available:
+        logger.info("LLM-Provider verfügbar: %s", ", ".join(available))
+    if unavailable:
+        logger.info("LLM-Provider fehlen: %s (Fallback auf Anthropic)", ", ".join(unavailable))
+    return status

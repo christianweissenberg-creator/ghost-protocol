@@ -25,6 +25,8 @@ from typing import Any, Optional
 import anthropic
 from supabase import create_client, Client
 
+from agents.router import get_router, LLMResponse, TaskCategory
+
 
 # ─────────────────────────────────────────────
 # ENUMS & DATA CLASSES
@@ -250,7 +252,7 @@ class KnowledgeRetriever:
 # ─────────────────────────────────────────────
 
 class MessageBus:
-    """Agent-to-Agent communication via Supabase Realtime.
+    """Agent-to-Agent communication via Supabase.
 
     Implements the channel-based communication system:
     - #boardroom, #market-intel, #content, #legal-review, #ops, #revenue, #growth, #emergency
@@ -258,32 +260,56 @@ class MessageBus:
     - Priority-based message queuing
 
     All messages are persisted in Supabase for dashboard display and audit trail.
+    Uses polling for MVP; Supabase Realtime WebSockets planned for autonomous phase.
     """
 
     def __init__(self, supabase: Client, agent_name: str):
         self.supabase = supabase
         self.agent_name = agent_name
-        self._handlers: dict[str, list] = {}  # channel -> handler functions
+        self._handlers: dict[str, list] = {}
+        self._processed_ids: set[str] = set()  # Deduplication
 
     async def send(self, message: AgentMessage) -> None:
-        """Send a message to the Message Bus.
-
-        Message is stored in Supabase and broadcast via Realtime to subscribers.
-        """
+        """Send a message to the Message Bus."""
         try:
             self.supabase.table("messages").insert(message.to_dict()).execute()
         except Exception as e:
             logging.error(f"Failed to send message: {e}")
 
+    async def get_messages(
+        self,
+        channel: str | None = None,
+        agent_id: str | None = None,
+        message_type: str | None = None,
+        limit: int = 20,
+    ) -> list[AgentMessage]:
+        """Fetch messages from the bus (for dashboard and agent queries).
+
+        Args:
+            channel: Filter by channel (e.g., "#market-intel")
+            agent_id: Filter by target agent
+            message_type: Filter by message type
+            limit: Max messages to return
+        """
+        try:
+            query = self.supabase.table("messages").select("*")
+            if channel:
+                query = query.contains("to_channels", [channel])
+            if agent_id:
+                query = query.contains("to_agents", [agent_id])
+            if message_type:
+                query = query.eq("message_type", message_type)
+            result = query.order("timestamp", desc=True).limit(limit).execute()
+            return [AgentMessage.from_dict(d) for d in (result.data or [])]
+        except Exception as e:
+            logging.error(f"Failed to get messages: {e}")
+            return []
+
     async def listen(self, channels: list[str]) -> None:
         """Subscribe to channels and process incoming messages.
 
-        Uses Supabase Realtime for WebSocket-based message delivery.
-        Falls back to polling if Realtime is unavailable.
+        Uses polling with deduplication. Each message is processed only once.
         """
-        # Supabase Realtime subscription
-        # NOTE: In production, this uses supabase-py realtime client
-        # For MVP, we use polling with 5-second intervals
         while True:
             try:
                 for channel in channels:
@@ -295,10 +321,14 @@ class MessageBus:
                         .execute()
 
                     for msg_data in (result.data or []):
+                        msg_id = msg_data.get("id", "")
+                        if msg_id in self._processed_ids:
+                            continue
+                        self._processed_ids.add(msg_id)
                         message = AgentMessage.from_dict(msg_data)
                         await self._dispatch(channel, message)
 
-                # Also check direct messages
+                # Direct messages
                 result = self.supabase.table("messages") \
                     .select("*") \
                     .contains("to_agents", [self.agent_name]) \
@@ -307,13 +337,21 @@ class MessageBus:
                     .execute()
 
                 for msg_data in (result.data or []):
+                    msg_id = msg_data.get("id", "")
+                    if msg_id in self._processed_ids:
+                        continue
+                    self._processed_ids.add(msg_id)
                     message = AgentMessage.from_dict(msg_data)
                     await self._dispatch("direct", message)
+
+                # Cap dedup set to prevent memory growth
+                if len(self._processed_ids) > 1000:
+                    self._processed_ids = set(list(self._processed_ids)[-500:])
 
             except Exception as e:
                 logging.error(f"Message Bus listen error: {e}")
 
-            await asyncio.sleep(5)  # Polling interval
+            await asyncio.sleep(5)
 
     def on_message(self, channel: str, handler) -> None:
         """Register a handler for messages on a channel."""
@@ -362,10 +400,13 @@ class BaseAgent(ABC):
         self.role = config.role
         self.tier = config.tier
 
-        # Initialize Anthropic client
+        # Initialize Anthropic client (kept for backward compatibility)
         self.client = anthropic.Anthropic(
             api_key=os.environ.get("ANTHROPIC_API_KEY", ""),
         )
+
+        # Initialize Multi-Model Router
+        self.router = get_router()
 
         # Initialize Supabase client
         supabase_url = os.environ.get("SUPABASE_URL", "")
@@ -392,6 +433,7 @@ class BaseAgent(ABC):
             "role": self.role,
             "tier": self.tier.name,
             "model": self.config.llm_model,
+            "router_providers": [p.value for p in self.router.available_providers],
         })
 
     # ── System Prompt ──────────────────────────
@@ -429,63 +471,57 @@ class BaseAgent(ABC):
         context: str = "",
         max_tokens: int | None = None,
         temperature: float | None = None,
+        category: TaskCategory = TaskCategory.GENERAL,
     ) -> str:
         """Core LLM call — the agent 'thinks' about a task.
 
-        Automatically:
-        - Includes system prompt
-        - Injects RAG context if available
-        - Tracks token usage and costs
-        - Logs the interaction
+        Routes to the optimal provider via ModelRouter based on task category.
+        Falls back to Anthropic if the preferred provider is unavailable.
 
         Args:
             task: The task/question to think about
             context: Additional context (e.g., from RAG or other agents)
             max_tokens: Override default max tokens
             temperature: Override default temperature
+            category: Task category for model routing (default: GENERAL)
 
         Returns:
             The agent's response as a string
         """
-        start_time = time.time()
-
         # Build message with optional RAG context
         user_message = task
         if context:
             user_message = f"{context}\n\n---\n\n## Current Task\n{task}"
 
         try:
-            response = self.client.messages.create(
-                model=self.config.llm_model,
+            response: LLMResponse = await self.router.complete(
+                system=self.system_prompt,
+                user_message=user_message,
+                category=category,
                 max_tokens=max_tokens or self.config.max_tokens,
                 temperature=temperature or self.config.temperature,
-                system=self.system_prompt,
-                messages=[{"role": "user", "content": user_message}],
             )
 
             # Track costs
-            input_tokens = response.usage.input_tokens
-            output_tokens = response.usage.output_tokens
-            self._track_cost(input_tokens, output_tokens)
-
-            result = response.content[0].text
-            elapsed = time.time() - start_time
+            self._track_cost(response.input_tokens, response.output_tokens, response)
 
             self.logger.info("llm_call", {
-                "model": self.config.llm_model,
-                "input_tokens": input_tokens,
-                "output_tokens": output_tokens,
-                "cost_usd": self._calculate_cost(input_tokens, output_tokens),
-                "elapsed_seconds": round(elapsed, 2),
+                "provider": response.provider.value,
+                "model": response.model,
+                "input_tokens": response.input_tokens,
+                "output_tokens": response.output_tokens,
+                "cost_usd": response.cost_usd,
+                "duration_ms": response.duration_ms,
+                "category": category.value,
                 "task_preview": task[:100],
             })
 
-            return result
+            return response.text
 
         except anthropic.RateLimitError:
             self.logger.error("rate_limit_hit", {"model": self.config.llm_model})
-            await asyncio.sleep(30)  # Exponential backoff
-            return await self.think(task, context, max_tokens, temperature)
+            await asyncio.sleep(30)
+            return await self.think(task, context, max_tokens, temperature, category)
 
         except Exception as e:
             self.logger.error("llm_call_failed", {"error": str(e)})
@@ -606,23 +642,20 @@ class BaseAgent(ABC):
     def _calculate_cost(self, input_tokens: int, output_tokens: int) -> float:
         """Calculate cost in USD for a single API call.
 
-        Pricing (as of 2026):
-        - Sonnet: $3/M input, $15/M output
-        - Haiku: $0.25/M input, $1.25/M output
+        Uses router pricing table for accurate multi-provider costs.
+        Falls back to Sonnet pricing if model unknown.
         """
-        if "haiku" in self.config.llm_model:
-            input_cost = input_tokens * 0.25 / 1_000_000
-            output_cost = output_tokens * 1.25 / 1_000_000
-        else:  # Sonnet
-            input_cost = input_tokens * 3.0 / 1_000_000
-            output_cost = output_tokens * 15.0 / 1_000_000
-        return input_cost + output_cost
+        from agents.router.providers import calculate_cost
+        return calculate_cost(self.config.llm_model, input_tokens, output_tokens)
 
-    def _track_cost(self, input_tokens: int, output_tokens: int) -> None:
+    def _track_cost(self, input_tokens: int, output_tokens: int, response: LLMResponse | None = None) -> None:
         """Track cumulative token usage and costs."""
         self._total_input_tokens += input_tokens
         self._total_output_tokens += output_tokens
-        self._total_cost_usd += self._calculate_cost(input_tokens, output_tokens)
+        if response:
+            self._total_cost_usd += response.cost_usd
+        else:
+            self._total_cost_usd += self._calculate_cost(input_tokens, output_tokens)
 
     @property
     def cost_summary(self) -> dict[str, Any]:
