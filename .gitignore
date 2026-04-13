@@ -48,3 +48,5 @@ htmlcov/
 # Node (for Astro site)
 node_modules/
 site/dist/
+# Added by code-review-graph
+.code-review-graph/
