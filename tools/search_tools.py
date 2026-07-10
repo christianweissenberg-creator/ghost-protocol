@@ -1,13 +1,21 @@
-"""Ghost Protocol — Search Tools.
+"""Ghost Protocol — Search Tools (Deprecated).
 
-Gemeinsame Such-Tools für alle Agenten. Aktuell sind die Tools direkt
-in den Agent-Dateien definiert (oracle.py, researcher.py). In Sprint 2
-werden sie hierher extrahiert und zentralisiert.
+Such-Tools wurden aufgeteilt in:
+- tools/market_tools.py — Krypto-News, Marktdaten, DACH-News
+- tools/research_tools.py — Gumroad, Etsy, Reddit, DACH Market Gaps
 
-TODO Sprint 2:
-- search_crypto_news() aus oracle.py extrahieren
-- get_market_data() aus oracle.py extrahieren
-- search_dach_news() aus oracle.py extrahieren
-- Alle Gumroad/Etsy/Reddit Tools aus researcher.py extrahieren
-- LunarCrush API Integration (Social Sentiment)
+Dieses Modul re-exportiert fuer Backward-Compatibility.
 """
+
+from tools.market_tools import search_crypto_news, get_market_data, search_dach_news, search_web
+from tools.research_tools import search_gumroad_trends, search_etsy_trends, search_reddit_painpoints
+
+__all__ = [
+    "search_crypto_news",
+    "get_market_data",
+    "search_dach_news",
+    "search_web",
+    "search_gumroad_trends",
+    "search_etsy_trends",
+    "search_reddit_painpoints",
+]

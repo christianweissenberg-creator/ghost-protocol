@@ -1,231 +1,172 @@
-"""Ghost Protocol — Product Research Agent (THE SCOUT).
+"""Ghost Protocol — Researcher Agent (THE RESEARCHER).
 
-Scannt Gumroad, Etsy, Reddit und Krypto-Communities um zu identifizieren
-welche Produkte DACH-Krypto-Nutzer tatsächlich kaufen wollen.
-Liefert priorisierte Produkt-Ideen mit Revenue-Schätzungen.
+Head of Research — Marktanalyse, Trends, Validierung.
+Scannt Gumroad, Etsy, Reddit und DACH-Communities um zu identifizieren
+welche Produkte Nachfrage haben und Revenue generieren koennen.
 
-Ausführung: python -m agents.researcher
-Output: outputs/product_research_report.md
+Architecture: BaseAgent + standalone Tools (kein CrewAI).
 """
 
-import json
+from __future__ import annotations
+
 import logging
-import os
-from pathlib import Path
+from datetime import datetime
+from typing import Any
 
-import httpx
-from crewai import Agent, Crew, Process, Task
-from crewai.tools import tool
-
-from agents.config import (
-    DISCLAIMER_DE,
-    LLM_COMPLEX,
-    SERPER_API_KEY,
-    TIMEOUT_SECONDS,
+from agents.base_agent import AgentConfig, AgentTier, BaseAgent, MessagePriority, MessageType
+from tools.research_tools import (
+    format_research_data,
+    gather_product_research,
+    search_dach_market_gaps,
+    search_gumroad_trends,
+    search_reddit_painpoints,
 )
 
 logger: logging.Logger = logging.getLogger(__name__)
 
 
-# === Custom Tools ===
+class ResearcherAgent(BaseAgent):
+    """THE RESEARCHER — Head of Research.
 
-@tool("Search Gumroad trending products")
-def search_gumroad_trends(query: str) -> str:
-    """Search for trending digital products on Gumroad in a specific niche.
-
-    Use this to understand what people actually BUY — real demand signals.
+    Workflow:
+    1. gather_data() — Scannt Maerkte via Tools (kein LLM)
+    2. execute() — Analysiert Daten mit LLM, priorisiert Opportunities
+    3. Broadcast auf #revenue fuer MerchantAgent
     """
-    url = "https://google.serper.dev/search"
-    headers = {"X-API-KEY": SERPER_API_KEY, "Content-Type": "application/json"}
-    payload = {"q": f"site:gumroad.com {query}", "num": 10}
-    try:
-        r = httpx.post(url, json=payload, headers=headers, timeout=TIMEOUT_SECONDS)
-        r.raise_for_status()
-        results = r.json().get("organic", [])
-        return json.dumps([
-            {"title": item.get("title", ""), "snippet": item.get("snippet", ""),
-             "link": item.get("link", "")}
-            for item in results[:8]
-        ], ensure_ascii=False, indent=2)
-    except httpx.TimeoutException:
-        logger.error("Timeout bei Gumroad Search: %s", query)
-        return "Error: Gumroad search timeout."
-    except Exception as e:
-        logger.error("Fehler bei Gumroad Search: %s", e)
-        return f"Error searching Gumroad: {e}"
 
-
-@tool("Search Etsy digital products")
-def search_etsy_trends(query: str) -> str:
-    """Search for trending digital product listings on Etsy.
-
-    Use this to find high-demand templates and digital downloads.
-    """
-    url = "https://google.serper.dev/search"
-    headers = {"X-API-KEY": SERPER_API_KEY, "Content-Type": "application/json"}
-    payload = {"q": f"site:etsy.com digital download {query}", "num": 10}
-    try:
-        r = httpx.post(url, json=payload, headers=headers, timeout=TIMEOUT_SECONDS)
-        r.raise_for_status()
-        results = r.json().get("organic", [])
-        return json.dumps([
-            {"title": item.get("title", ""), "snippet": item.get("snippet", ""),
-             "link": item.get("link", "")}
-            for item in results[:8]
-        ], ensure_ascii=False, indent=2)
-    except httpx.TimeoutException:
-        logger.error("Timeout bei Etsy Search: %s", query)
-        return "Error: Etsy search timeout."
-    except Exception as e:
-        logger.error("Fehler bei Etsy Search: %s", e)
-        return f"Error searching Etsy: {e}"
-
-
-@tool("Search Reddit pain points")
-def search_reddit_painpoints(query: str) -> str:
-    """Search Reddit for pain points and problems people describe in crypto/finance communities.
-
-    These are product opportunities — real problems people would pay to solve.
-    """
-    url = "https://google.serper.dev/search"
-    headers = {"X-API-KEY": SERPER_API_KEY, "Content-Type": "application/json"}
-    payload = {
-        "q": f"site:reddit.com {query} (need OR looking for OR wish OR help OR frustrated)",
-        "num": 10,
-    }
-    try:
-        r = httpx.post(url, json=payload, headers=headers, timeout=TIMEOUT_SECONDS)
-        r.raise_for_status()
-        results = r.json().get("organic", [])
-        return json.dumps([
-            {"title": item.get("title", ""), "snippet": item.get("snippet", ""),
-             "link": item.get("link", "")}
-            for item in results[:8]
-        ], ensure_ascii=False, indent=2)
-    except httpx.TimeoutException:
-        logger.error("Timeout bei Reddit Search: %s", query)
-        return "Error: Reddit search timeout."
-    except Exception as e:
-        logger.error("Fehler bei Reddit Search: %s", e)
-        return f"Error searching Reddit: {e}"
-
-
-@tool("Search crypto DACH market gaps")
-def search_dach_gaps(query: str) -> str:
-    """Search for underserved needs in the German-speaking crypto market.
-
-    Focus on German-language results to find DACH-specific opportunities.
-    """
-    url = "https://google.serper.dev/search"
-    headers = {"X-API-KEY": SERPER_API_KEY, "Content-Type": "application/json"}
-    payload = {"q": query, "gl": "de", "hl": "de", "num": 10}
-    try:
-        r = httpx.post(url, json=payload, headers=headers, timeout=TIMEOUT_SECONDS)
-        r.raise_for_status()
-        results = r.json().get("organic", [])
-        return json.dumps([
-            {"title": item.get("title", ""), "snippet": item.get("snippet", ""),
-             "link": item.get("link", "")}
-            for item in results[:8]
-        ], ensure_ascii=False, indent=2)
-    except httpx.TimeoutException:
-        logger.error("Timeout bei DACH Search: %s", query)
-        return "Error: DACH search timeout."
-    except Exception as e:
-        logger.error("Fehler bei DACH Search: %s", e)
-        return f"Error searching DACH: {e}"
-
-
-# === Agent Definition ===
-
-researcher: Agent = Agent(
-    role="Product Research Analyst",
-    goal=(
-        "Identify the top 5 most profitable digital products we can create "
-        "for the DACH crypto/finance market within 1 week, with realistic "
-        "revenue estimates. Focus on products with HIGH demand and LOW competition "
-        "that can be sold on Gumroad/Etsy without an existing audience."
-    ),
-    backstory=(
-        "Du bist ein erfahrener Marktforscher mit Spezialisierung auf digitale "
-        "Produkte im DACH-Kryptomarkt. Du denkst in Kundenproblemen, nicht in "
-        "Lösungen. Du weißt: Ein Produkt das niemand sucht, verkauft sich nicht — "
-        "egal wie gut es ist. Du bist brutal ehrlich über Marktpotenziale und "
-        "unterscheidest klar zwischen 'nice to have' und 'must have' Produkten."
-    ),
-    tools=[
-        search_gumroad_trends,
-        search_etsy_trends,
-        search_reddit_painpoints,
-        search_dach_gaps,
-    ],
-    verbose=True,
-    max_iter=8,
-    llm=LLM_COMPLEX,
-    allow_delegation=False,
-)
-
-# === Task Definition ===
-
-research_task: Task = Task(
-    description="""
-    Führe eine vollständige Marktanalyse durch:
-
-    1. DEMAND SCAN: Suche auf Gumroad nach "crypto trading template",
-       "krypto steuer", "bitcoin portfolio tracker", "crypto journal"
-    2. PAIN POINT MINING: Suche Reddit nach Problemen in Krypto-Steuer,
-       DeFi-Tracking, Trading-Journaling
-    3. COMPETITION GAP: Suche auf dem deutschen Markt nach existierenden
-       Produkten und deren Qualität
-    4. ETSY OPPORTUNITY: Suche nach High-Review Templates und Planern
-    5. SYNTHESE: Priorisierte Liste von exakt 5 Produkten mit Name,
-       Beschreibung, Zielgruppe, Preis, geschätzte Sales, Erstellungszeit,
-       Marktbegründung und Wettbewerbsvorteil
-
-    Sei BRUTAL ehrlich. Nur Produkte mit nachweisbarer Nachfrage.
-    """,
-    expected_output=(
-        "Strukturierter Report: Executive Summary, Top 5 Produkte "
-        "(priorisiert nach Revenue-Potenzial), Gesamtes monatliches "
-        "Revenue-Potenzial, Empfohlene Erstellungsreihenfolge, "
-        "Red Flags pro Produkt."
-    ),
-    agent=researcher,
-)
-
-
-# === Crew ===
-
-research_crew: Crew = Crew(
-    agents=[researcher],
-    tasks=[research_task],
-    process=Process.sequential,
-    verbose=True,
-)
-
-
-# === Runner ===
-
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelname)s: %(message)s")
-    logger.info("GHOST PROTOCOL — Product Research Agent gestartet")
-    logger.info("Scanning markets for DACH crypto product opportunities...")
-
-    try:
-        result = research_crew.kickoff()
-
-        output_dir = Path("outputs")
-        output_dir.mkdir(exist_ok=True)
-        output_path = output_dir / "product_research_report.md"
-        output_path.write_text(
-            f"# Product Research Report\n"
-            f"## Generated by Ghost Protocol Research Agent\n\n"
-            f"{result}",
-            encoding="utf-8",
+    def __init__(self):
+        config = AgentConfig(
+            name="researcher",
+            role="Head of Research — Marktanalyse, Trends, Validierung",
+            tier=AgentTier.DIRECTOR,
+            llm_model="claude-sonnet-4-20250514",
+            max_tokens=4096,
+            temperature=0.3,
+            channels=["#revenue", "#boardroom"],
+            tools=["serper"],
+            knowledge_tags=["products", "markets", "dach", "revenue"],
         )
-        logger.info("Report gespeichert: %s", output_path)
+        super().__init__(config)
 
-    except Exception as e:
-        logger.error("Research Crew fehlgeschlagen: %s", e)
-        # Telegram-Alert wäre hier ideal (wird in Sprint 2 integriert)
-        raise
+    def gather_data(self, niche: str = "krypto") -> dict[str, Any]:
+        """Sammelt Markt- und Produktdaten aus allen Quellen.
+
+        Kein LLM-Call — nur HTTP-Requests.
+
+        Args:
+            niche: Zu untersuchende Nische
+
+        Returns:
+            Dict mit allen Research-Ergebnissen
+        """
+        self.logger.info("gathering_research_data", {"niche": niche})
+
+        data = gather_product_research(niche)
+        data["timestamp"] = datetime.now().isoformat()
+        data["niche"] = niche
+
+        total_results = sum(len(v) for k, v in data.items() if isinstance(v, list))
+        self.logger.info("research_data_gathered", {
+            "niche": niche,
+            "total_results": total_results,
+        })
+
+        return data
+
+    async def execute(self, task: str = "product_research", **kwargs) -> dict[str, Any]:
+        """Fuehrt Research-Task aus.
+
+        Args:
+            task: Task-Typ ("product_research" oder freier Text)
+            **kwargs:
+                niche: Zu untersuchende Nische (default: "krypto")
+                data: Vorab gesammelte Daten (optional)
+
+        Returns:
+            {"status": "success", "output": str, "data": dict, "cost_usd": float}
+        """
+        niche = kwargs.get("niche", "krypto")
+
+        # 1. Daten sammeln
+        data = kwargs.get("data") or self.gather_data(niche)
+
+        # 2. Kontext aufbauen
+        context = format_research_data(data)
+
+        # 3. RAG-Wissen dazuholen
+        rag_context = await self.retrieve_knowledge(f"product research {niche}")
+        if rag_context:
+            context = f"{rag_context}\n\n---\n\n{context}"
+
+        # 4. LLM-Call: Analyse generieren
+        if task == "product_research":
+            prompt = (
+                f"Analysiere die Marktdaten fuer die Nische '{niche}' und erstelle "
+                "einen priorisierten Product Research Report.\n\n"
+                "Struktur:\n"
+                "1. **Executive Summary** (3 Saetze)\n"
+                "2. **Top 5 Produkt-Ideen** (priorisiert nach Revenue-Potenzial):\n"
+                "   - Name + Beschreibung\n"
+                "   - Zielgruppe\n"
+                "   - Preisvorschlag (EUR)\n"
+                "   - Geschaetzte monatliche Sales\n"
+                "   - Erstellungszeit\n"
+                "   - Wettbewerbsvorteil\n"
+                "   - Red Flags\n"
+                "3. **Gesamtes monatliches Revenue-Potenzial**\n"
+                "4. **Empfohlene Erstellungsreihenfolge**\n\n"
+                "Sei BRUTAL ehrlich. Nur Produkte mit nachweisbarer Nachfrage.\n"
+                "Schreibe auf Deutsch."
+            )
+        else:
+            prompt = task
+
+        report = await self.think(prompt, context=context)
+
+        # 5. Broadcast
+        await self.send_message(
+            channels=["#revenue"],
+            content={"report": report, "niche": niche, "timestamp": data["timestamp"]},
+            message_type=MessageType.TASK_RESULT,
+            priority=MessagePriority.NORMAL,
+            to_agents=["merchant"],
+        )
+
+        self.logger.info("research_completed", {
+            "task": task,
+            "niche": niche,
+            "output_chars": len(report),
+            "cost_usd": self._total_cost_usd,
+        })
+
+        return {
+            "status": "success",
+            "output": report,
+            "data": data,
+            "cost_usd": self._total_cost_usd,
+        }
+
+    async def validate_idea(self, product_idea: str) -> str:
+        """Validiert eine spezifische Produktidee gegen Marktdaten.
+
+        Fuer Ad-hoc-Anfragen von MerchantAgent oder DONNA.
+        """
+        gumroad = search_gumroad_trends(product_idea)
+        reddit = search_reddit_painpoints(product_idea)
+        dach = search_dach_market_gaps(f"{product_idea} kaufen")
+
+        context_parts = [
+            f"## Gumroad-Ergebnisse fuer '{product_idea}'\n" +
+            "\n".join(f"- {r['title']}: {r['snippet']}" for r in gumroad[:5]),
+            f"## Reddit Pain Points\n" +
+            "\n".join(f"- {r['title']}: {r['snippet']}" for r in reddit[:5]),
+            f"## DACH-Markt\n" +
+            "\n".join(f"- {r['title']}: {r['snippet']}" for r in dach[:5]),
+        ]
+
+        return await self.think(
+            f"Bewerte die Produktidee '{product_idea}' anhand der Marktdaten.\n"
+            "Gib eine Bewertung (1-10) fuer: Nachfrage, Wettbewerb, Machbarkeit, Revenue-Potenzial.\n"
+            "Fazit: Umsetzen ja/nein? Warum? Max 200 Woerter.",
+            context="\n\n".join(context_parts),
+        )
