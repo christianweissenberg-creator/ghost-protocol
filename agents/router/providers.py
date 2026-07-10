@@ -97,7 +97,8 @@ class AnthropicProvider(BaseLLMProvider):
             messages=[{"role": "user", "content": user_message}],
         )
         return LLMResponse(
-            text=response.content[0].text,
+            # Sonnet-5+ kann thinking-Bloecke VOR dem Text liefern → ersten Text-Block nehmen
+            text=next((b.text for b in response.content if getattr(b, "type", "") == "text"), ""),
             provider=self.provider,
             model=model,
             input_tokens=response.usage.input_tokens,

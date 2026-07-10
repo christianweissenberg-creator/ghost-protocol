@@ -94,7 +94,8 @@ export async function POST(request: NextRequest) {
     }
 
     const claudeData = await claudeResponse.json();
-    const responseText = claudeData.content?.[0]?.text ?? "";
+    // Sonnet-5+ kann thinking-Bloecke VOR dem Text liefern → ersten Text-Block nehmen
+    const responseText = claudeData.content?.find((b: { type?: string }) => b.type === "text")?.text ?? "";
     const inputTokens = claudeData.usage?.input_tokens ?? 0;
     const outputTokens = claudeData.usage?.output_tokens ?? 0;
     const latencyMs = Date.now() - startTime;

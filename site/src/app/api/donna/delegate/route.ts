@@ -44,7 +44,8 @@ async function callClaude(systemPrompt: string, userMessage: string, model: stri
 
   if (!res.ok) return `ERROR: Claude ${res.status}`;
   const data = await res.json();
-  return data.content?.[0]?.text ?? "";
+  // Sonnet-5+ kann thinking-Bloecke VOR dem Text liefern → ersten Text-Block nehmen
+  return data.content?.find((b: { type?: string }) => b.type === "text")?.text ?? "";
 }
 
 async function activateAgent(agentId: string, task: string, cookie: string): Promise<{ response: string; cost: number }> {

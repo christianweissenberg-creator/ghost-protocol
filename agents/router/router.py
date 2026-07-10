@@ -249,7 +249,8 @@ class ModelRouter:
         elapsed = int((time.monotonic() - start) * 1000)
 
         return LLMResponse(
-            text=response.content[0].text,
+            # Sonnet-5+ kann thinking-Bloecke VOR dem Text liefern → ersten Text-Block nehmen
+            text=next((b.text for b in response.content if getattr(b, "type", "") == "text"), ""),
             provider=Provider.ANTHROPIC,
             model=model,
             input_tokens=response.usage.input_tokens,
