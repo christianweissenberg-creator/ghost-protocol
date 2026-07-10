@@ -28,22 +28,22 @@ from agents.router.providers import calculate_cost
 
 AGENT_MODELS = {
     # Tier 0 — Brain (Sonnet für komplexe Orchestrierung)
-    "DONNA": "claude-sonnet-4-20250514",
-    "STRATEGIST": "claude-sonnet-4-20250514",
+    "DONNA": "claude-sonnet-5",
+    "STRATEGIST": "claude-sonnet-5",
     # Tier 1 — C-Suite
-    "OPERATOR": "claude-sonnet-4-20250514",
-    "ORACLE": "claude-sonnet-4-20250514",
-    "ARCHITECT": "claude-sonnet-4-20250514",
+    "OPERATOR": "claude-sonnet-5",
+    "ORACLE": "claude-sonnet-5",
+    "ARCHITECT": "claude-sonnet-5",
     "TREASURER": "claude-haiku-4-5-20251001",
-    "PUBLISHER": "claude-sonnet-4-20250514",
-    "COUNSEL": "claude-sonnet-4-20250514",
+    "PUBLISHER": "claude-sonnet-5",
+    "COUNSEL": "claude-sonnet-5",
     # Tier 2 — Directors
-    "AMPLIFIER": "claude-sonnet-4-20250514",
-    "MERCHANT": "claude-sonnet-4-20250514",
-    "RESEARCHER": "claude-sonnet-4-20250514",
+    "AMPLIFIER": "claude-sonnet-5",
+    "MERCHANT": "claude-sonnet-5",
+    "RESEARCHER": "claude-sonnet-5",
     # Tier 3 — Operators (Haiku für Kosteneffizienz)
-    "SCRIBE": "claude-sonnet-4-20250514",
-    "TRADER": "claude-sonnet-4-20250514",
+    "SCRIBE": "claude-sonnet-5",
+    "TRADER": "claude-sonnet-5",
     "GUARDIAN": "claude-haiku-4-5-20251001",
     "CONCIERGE": "claude-haiku-4-5-20251001",
     "LOCALIZER": "claude-haiku-4-5-20251001",

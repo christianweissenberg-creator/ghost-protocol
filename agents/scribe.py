@@ -24,7 +24,7 @@ class ScribeAgent(BaseAgent):
             name="scribe",
             role="Content Producer — Blog, Newsletter, Social, Sales Copy",
             tier=AgentTier.OPERATOR,
-            llm_model="claude-sonnet-4-20250514",
+            llm_model="claude-sonnet-5",
             max_tokens=4096,
             temperature=0.6,
             channels=["#content"],

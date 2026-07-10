@@ -31,7 +31,7 @@ class DonnaAgent(BaseAgent):
             name="donna",
             role="Chief of Staff — Orchestrierung, Delegation, Konfliktloesung",
             tier=AgentTier.BRAIN,
-            llm_model="claude-sonnet-4-20250514",
+            llm_model="claude-sonnet-5",
             max_tokens=4096,
             temperature=0.3,
             channels=[

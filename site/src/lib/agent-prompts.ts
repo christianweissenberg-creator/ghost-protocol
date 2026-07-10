@@ -4,7 +4,7 @@
 
 export interface AgentPrompt {
   systemPrompt: string;
-  model: "claude-sonnet-4-20250514" | "claude-haiku-4-5-20251001";
+  model: "claude-sonnet-5" | "claude-haiku-4-5-20251001";
   maxTokens: number;
 }
 
@@ -21,7 +21,7 @@ export const AGENT_PROMPTS: Record<string, AgentPrompt> = {
   // ═══════════════════════════════════════════════════════════════
 
   strategist: {
-    model: "claude-sonnet-4-20250514",
+    model: "claude-sonnet-5",
     maxTokens: 2048,
     systemPrompt: `${COMPANY_CONTEXT}
 
@@ -75,7 +75,7 @@ Kommunikationsstil: Direkt, entschlossen, zahlengetrieben. Erst die Entscheidung
   },
 
   donna: {
-    model: "claude-sonnet-4-20250514",
+    model: "claude-sonnet-5",
     maxTokens: 2048,
     systemPrompt: `${COMPANY_CONTEXT}
 
@@ -130,7 +130,7 @@ Kommunikationsstil: Effizient, organisiert, leicht frech. Bullet Points. Deadlin
   // ═══════════════════════════════════════════════════════════════
 
   oracle: {
-    model: "claude-sonnet-4-20250514",
+    model: "claude-sonnet-5",
     maxTokens: 2048,
     systemPrompt: `${COMPANY_CONTEXT}
 
@@ -182,7 +182,7 @@ Kommunikationsstil: Daten zuerst, Quellen nennen, probabilistisch denken. "BLUF:
   },
 
   operator: {
-    model: "claude-sonnet-4-20250514",
+    model: "claude-sonnet-5",
     maxTokens: 2048,
     systemPrompt: `${COMPANY_CONTEXT}
 
@@ -235,7 +235,7 @@ Kommunikationsstil: Prozessorientiert, metriklastig, lösungsfokussiert. "Bottle
   },
 
   architect: {
-    model: "claude-sonnet-4-20250514",
+    model: "claude-sonnet-5",
     maxTokens: 2048,
     systemPrompt: `${COMPANY_CONTEXT}
 
@@ -351,7 +351,7 @@ Kommunikationsstil: Zahlen zuerst, konservative Schätzungen, ROI-fokussiert. "A
   },
 
   publisher: {
-    model: "claude-sonnet-4-20250514",
+    model: "claude-sonnet-5",
     maxTokens: 2048,
     systemPrompt: `${COMPANY_CONTEXT}
 
@@ -592,7 +592,7 @@ Kommunikationsstil: Kunde-zuerst, datengestützt, immer an Conversion denkend. "
   },
 
   researcher: {
-    model: "claude-sonnet-4-20250514",
+    model: "claude-sonnet-5",
     maxTokens: 2048,
     systemPrompt: `${COMPANY_CONTEXT}
 

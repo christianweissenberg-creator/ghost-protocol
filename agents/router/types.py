@@ -57,7 +57,7 @@ class RoutingRule:
     primary: Provider
     fallback: Provider = Provider.ANTHROPIC
     primary_model: str = ""
-    fallback_model: str = "claude-sonnet-4-20250514"
+    fallback_model: str = "claude-sonnet-5"
 
 
 # Default routing table — optimized for Ghost Protocol cost/quality
@@ -66,12 +66,12 @@ DEFAULT_ROUTING: list[RoutingRule] = [
         category=TaskCategory.RESEARCH,
         primary=Provider.PERPLEXITY,
         primary_model="sonar-pro",
-        fallback_model="claude-sonnet-4-20250514",
+        fallback_model="claude-sonnet-5",
     ),
     RoutingRule(
         category=TaskCategory.SCORING_CRITICAL,
         primary=Provider.ANTHROPIC,
-        primary_model="claude-sonnet-4-20250514",
+        primary_model="claude-sonnet-5",
     ),
     RoutingRule(
         category=TaskCategory.SCORING_ROUTINE,
@@ -82,7 +82,7 @@ DEFAULT_ROUTING: list[RoutingRule] = [
     RoutingRule(
         category=TaskCategory.ANALYSIS,
         primary=Provider.ANTHROPIC,
-        primary_model="claude-sonnet-4-20250514",
+        primary_model="claude-sonnet-5",
     ),
     RoutingRule(
         category=TaskCategory.FORMATTING,
@@ -106,6 +106,6 @@ DEFAULT_ROUTING: list[RoutingRule] = [
     RoutingRule(
         category=TaskCategory.GENERAL,
         primary=Provider.ANTHROPIC,
-        primary_model="claude-sonnet-4-20250514",
+        primary_model="claude-sonnet-5",
     ),
 ]

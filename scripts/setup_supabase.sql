@@ -23,7 +23,7 @@ CREATE TABLE IF NOT EXISTS agents (
     name TEXT NOT NULL,                      -- Display Name z.B. "ORACLE"
     role TEXT NOT NULL,                      -- z.B. "Chief Intelligence Officer"
     tier INTEGER NOT NULL DEFAULT 1,         -- 0=Brain, 1=C-Suite, 2=Director, 3=Operator
-    llm_model TEXT NOT NULL DEFAULT 'claude-sonnet-4-20250514',
+    llm_model TEXT NOT NULL DEFAULT 'claude-sonnet-5',
     status TEXT NOT NULL DEFAULT 'offline',  -- online, offline, error, maintenance
     channels TEXT[] DEFAULT '{}',            -- Channels die der Agent abonniert hat
     last_heartbeat TIMESTAMPTZ,
@@ -37,19 +37,19 @@ CREATE TABLE IF NOT EXISTS agents (
 
 -- Seed die 17 Agenten
 INSERT INTO agents (id, name, role, tier, llm_model, channels) VALUES
-    ('strategist', 'STRATEGIST', 'Chief Executive Officer', 0, 'claude-sonnet-4-20250514', ARRAY['#boardroom', '#ops', '#emergency']),
-    ('donna', 'DONNA', 'Chief of Staff', 0, 'claude-sonnet-4-20250514', ARRAY['#boardroom', '#ops', '#market-intel', '#content', '#legal-review', '#revenue', '#growth', '#emergency']),
-    ('operator', 'OPERATOR', 'Chief Operating Officer', 1, 'claude-sonnet-4-20250514', ARRAY['#boardroom', '#ops', '#emergency']),
-    ('oracle', 'ORACLE', 'Chief Intelligence Officer', 1, 'claude-sonnet-4-20250514', ARRAY['#boardroom', '#market-intel', '#ops']),
-    ('architect', 'ARCHITECT', 'Chief Technology Officer', 1, 'claude-sonnet-4-20250514', ARRAY['#boardroom', '#ops', '#emergency']),
+    ('strategist', 'STRATEGIST', 'Chief Executive Officer', 0, 'claude-sonnet-5', ARRAY['#boardroom', '#ops', '#emergency']),
+    ('donna', 'DONNA', 'Chief of Staff', 0, 'claude-sonnet-5', ARRAY['#boardroom', '#ops', '#market-intel', '#content', '#legal-review', '#revenue', '#growth', '#emergency']),
+    ('operator', 'OPERATOR', 'Chief Operating Officer', 1, 'claude-sonnet-5', ARRAY['#boardroom', '#ops', '#emergency']),
+    ('oracle', 'ORACLE', 'Chief Intelligence Officer', 1, 'claude-sonnet-5', ARRAY['#boardroom', '#market-intel', '#ops']),
+    ('architect', 'ARCHITECT', 'Chief Technology Officer', 1, 'claude-sonnet-5', ARRAY['#boardroom', '#ops', '#emergency']),
     ('treasurer', 'TREASURER', 'Chief Financial Officer', 1, 'claude-haiku-4-5-20251001', ARRAY['#boardroom', '#revenue', '#ops']),
-    ('publisher', 'PUBLISHER', 'Chief Marketing Officer', 1, 'claude-sonnet-4-20250514', ARRAY['#boardroom', '#content', '#growth']),
-    ('counsel', 'COUNSEL', 'Chief Legal Officer', 1, 'claude-sonnet-4-20250514', ARRAY['#boardroom', '#legal-review', '#content']),
-    ('amplifier', 'AMPLIFIER', 'Head of Growth', 2, 'claude-sonnet-4-20250514', ARRAY['#growth', '#content']),
-    ('merchant', 'MERCHANT', 'Head of Product', 2, 'claude-sonnet-4-20250514', ARRAY['#revenue', '#content']),
-    ('researcher', 'RESEARCHER', 'Head of Research', 2, 'claude-sonnet-4-20250514', ARRAY['#market-intel', '#content']),
-    ('scribe', 'SCRIBE', 'Content Producer', 3, 'claude-sonnet-4-20250514', ARRAY['#content']),
-    ('trader', 'TRADER', 'Market Analyst', 3, 'claude-sonnet-4-20250514', ARRAY['#market-intel']),
+    ('publisher', 'PUBLISHER', 'Chief Marketing Officer', 1, 'claude-sonnet-5', ARRAY['#boardroom', '#content', '#growth']),
+    ('counsel', 'COUNSEL', 'Chief Legal Officer', 1, 'claude-sonnet-5', ARRAY['#boardroom', '#legal-review', '#content']),
+    ('amplifier', 'AMPLIFIER', 'Head of Growth', 2, 'claude-sonnet-5', ARRAY['#growth', '#content']),
+    ('merchant', 'MERCHANT', 'Head of Product', 2, 'claude-sonnet-5', ARRAY['#revenue', '#content']),
+    ('researcher', 'RESEARCHER', 'Head of Research', 2, 'claude-sonnet-5', ARRAY['#market-intel', '#content']),
+    ('scribe', 'SCRIBE', 'Content Producer', 3, 'claude-sonnet-5', ARRAY['#content']),
+    ('trader', 'TRADER', 'Market Analyst', 3, 'claude-sonnet-5', ARRAY['#market-intel']),
     ('guardian', 'GUARDIAN', 'Data Engineer & Monitor', 3, 'claude-haiku-4-5-20251001', ARRAY['#ops', '#emergency']),
     ('concierge', 'CONCIERGE', 'Community Support', 3, 'claude-haiku-4-5-20251001', ARRAY['#growth']),
     ('localizer', 'LOCALIZER', 'Cultural Intelligence', 3, 'claude-haiku-4-5-20251001', ARRAY['#content'])

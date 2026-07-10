@@ -24,7 +24,7 @@ class OperatorAgent(BaseAgent):
             name="operator",
             role="Chief Operating Officer — Workflow/SLA/QA, Pipeline-Optimierung",
             tier=AgentTier.C_SUITE,
-            llm_model="claude-sonnet-4-20250514",
+            llm_model="claude-sonnet-5",
             max_tokens=4096,
             temperature=0.2,
             channels=["#boardroom", "#ops", "#emergency"],

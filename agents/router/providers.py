@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 # Provider pricing per 1M tokens (USD)
 PRICING: dict[str, dict[str, float]] = {
     # Anthropic
-    "claude-sonnet-4-20250514": {"input": 3.0, "output": 15.0},
+    "claude-sonnet-5": {"input": 3.0, "output": 15.0},
     "claude-haiku-4-5-20251001": {"input": 0.25, "output": 1.25},
     # Perplexity
     "sonar-pro": {"input": 3.0, "output": 15.0},

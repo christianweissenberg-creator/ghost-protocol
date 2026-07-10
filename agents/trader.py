@@ -24,7 +24,7 @@ class TraderAgent(BaseAgent):
             name="trader",
             role="Market Analyst — Elliott Wave, Risk Management, Trade Execution",
             tier=AgentTier.OPERATOR,
-            llm_model="claude-sonnet-4-20250514",
+            llm_model="claude-sonnet-5",
             max_tokens=4096,
             temperature=0.2,
             channels=["#market-intel", "#trading"],

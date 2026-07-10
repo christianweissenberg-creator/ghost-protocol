@@ -50,7 +50,7 @@ class OracleAgent(BaseAgent):
             name="oracle",
             role="Chief Intelligence Officer — Markt-Intelligence, Trend-Detection, Opportunity-Scoring",
             tier=AgentTier.C_SUITE,
-            llm_model="claude-sonnet-4-20250514",
+            llm_model="claude-sonnet-5",
             max_tokens=4096,
             temperature=0.2,
             channels=["#market-intel", "#boardroom"],

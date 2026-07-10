@@ -16,7 +16,7 @@ load_dotenv()
 logger: logging.Logger = logging.getLogger(__name__)
 
 # === LLM Config ===
-LLM_COMPLEX: str = os.getenv("MODEL_COMPLEX", "claude-sonnet-4-20250514")
+LLM_COMPLEX: str = os.getenv("MODEL_COMPLEX", "claude-sonnet-5")
 LLM_SIMPLE: str = os.getenv("MODEL_SIMPLE", "claude-haiku-4-5-20251001")
 ANTHROPIC_API_KEY: Optional[str] = os.getenv("ANTHROPIC_API_KEY")
 

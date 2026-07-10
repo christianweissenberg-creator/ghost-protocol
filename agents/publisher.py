@@ -25,7 +25,7 @@ class PublisherAgent(BaseAgent):
             name="publisher",
             role="Chief Marketing Officer — Content/SEO/Social, Distribution-Strategie",
             tier=AgentTier.C_SUITE,
-            llm_model="claude-sonnet-4-20250514",
+            llm_model="claude-sonnet-5",
             max_tokens=4096,
             temperature=0.4,
             channels=["#boardroom", "#content", "#growth"],

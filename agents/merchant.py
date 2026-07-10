@@ -24,7 +24,7 @@ class MerchantAgent(BaseAgent):
             name="merchant",
             role="Head of Product — Validierung, Pricing, Launch-Strategie",
             tier=AgentTier.DIRECTOR,
-            llm_model="claude-sonnet-4-20250514",
+            llm_model="claude-sonnet-5",
             max_tokens=4096,
             temperature=0.3,
             channels=["#revenue", "#content"],

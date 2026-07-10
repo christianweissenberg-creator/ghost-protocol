@@ -25,7 +25,7 @@ class CounselAgent(BaseAgent):
             name="counsel",
             role="Chief Legal Officer — MiCA/BaFin/DSGVO Compliance, Content-Gatekeeper",
             tier=AgentTier.C_SUITE,
-            llm_model="claude-sonnet-4-20250514",
+            llm_model="claude-sonnet-5",
             max_tokens=4096,
             temperature=0.1,
             channels=["#boardroom", "#legal-review", "#content"],

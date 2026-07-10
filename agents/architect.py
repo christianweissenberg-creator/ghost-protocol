@@ -24,7 +24,7 @@ class ArchitectAgent(BaseAgent):
             name="architect",
             role="Chief Technology Officer — Platform/Infra, Cost-Optimierung",
             tier=AgentTier.C_SUITE,
-            llm_model="claude-sonnet-4-20250514",
+            llm_model="claude-sonnet-5",
             max_tokens=4096,
             temperature=0.2,
             channels=["#boardroom", "#ops", "#emergency"],

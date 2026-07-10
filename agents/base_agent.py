@@ -131,7 +131,7 @@ class AgentConfig:
     name: str
     role: str
     tier: AgentTier
-    llm_model: str = "claude-sonnet-4-20250514"  # Default: Sonnet for complex tasks
+    llm_model: str = "claude-sonnet-5"  # Default: Sonnet for complex tasks
     max_tokens: int = 4096
     temperature: float = 0.3
     channels: list[str] = field(default_factory=list)  # Channels this agent listens to

@@ -23,7 +23,7 @@ class AmplifierAgent(BaseAgent):
             name="amplifier",
             role="Head of Growth — Viral Loops, Community, Funnel-Optimierung",
             tier=AgentTier.DIRECTOR,
-            llm_model="claude-sonnet-4-20250514",
+            llm_model="claude-sonnet-5",
             max_tokens=4096,
             temperature=0.5,
             channels=["#growth", "#content"],

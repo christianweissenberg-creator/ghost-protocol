@@ -31,7 +31,7 @@ class StrategistAgent(BaseAgent):
             name="strategist",
             role="Chief Executive Officer — Revenue Staircase, Budget-Allokation, Go/Kill-Decisions",
             tier=AgentTier.BRAIN,
-            llm_model="claude-sonnet-4-20250514",
+            llm_model="claude-sonnet-5",
             max_tokens=4096,
             temperature=0.3,
             channels=["#boardroom", "#ops", "#emergency"],

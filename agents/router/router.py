@@ -105,7 +105,7 @@ class ModelRouter:
         anthropic = self.get_provider(Provider.ANTHROPIC)
         if anthropic:
             logger.warning("Double fallback to Anthropic for %s", category.value)
-            return anthropic, "claude-sonnet-4-20250514"
+            return anthropic, "claude-sonnet-5"
 
         raise RuntimeError("No LLM provider available — check API keys")
 
@@ -167,7 +167,7 @@ class ModelRouter:
                 if anthropic:
                     logger.info("Error fallback → Anthropic")
                     return await anthropic.complete(
-                        model="claude-sonnet-4-20250514",
+                        model="claude-sonnet-5",
                         system=system,
                         user_message=user_message,
                         max_tokens=max_tokens,
@@ -262,7 +262,7 @@ class ModelRouter:
     def _default_model(provider: Provider) -> str:
         """Default model for each provider."""
         return {
-            Provider.ANTHROPIC: "claude-sonnet-4-20250514",
+            Provider.ANTHROPIC: "claude-sonnet-5",
             Provider.PERPLEXITY: "sonar-pro",
             Provider.GEMINI: "gemini-2.5-flash",
             Provider.QWEN: "qwen-max",
