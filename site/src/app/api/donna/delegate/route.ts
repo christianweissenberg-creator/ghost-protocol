@@ -98,7 +98,9 @@ REGELN:
       planningPrompt,
       `TASK: ${task}`,
       donnaPrompt?.model ?? "claude-haiku-4-5-20251001",
-      1024
+      // Sonnet-5 verbraucht Budget fuer thinking-Bloecke VOR dem Text —
+      // 1024 schnitt das Plan-JSON mittendrin ab (Parse-Fail → 500)
+      4096
     );
 
     // Parse DONNA's delegation plan
