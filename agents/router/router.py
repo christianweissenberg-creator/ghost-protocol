@@ -239,10 +239,10 @@ class ModelRouter:
         from agents.router.providers import calculate_cost
 
         start = time.monotonic()
+        # temperature bewusst NICHT übergeben — bei Claude-4.5+/5-Modellen deprecated (API 400)
         response = client._client.messages.create(
             model=model,
             max_tokens=max_tokens,
-            temperature=temperature,
             system=system,
             messages=[{"role": "user", "content": user_message}],
         )

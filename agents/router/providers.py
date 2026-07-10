@@ -89,10 +89,10 @@ class AnthropicProvider(BaseLLMProvider):
         temperature: float = 0.3,
     ) -> LLMResponse:
         start = time.monotonic()
+        # temperature bewusst NICHT übergeben — bei Claude-4.5+/5-Modellen deprecated (API 400)
         response = self._client.messages.create(
             model=model,
             max_tokens=max_tokens,
-            temperature=temperature,
             system=system,
             messages=[{"role": "user", "content": user_message}],
         )
