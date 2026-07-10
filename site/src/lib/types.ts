@@ -57,7 +57,7 @@ export const TIER_META: Record<AgentTier, { label: string; color: string; descri
 // Agent registry with personas
 export const AGENT_REGISTRY: Record<string, { icon: string; persona: string; tierColor: string }> = {
   STRATEGIST: { icon: "S", persona: "Elon Musk meets Jeff Bezos", tierColor: "#ff3366" },
-  DONNA: { icon: "D", persona: "Donna Paulsen — Chief of Staff", tierColor: "#ff3366" },
+  DONNA: { icon: "L", persona: "L.I.S.A. — Executive-COO-KI (Donna Paulsen × Pepper Potts)", tierColor: "#ff3366" },
   OPERATOR: { icon: "OP", persona: "Tim Cook", tierColor: "#8b5cf6" },
   ORACLE: { icon: "OR", persona: "Jim Simons", tierColor: "#8b5cf6" },
   ARCHITECT: { icon: "AR", persona: "Jensen Huang", tierColor: "#8b5cf6" },

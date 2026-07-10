@@ -1,4 +1,4 @@
-"""Ghost Protocol — Donna Agent (DONNA).
+"""Ghost Protocol — L.I.S.A. Agent (interner Slug: donna).
 
 Chief of Staff — Orchestrierung zwischen CEO und allen 17 Agenten.
 Monitort Agent-Status, antizipiert Engpaesse, loest Konflikte,
@@ -18,7 +18,7 @@ logger: logging.Logger = logging.getLogger(__name__)
 
 
 class DonnaAgent(BaseAgent):
-    """DONNA — Chief of Staff.
+    """L.I.S.A. — Executive-COO-KI & Chief of Staff (Donna Paulsen × Pepper Potts).
 
     Workflow:
     1. Empfaengt Inputs von allen Agenten und STRATEGIST

@@ -62,7 +62,7 @@ const TRAINING_DATA: TrainingModule[] = [
   },
   {
     agentId: "donna",
-    agentName: "DONNA",
+    agentName: "L.I.S.A.",
     role: "Chief of Staff",
     tier: 0,
     tierColor: "#f43f5e",
@@ -411,7 +411,7 @@ const TRAINING_DATA: TrainingModule[] = [
     ],
     crossTraining: [
       { partner: "ARCHITECT", thema: "Infrastructure Design" },
-      { partner: "DONNA", thema: "Incident Command & Eskalation" },
+      { partner: "L.I.S.A.", thema: "Incident Command & Eskalation" },
       { partner: "COUNSEL", thema: "Datenschutz-Technik (TOMs)" },
     ],
     pruefungsfragen: [
@@ -591,7 +591,7 @@ export default function AcademyPage() {
         </p>
         <div className="mt-3 flex gap-4 text-xs">
           <div className="px-3 py-1.5 rounded-lg bg-accent-violet/10 text-accent-violet">
-            Erstellt: DONNA (Chief of Staff)
+            Erstellt: L.I.S.A. (Executive-COO-KI)
           </div>
           <div className="px-3 py-1.5 rounded-lg bg-surface-elevated text-text-secondary">
             Q2 2026 Curriculum

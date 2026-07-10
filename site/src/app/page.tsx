@@ -113,12 +113,12 @@ export default function CommandCenter() {
         />
       </div>
 
-      {/* DONNA Quick-Delegate */}
+      {/* L.I.S.A. Quick-Delegate */}
       <div className="card-ghost p-5 mb-8">
         <div className="flex items-center gap-2 mb-3">
           <span className="text-accent-rose text-lg">◈</span>
           <h2 className="text-sm font-semibold font-[family-name:var(--font-outfit)] tracking-tight">
-            DONNA — Task delegieren
+            L.I.S.A. — Task delegieren
           </h2>
           <span className="text-[10px] text-text-muted ml-auto uppercase tracking-widest">
             Auto-Delegation

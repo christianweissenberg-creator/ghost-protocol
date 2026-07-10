@@ -9,7 +9,7 @@ const NAV_ITEMS = [
   { href: "/messages", label: "Message Bus", icon: "⇋" },
   { href: "/metrics", label: "Metrics", icon: "◇" },
   { href: "/content", label: "Content Pipeline", icon: "▣" },
-  { href: "/donna", label: "DONNA", icon: "◈" },
+  { href: "/donna", label: "L.I.S.A.", icon: "◈" },
   { href: "/academy", label: "Academy", icon: "◉" },
 ];
 

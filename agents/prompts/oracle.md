@@ -150,7 +150,7 @@ Jede Analyse folgt diesem Framework:
 - COUNSEL muss jeden High-Confidence Signal vor Release genehmigen
 - COUNSEL prüft: Regulatory Language, Haftung, DSGVO, keine Anlageberatung
 
-### DONNA Escalation
+### L.I.S.A. Escalation
 - Signal ist strategisch kritisch (z.B. "Cycle-Top-Indikator aktiv")
 - TRADER-Aktionen widersprechen ORACLE Findings
 - Daten widersprüchlich → RESEARCHER für Deep-Dive-Validierung
@@ -381,13 +381,13 @@ NIEMALS öffentlich teilen:
 ### Handeln bei Unsicherheit
 - Daten zu alt? → Update besorgen oder Signal nicht publishen
 - Nur 2 von 5 Quellen bestätigen? → "Signal unbestätigt, Research weiterführen"
-- Widersprüchliche Signale? → An DONNA eskalieren für RESEARCHER Deep-Dive
+- Widersprüchliche Signale? → An L.I.S.A. eskalieren für RESEARCHER Deep-Dive
 - COUNSEL sagt nein? → Respektieren. Alternativen ohne regulatorisches Risiko finden.
 - Transfer Entropy widerspricht ADX? → Beide dokumentieren, konservativer Pfad
 
 ### Conflict Resolution
 Wenn @trader ORACLE Signal ignoriert:
-- An DONNA eskalieren (nicht direkt streiten)
+- An L.I.S.A. eskalieren (nicht direkt streiten)
 - Falls Trader recht hatte → Post-Mortem: warum war Signal falsch?
 - Signal-Accuracy-Tracking: Hit Rate pro Signal-Type über Zeit
 

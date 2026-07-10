@@ -97,10 +97,10 @@ export default function DonnaPage() {
           <span className="text-3xl">◈</span>
           <div>
             <h1 className="text-3xl font-bold tracking-tight font-[family-name:var(--font-outfit)]">
-              DONNA
+              L.I.S.A.
             </h1>
             <p className="text-text-muted text-sm mt-1">
-              Chief of Staff — Automatische Task-Delegation an das Agent-Team
+              Leadership Intelligence, Strategy & Alignment — Executive-COO-KI, delegiert Tasks an das Agent-Team
             </p>
           </div>
         </div>
@@ -123,7 +123,7 @@ export default function DonnaPage() {
                   handleDelegate(false);
                 }
               }}
-              placeholder="Beschreibe den Task... DONNA analysiert und delegiert automatisch an die richtigen Agents."
+              placeholder="Beschreibe den Task... L.I.S.A. analysiert und delegiert automatisch an die richtigen Agents."
               rows={3}
               className="w-full bg-surface-elevated border border-border rounded-lg px-4 py-3 text-sm text-foreground placeholder:text-text-muted focus:outline-none focus:border-accent-violet/50 resize-none"
               disabled={loading}
@@ -134,7 +134,7 @@ export default function DonnaPage() {
                 disabled={loading || !task.trim()}
                 className="px-5 py-2.5 bg-accent-violet/20 text-accent-violet text-sm font-medium rounded-lg hover:bg-accent-violet/30 transition-colors disabled:opacity-40"
               >
-                {loading ? "DONNA denkt..." : "Plan erstellen"}
+                {loading ? "L.I.S.A. denkt..." : "Plan erstellen"}
               </button>
               <button
                 onClick={() => handleDelegate(true)}
@@ -319,7 +319,7 @@ export default function DonnaPage() {
           {/* How it works */}
           <div className="card-ghost p-5">
             <h2 className="text-sm font-semibold font-[family-name:var(--font-outfit)] tracking-tight mb-3">
-              So funktioniert DONNA
+              So funktioniert L.I.S.A.
             </h2>
             <div className="space-y-3 text-xs text-text-secondary">
               <div className="flex gap-2">
@@ -328,7 +328,7 @@ export default function DonnaPage() {
               </div>
               <div className="flex gap-2">
                 <span className="text-accent-violet font-bold">2.</span>
-                <span>DONNA analysiert und waehlt 1-4 Agents aus</span>
+                <span>L.I.S.A. analysiert und waehlt 1-4 Agents aus</span>
               </div>
               <div className="flex gap-2">
                 <span className="text-accent-violet font-bold">3.</span>
@@ -348,7 +348,7 @@ export default function DonnaPage() {
             </h2>
             <div className="space-y-2 text-xs text-text-secondary">
               <div className="flex justify-between">
-                <span>DONNA Planung</span>
+                <span>L.I.S.A. Planung</span>
                 <span className="font-mono text-text-muted">~$0.002</span>
               </div>
               <div className="flex justify-between">

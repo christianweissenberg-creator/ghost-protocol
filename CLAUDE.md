@@ -49,7 +49,7 @@ Ghost Protocol (Unternehmen)
 | Agent | Rolle | LLM | Rating |
 |-------|-------|-----|--------|
 | STRATEGIST | CEO — Revenue Staircase, Indie-Hacker | Sonnet | 8/10 |
-| DONNA | Chief of Staff — Orchestrierung | Sonnet | 8/10 |
+| L.I.S.A. (Slug: donna) | Executive-COO-KI — Orchestrierung (Donna Paulsen × Pepper Potts) | Sonnet | 8/10 |
 | CASSANDRA | Chief Risk & Pre-Mortem Officer — Pflicht-Review, Kill-Kriterien | Sonnet | NEU (11.06) |
 
 ### Tier 1 — C-Suite

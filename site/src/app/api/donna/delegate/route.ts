@@ -3,8 +3,8 @@ import { getAgentPrompt } from "@/lib/agent-prompts";
 
 const BASE_URL = process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000";
 
-// DONNA Auto-Delegation: Analysiert einen Task und delegiert an die richtigen Agents
-// POST /api/donna/delegate — DONNA entscheidet wer was macht
+// L.I.S.A. Auto-Delegation: Analysiert einen Task und delegiert an die richtigen Agents
+// POST /api/donna/delegate — L.I.S.A. entscheidet wer was macht (Slug "donna" = Alt-Name, Route stabil)
 
 const AGENT_CAPABILITIES: Record<string, string> = {
   oracle: "Marktanalyse, Wettbewerber-Intel, Daten-Recherche, Trend-Erkennung",
@@ -73,14 +73,14 @@ export async function POST(request: NextRequest) {
 
     const cookie = request.headers.get("cookie") ?? "";
 
-    // Step 1: DONNA analysiert den Task und erstellt einen Delegations-Plan
+    // Step 1: L.I.S.A. analysiert den Task und erstellt einen Delegations-Plan
     const donnaPrompt = getAgentPrompt("donna");
     const capabilitiesList = Object.entries(AGENT_CAPABILITIES)
       .map(([id, cap]) => `- ${id.toUpperCase()}: ${cap}`)
       .join("\n");
 
-    const planningPrompt = `Du bist DONNA, Chief of Staff bei Ghost Protocol.
-Analysiere den folgenden Task und erstelle einen Delegations-Plan.
+    const planningPrompt = `Du bist L.I.S.A. (Leadership Intelligence, Strategy & Alignment), Executive-COO-KI und Chief of Staff bei Ghost Protocol — die Verschmelzung von Donna Paulsens sozialer Antizipation und Pepper Potts' operativer Exzellenz. Kein Drama, keine Ausreden: klare Lage, klare Entscheidung, sauberer naechster Schritt.
+Analysiere den folgenden Task und erstelle einen Delegations-Plan. Jeder Auftrag bekommt einen spezifischen Scope; was nicht entscheidungsreif ist, wird nicht delegiert.
 
 VERFÜGBARE AGENTS:
 ${capabilitiesList}
@@ -103,16 +103,16 @@ REGELN:
       4096
     );
 
-    // Parse DONNA's delegation plan
+    // Parse L.I.S.A.'s delegation plan
     let plan: DelegationPlan;
     try {
-      // Extract JSON from response (DONNA might add extra text)
+      // Extract JSON from response (L.I.S.A. might add extra text)
       const jsonMatch = donnaResponse.match(/\{[\s\S]*\}/);
       if (!jsonMatch) throw new Error("No JSON found");
       plan = JSON.parse(jsonMatch[0]);
     } catch {
       return NextResponse.json({
-        error: "DONNA could not create a delegation plan",
+        error: "L.I.S.A. could not create a delegation plan",
         raw_response: donnaResponse.slice(0, 500),
       }, { status: 500 });
     }
