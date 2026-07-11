@@ -304,6 +304,20 @@ body {
   border-bottom-right-radius: 8px;
 }
 
+/* Mobile-Drawer für die Sidebar (robust, ohne Tailwind-translate-Quirks) */
+.gp-drawer {
+  transform: translateX(-100%);
+  transition: transform 0.3s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.gp-drawer.is-open {
+  transform: translateX(0);
+}
+@media (min-width: 1024px) {
+  .gp-drawer {
+    transform: translateX(0) !important;
+  }
+}
+
 /* Mono-Label (§3) */
 .mono-label {
   font-family: var(--font-jbmono);

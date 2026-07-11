@@ -72,7 +72,7 @@ export default function CommandCenter() {
   );
 
   return (
-    <div className="boot p-10 max-w-[1240px]">
+    <div className="boot p-4 sm:p-6 lg:p-10 max-w-[1240px]">
       {/* §9.5 Masthead */}
       <Masthead
         index="01 / LAGE"
@@ -211,9 +211,9 @@ export default function CommandCenter() {
       </div>
 
       {/* Main Grid: Agents + Messages */}
-      <div className="grid grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Agent Grid — 2 columns */}
-        <div className="col-span-2">
+        <div className="lg:col-span-2">
           <div className="flex items-center justify-between mb-4">
             <h2 className="font-[family-name:var(--font-cormorant)] font-semibold text-[26px] tracking-tight">
               Agent<em style={{ fontStyle: "italic", color: "var(--gp-gold)" }}>flotte</em>
@@ -236,7 +236,7 @@ export default function CommandCenter() {
           </div>
 
           {agentsLoading ? (
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               {Array.from({ length: 6 }).map((_, i) => (
                 <div key={i} className="card-ghost p-4 h-36 animate-pulse">
                   <div className="h-3 bg-surface-elevated rounded w-1/3 mb-3" />
@@ -246,7 +246,7 @@ export default function CommandCenter() {
               ))}
             </div>
           ) : (
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               {agents.map((agent) => (
                 <AgentCard key={agent.id} agent={agent} />
               ))}

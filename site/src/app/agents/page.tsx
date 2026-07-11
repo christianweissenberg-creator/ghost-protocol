@@ -64,7 +64,7 @@ export default function AgentsPage() {
   const useStatic = !loading && agents.length === 0;
 
   return (
-    <div className="boot p-10 max-w-[1400px]">
+    <div className="boot p-4 sm:p-6 lg:p-10 max-w-[1400px]">
       <div className="gp-masthead">
         <div className="gp-index-row"><span className="gp-index">02 / FLOTTE</span><span className="gp-index-rule" /><span className="mono-label">17 EINHEITEN · 4 TIERS</span></div>
         <p className="gp-kicker">Operator-Grid — Autonome KI-Corporation</p>
@@ -73,7 +73,7 @@ export default function AgentsPage() {
       </div>
 
       {loading ? (
-        <div className="grid grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
           {Array.from({ length: 9 }).map((_, i) => (
             <div key={i} className="card-ghost p-4 h-32 animate-pulse" />
           ))}
@@ -97,7 +97,7 @@ export default function AgentsPage() {
                     {meta.description} ({count})
                   </span>
                 </div>
-                <div className="grid grid-cols-3 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                   {useStatic
                     ? roster.map((a) => <RosterCard key={a.name} a={a} />)
                     : live.map((agent) => <AgentCard key={agent.id} agent={agent} />)}

@@ -100,7 +100,7 @@ export default function ExposePage() {
   const [openId, setOpenId] = useState<string | null>(null);
 
   return (
-    <div className="boot p-10 max-w-[1280px]">
+    <div className="boot p-4 sm:p-6 lg:p-10 max-w-[1280px]">
       <div className="gp-masthead">
         <div className="gp-index-row">
           <span className="gp-index">04 / EXPOSÉ</span>
@@ -171,7 +171,7 @@ export default function ExposePage() {
                   </p>
 
                   {/* Fakten-Grid */}
-                  <div className="grid grid-cols-3 gap-x-6 gap-y-3 mt-4">
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-6 gap-y-3 mt-4">
                     {o.facts.map((f) => (
                       <div key={f.k}>
                         <div className="font-[family-name:var(--font-jbmono)] text-[13px]" style={{ color: "var(--gp-ink)" }}>{f.v}</div>

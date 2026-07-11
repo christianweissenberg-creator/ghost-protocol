@@ -38,12 +38,12 @@ const TIER_INDICATORS = [
   { tier: 3, label: "Operators", color: "bg-accent-emerald" },
 ];
 
-export function Sidebar() {
+export function Sidebar({ open = false, onClose }: { open?: boolean; onClose?: () => void }) {
   const pathname = usePathname();
 
   return (
     <aside
-      className="fixed left-0 top-0 bottom-0 w-[252px] flex flex-col z-50"
+      className={`gp-drawer fixed left-0 top-0 bottom-0 w-[252px] flex flex-col z-50 ${open ? "is-open" : ""}`}
       style={{
         // Exakt aus Prototyp: Glas-Gradient + Gold-Border .8px + blur 26px
         background: "linear-gradient(rgba(17, 18, 24, 0.72), rgba(9, 10, 14, 0.6))",
@@ -76,6 +76,15 @@ export function Sidebar() {
           </h1>
           <p className="mono-label mt-1.5">Maschinenraum</p>
         </div>
+        {/* Close (nur mobil) */}
+        <button
+          onClick={onClose}
+          aria-label="Menü schließen"
+          className="lg:hidden ml-auto -mr-1 w-8 h-8 flex items-center justify-center rounded-lg"
+          style={{ color: "var(--gp-ink-3)", border: "1px solid var(--gp-hairline)" }}
+        >
+          ✕
+        </button>
       </div>
 
       {/* Gruppierte Navigation */}

@@ -90,7 +90,7 @@ export default function DonnaPage() {
   }
 
   return (
-    <div className="boot p-10 max-w-[1400px]">
+    <div className="boot p-4 sm:p-6 lg:p-10 max-w-[1400px]">
       {/* Header */}
       <div className="gp-masthead">
         <div className="gp-index-row"><span className="gp-index">06 / EXECUTIVE</span><span className="gp-index-rule" /></div>

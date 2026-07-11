@@ -40,7 +40,7 @@ export default function MessagesPage() {
   );
 
   return (
-    <div className="boot p-10 max-w-[1200px]">
+    <div className="boot p-4 sm:p-6 lg:p-10 max-w-[1200px]">
       {/* Header */}
       <div className="gp-masthead">
         <div className="gp-index-row"><span className="gp-index">03 / SIGNALE</span><span className="gp-index-rule" /></div>
