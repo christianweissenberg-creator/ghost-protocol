@@ -24,6 +24,7 @@ const NAV_GROUPS: { title: string; items: { href: string; label: string; glyph: 
   {
     title: "Produktion",
     items: [
+      { href: "/expose", label: "Exposé-Engine", glyph: "⌂" },
       { href: "/content", label: "Content-Pipeline", glyph: "▣" },
       { href: "/academy", label: "Academy", glyph: "◉" },
     ],

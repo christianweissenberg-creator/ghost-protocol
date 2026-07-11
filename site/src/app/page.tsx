@@ -4,10 +4,10 @@ import { useState } from "react";
 import { useAgents, useMessages } from "@/lib/hooks";
 import { TIER_META } from "@/lib/types";
 import { AgentCard } from "@/components/agents/AgentCard";
-import { KPICard } from "@/components/ui/KPICard";
 import { MessageFeed } from "@/components/ui/MessageFeed";
 import { Masthead } from "@/components/ui/Masthead";
 import { SituationTable } from "@/components/ui/SituationTable";
+import { NeuralCore, SystemTelemetry, BrandsEngines } from "@/components/ui/CommandPanels";
 import type { AgentTier } from "@/lib/types";
 
 interface DelegationAgent {
@@ -93,36 +93,11 @@ export default function CommandCenter() {
         <SituationTable />
       </div>
 
-      {/* KPI Row */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
-        <KPICard
-          label="Agents Total"
-          value={agents.length}
-          subtitle="17 geplant"
-          color="#8b5cf6"
-          icon="◎"
-        />
-        <KPICard
-          label="Active"
-          value={activeCount}
-          subtitle={`${agents.length - activeCount} idle/offline`}
-          color="#22c55e"
-          icon="◈"
-        />
-        <KPICard
-          label="Messages"
-          value={messages.length}
-          subtitle="Letzte 30"
-          color="#06b6d4"
-          icon="⇋"
-        />
-        <KPICard
-          label="Supabase"
-          value={agentsLoading ? "..." : "Connected"}
-          subtitle="Realtime aktiv"
-          color={agentsLoading ? "#f59e0b" : "#22c55e"}
-          icon="◇"
-        />
+      {/* Panel-Reihe: Neural Core · System-Telemetrie · Die Engines (nach Prototyp) */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-8">
+        <NeuralCore />
+        <SystemTelemetry activeAgents={activeCount} />
+        <BrandsEngines />
       </div>
 
       {/* L.I.S.A. Quick-Delegate */}
