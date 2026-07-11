@@ -1,14 +1,26 @@
 import { NextRequest, NextResponse } from "next/server";
+import { SESSION_COOKIE, getSessionSecret, signSession } from "@/lib/auth";
 
 const BASE_URL = process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000";
-const CRON_SECRET = process.env.CRON_SECRET || "ghost-cron-2026";
+// Kein schwacher Default mehr — ohne gesetztes CRON_SECRET ist der Endpunkt
+// deaktiviert (fail-closed).
+const CRON_SECRET = process.env.CRON_SECRET;
+
+// Interner Server-zu-Server-Call: gültiges, signiertes Session-Cookie erzeugen
+// (ersetzt das frühere statische "gp-auth=authenticated"). Host-unabhängig gültig;
+// bei localhost greift zusätzlich der Middleware-Bypass.
+async function internalCookie(): Promise<string> {
+  const secret = getSessionSecret();
+  if (!secret) return "";
+  return `${SESSION_COOKIE}=${await signSession(secret)}`;
+}
 
 async function activateAgent(agentId: string, task: string): Promise<string> {
   const res = await fetch(`${BASE_URL}/api/agents/activate`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Cookie: "gp-auth=authenticated",
+      Cookie: await internalCookie(),
     },
     body: JSON.stringify({ agent_id: agentId, task }),
   });
@@ -21,7 +33,7 @@ async function activateAgent(agentId: string, task: string): Promise<string> {
 // Called by external cron (Coolify/systemd timer) or manual trigger
 export async function GET(request: NextRequest) {
   const secret = request.nextUrl.searchParams.get("secret");
-  if (secret !== CRON_SECRET) {
+  if (!CRON_SECRET || secret !== CRON_SECRET) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 

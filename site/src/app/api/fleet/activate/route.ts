@@ -12,12 +12,16 @@ export async function POST(request: NextRequest) {
   const results: Array<{ agent_id: string; success: boolean; response?: string; error?: string; cost_usd?: number }> = [];
   let totalCost = 0;
 
+  // Caller ist bereits authentifiziert (Middleware) — dessen signiertes Cookie an
+  // den internen activate-Call weiterreichen, damit dieser das Auth-Gate passiert.
+  const cookie = request.headers.get("cookie") ?? "";
+
   for (const agentId of agents) {
     try {
       const baseUrl = request.nextUrl.origin;
       const res = await fetch(`${baseUrl}/api/agents/activate`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", Cookie: cookie },
         body: JSON.stringify({ agent_id: agentId, task }),
       });
 

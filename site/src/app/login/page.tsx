@@ -1,18 +1,37 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
 
 export default function LoginPage() {
   const [password, setPassword] = useState("");
-  const [error, setError] = useState(false);
-  const router = useRouter();
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
 
-  function handleSubmit(e: React.FormEvent) {
+  async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    setError(false);
-    // Navigate with password param — middleware handles the rest
-    window.location.href = `/?password=${encodeURIComponent(password)}`;
+    setError("");
+    setLoading(true);
+    try {
+      // Passwort im Body per POST — nicht in der URL (kein Log-/History-Leak).
+      const res = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ password }),
+      });
+      if (res.ok) {
+        window.location.href = "/";
+        return;
+      }
+      if (res.status === 429) {
+        setError("Zu viele Fehlversuche. Bitte einige Minuten warten.");
+      } else {
+        setError("Falsches Passwort");
+      }
+    } catch {
+      setError("Verbindungsfehler. Bitte erneut versuchen.");
+    } finally {
+      setLoading(false);
+    }
   }
 
   return (
@@ -40,18 +59,19 @@ export default function LoginPage() {
                 onChange={(e) => setPassword(e.target.value)}
                 placeholder="Zugangspasswort"
                 autoFocus
+                autoComplete="current-password"
                 className="w-full px-4 py-3 rounded-lg text-sm bg-[#1a1a22] border border-[#222230] text-white placeholder-[#555] focus:outline-none focus:border-[#8b5cf6] transition-colors"
               />
             </div>
             {error && (
-              <p className="text-xs text-[#ff3366]">Falsches Passwort</p>
+              <p className="text-xs text-[#ff3366]">{error}</p>
             )}
             <button
               type="submit"
-              disabled={!password}
+              disabled={!password || loading}
               className="w-full px-4 py-3 rounded-lg text-sm font-medium bg-[#8b5cf6] text-white hover:bg-[#7c4fe0] disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
             >
-              Einloggen
+              {loading ? "Prüfe …" : "Einloggen"}
             </button>
           </form>
 

@@ -1,7 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
+import { SESSION_COOKIE, getSessionSecret, signSession } from "@/lib/auth";
 
 const BASE_URL = process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000";
-const CRON_SECRET = process.env.CRON_SECRET || "ghost-cron-2026";
+// Kein schwacher Default mehr — ohne gesetztes CRON_SECRET ist der Endpunkt
+// deaktiviert (fail-closed).
+const CRON_SECRET = process.env.CRON_SECRET;
+
+// Interner Server-zu-Server-Call: gültiges, signiertes Session-Cookie erzeugen
+// (ersetzt das frühere statische "gp-auth=authenticated").
+async function internalCookie(): Promise<string> {
+  const secret = getSessionSecret();
+  if (!secret) return "";
+  return `${SESSION_COOKIE}=${await signSession(secret)}`;
+}
 
 // Mapping: Wochentag (Mo-Fr) → Kalender-Key
 const DAY_MAP: Record<number, string> = {
@@ -40,7 +51,7 @@ function guessCategory(topic: string): string {
 // Produziert automatisch das Content-Piece des Tages aus dem Launch-Kalender
 export async function GET(request: NextRequest) {
   const secret = request.nextUrl.searchParams.get("secret");
-  if (secret !== CRON_SECRET) {
+  if (!CRON_SECRET || secret !== CRON_SECRET) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
@@ -64,8 +75,10 @@ export async function GET(request: NextRequest) {
   const weekNum = getCurrentWeek(launchDate);
   const weekKey = `week${weekNum}`;
 
-  // Kalender laden
-  const calendarRes = await fetch(`${BASE_URL}/api/content/pipeline`);
+  // Kalender laden (interner Call → signiertes Cookie mitsenden)
+  const calendarRes = await fetch(`${BASE_URL}/api/content/pipeline`, {
+    headers: { Cookie: await internalCookie() },
+  });
   if (!calendarRes.ok) {
     return NextResponse.json({ error: "Kalender nicht erreichbar" }, { status: 500 });
   }
@@ -102,7 +115,7 @@ export async function GET(request: NextRequest) {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Cookie: "gp-auth=authenticated",
+      Cookie: await internalCookie(),
     },
     body: JSON.stringify({ topic, platform, format, category }),
   });
