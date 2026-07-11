@@ -47,7 +47,7 @@ export default function RootLayout({
           <div className="gp-grain" />
         </div>
         <Sidebar />
-        <div className="relative z-[1] flex-1 ml-[248px] min-h-screen flex flex-col">
+        <div className="relative z-[1] flex-1 ml-[252px] min-h-screen flex flex-col">
           <TopBar />
           <main className="flex-1">{children}</main>
         </div>

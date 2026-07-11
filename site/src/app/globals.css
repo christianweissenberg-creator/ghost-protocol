@@ -147,20 +147,18 @@ body {
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='240'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.8' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
 }
 
-/* ═══ §9.3 GLASKACHEL — jede Datenkachel (.card-ghost bleibt der Klassenname)
-   §9.0: backdrop-filter SPARSAM — nur die Shell (Sidebar) blurt.
-   Kacheln: dichteres Glas ohne Filter (auf Kino-Schwarz visuell gleichwertig,
-   10+ parallele Blurs haben den Compositor in die Knie gezwungen). ═══ */
+/* ═══ §9.3 GLASKACHEL — exakte Prototyp-Werte (Command Center.dc.html)
+   Computed: bg rgba(11,12,16,.66) · blur(16px) saturate(1.15) ·
+   border .8px rgba(201,168,106,.11) · radius 14px · inset+deep shadow ═══ */
 .card-ghost {
   position: relative;
-  background: linear-gradient(
-    180deg,
-    rgba(15, 16, 21, 0.92),
-    rgba(9, 10, 13, 0.88)
-  );
-  border: 1px solid var(--gp-glass-brd);
-  box-shadow: var(--gp-glass-sh);
-  border-radius: 17px;
+  background: rgba(11, 12, 16, 0.66);
+  backdrop-filter: blur(16px) saturate(1.15);
+  -webkit-backdrop-filter: blur(16px) saturate(1.15);
+  border: 0.8px solid rgba(201, 168, 106, 0.11);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    0 26px 60px -28px rgba(0, 0, 0, 0.94);
+  border-radius: 14px;
   transition: border-color 0.35s ease, box-shadow 0.35s ease,
     transform 0.35s cubic-bezier(0.22, 1, 0.36, 1);
 }
@@ -215,9 +213,11 @@ body {
   margin-bottom: 18px;
 }
 .gp-index {
-  font-family: var(--font-jbmono);
-  font-size: 10px;
-  letter-spacing: 0.22em;
+  /* Prototyp: Cormorant-Serif 16px gold (nicht Mono) */
+  font-family: var(--font-cormorant), serif;
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
   color: var(--gp-gold);
 }
 .gp-index-rule {
@@ -239,16 +239,17 @@ body {
   margin-bottom: 10px;
 }
 .gp-wordmark {
+  /* Prototyp: Cormorant 76px/600, #f3ecdd, line-height 0.84, ls -0.005em */
   font-family: var(--font-cormorant), serif;
   font-weight: 600;
-  font-size: clamp(44px, 6vw, 72px);
-  line-height: 0.98;
-  letter-spacing: -0.01em;
-  color: var(--gp-ink);
+  font-size: clamp(46px, 6vw, 76px);
+  line-height: 0.84;
+  letter-spacing: -0.005em;
+  color: #f3ecdd;
 }
 .gp-wordmark em {
   font-style: italic;
-  color: var(--gp-gold);
+  color: var(--gp-gold-hi); /* betonte Silbe = helleres Gold #e7d3a1 */
 }
 .gp-sub {
   margin-top: 12px;

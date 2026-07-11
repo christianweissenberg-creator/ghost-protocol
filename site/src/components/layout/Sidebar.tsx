@@ -42,13 +42,14 @@ export function Sidebar() {
 
   return (
     <aside
-      className="fixed left-0 top-0 bottom-0 w-[248px] flex flex-col z-50 border-r"
+      className="fixed left-0 top-0 bottom-0 w-[252px] flex flex-col z-50"
       style={{
-        background: "rgba(9, 10, 13, 0.72)",
-        backdropFilter: "blur(18px) saturate(115%)",
-        WebkitBackdropFilter: "blur(18px) saturate(115%)",
-        borderColor: "var(--gp-hairline)",
-        boxShadow: "inset -1px 0 0 rgba(201,168,106,0.07)",
+        // Exakt aus Prototyp: Glas-Gradient + Gold-Border .8px + blur 26px
+        background: "linear-gradient(rgba(17, 18, 24, 0.72), rgba(9, 10, 14, 0.6))",
+        backdropFilter: "blur(26px) saturate(1.35)",
+        WebkitBackdropFilter: "blur(26px) saturate(1.35)",
+        borderRight: "0.8px solid rgba(201, 168, 106, 0.11)",
+        boxShadow: "inset -1px 0 0 rgba(255,255,255,0.05)",
       }}
     >
       {/* Logo: Gold-Diamant + Wortmarke */}
