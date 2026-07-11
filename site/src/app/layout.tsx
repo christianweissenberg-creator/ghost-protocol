@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Outfit, Cormorant_Garamond, JetBrains_Mono } from "next/font/google";
 import { Sidebar } from "@/components/layout/Sidebar";
+import { TopBar } from "@/components/layout/TopBar";
 import "./globals.css";
 
 // Neural Noir Editorial (MASTERPROMPT §3):
@@ -46,9 +47,10 @@ export default function RootLayout({
           <div className="gp-grain" />
         </div>
         <Sidebar />
-        <main className="relative z-[1] flex-1 ml-[240px] min-h-screen">
-          {children}
-        </main>
+        <div className="relative z-[1] flex-1 ml-[248px] min-h-screen flex flex-col">
+          <TopBar />
+          <main className="flex-1">{children}</main>
+        </div>
       </body>
     </html>
   );

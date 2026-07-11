@@ -1,21 +1,33 @@
-// MASTERPROMPT §9.4 — COP-Hologramm "Situation Table" (Signatur-Held, §5)
-// Rein präsentational: DACH-Lagebild als leuchtendes Hologramm mit Graticule,
-// Radar-Sweep, HQ-Fadenkreuz und geplotteten Entitäten (Steinadel gold,
-// Engines nach Marken-Farbe). Keine Logik, keine Daten-Calls.
+// MASTERPROMPT §9.4 + abgenommener Prototyp "Command Center.dc.html"
+// COP-Hologramm: DACH/Sektor-Süd-Lagebild, München-HQ, teal Gitter + Radar-Sweep,
+// Gold-Bullseye-Knoten mit bordeten Werte-Pillen. Rein präsentational.
 
-const ENTITIES = [
-  // Steinadel-Objekte (gold) — Sachsen-Cluster; Callouts in verschiedene Richtungen
-  { x: 372, y: 208, color: "var(--gp-gold)", label: "RITTERGUT SEIFERSDORF", sub: "STEINADEL · DD", focus: true, dx: 34, dy: 26 },
-  { x: 332, y: 190, color: "var(--gp-gold)", label: "STADTPALAIS LEIPZIG", sub: "STEINADEL · L", focus: false, dx: -44, dy: 52 },
-  { x: 362, y: 186, color: "var(--gp-gold)", label: "GUTSHOF MORITZBURG", sub: "STEINADEL · MEI", focus: false, dx: 40, dy: -34 },
-  // Engines nach Marken-Farbe
-  { x: 258, y: 236, color: "var(--gp-cyan)", label: "CRYPTODOG", sub: "ENGINE · FSN1", focus: false, dx: -96, dy: 18 },
-  { x: 262, y: 248, color: "var(--gp-amber)", label: "GOLDDIGGER", sub: "ENGINE · FSN1", focus: false, dx: 26, dy: 34 },
-  { x: 205, y: 148, color: "var(--gp-violet)", label: "WHITEPULSE", sub: "SIGNAL · NET", focus: false, dx: -78, dy: -26 },
+type Entity = {
+  x: number;
+  y: number;
+  color: string;
+  label: string;
+  side: "l" | "r";
+  focus?: boolean;
+};
+
+// HQ München (N48.137° E11.575°)
+const HQ = { x: 236, y: 232 };
+
+const ENTITIES: Entity[] = [
+  // Steinadel-Objekte (gold) — mit Objektwert
+  { x: 392, y: 132, color: "var(--gp-gold)", label: "GUT FALKENHOF · €22,5M", side: "r", focus: true },
+  { x: 372, y: 330, color: "var(--gp-gold)", label: "VILLA SEEBLICK · €14,8M · REVIEW", side: "r" },
+  { x: 486, y: 372, color: "var(--gp-gold)", label: "CHALET ALPENBLICK · €9,9M", side: "r" },
+  // System-Entitäten nach Marken-/Signalfarbe
+  { x: 508, y: 176, color: "var(--gp-cyan)", label: "HUBSPOT · STEINADEL-SYNC", side: "r" },
+  { x: 486, y: 250, color: "var(--gp-violet)", label: "WHITEPULSE · SIGNAL-NET", side: "r" },
+  { x: 452, y: 300, color: "var(--gp-amber)", label: "GOLDDIGGER · XAU", side: "r" },
 ];
 
-// HQ = Sülzetal / Magdeburger Börde
-const HQ = { x: 300, y: 158 };
+function pillWidth(label: string) {
+  return label.length * 5.15 + 22;
+}
 
 export function SituationTable() {
   return (
@@ -24,35 +36,32 @@ export function SituationTable() {
         <div className="flex items-center gap-3">
           <span className="gp-index">COP</span>
           <h2 className="mono-label" style={{ color: "var(--gp-ink-2)" }}>
-            Situation Table — DACH Lagebild
+            Common Operational Picture — DACH · Sektor Süd
           </h2>
         </div>
         <span className="mono-label" style={{ color: "var(--gp-gold)" }}>
-          KLASSIFIZIERT · GP-EYES ONLY
+          N48.137° E11.575° · STATUS 235
         </span>
       </div>
 
       <svg
-        viewBox="0 0 560 320"
+        viewBox="0 0 720 440"
         className="w-full h-auto block"
         role="img"
-        aria-label="Lagebild: Steinadel-Objekte und Engines in der DACH-Region"
+        aria-label="Lagebild Sektor Süd: Steinadel-Objekte und Engines um München-HQ"
       >
         <defs>
-          {/* Projektor-Bloom im HQ-Zentrum */}
           <radialGradient id="cop-bloom" cx="50%" cy="50%" r="50%">
-            <stop offset="0%" stopColor="#3fd8ec" stopOpacity="0.30" />
-            <stop offset="42%" stopColor="#0f8ba0" stopOpacity="0.09" />
+            <stop offset="0%" stopColor="#3fd8ec" stopOpacity="0.28" />
+            <stop offset="42%" stopColor="#0f8ba0" stopOpacity="0.08" />
             <stop offset="100%" stopColor="#0f8ba0" stopOpacity="0" />
           </radialGradient>
-          {/* Radar-Sweep */}
           <radialGradient id="cop-sweep-grad" cx="0%" cy="50%" r="100%">
-            <stop offset="0%" stopColor="#37d6ea" stopOpacity="0.5" />
+            <stop offset="0%" stopColor="#37d6ea" stopOpacity="0.42" />
             <stop offset="100%" stopColor="#37d6ea" stopOpacity="0" />
           </radialGradient>
-          {/* Glow-Filter (HQ-Fadenkreuz, innerster Ring) */}
           <filter id="cop-glow" x="-60%" y="-60%" width="220%" height="220%">
-            <feGaussianBlur stdDeviation="3.4" result="b" />
+            <feGaussianBlur stdDeviation="3.2" result="b" />
             <feMerge>
               <feMergeNode in="b" />
               <feMergeNode in="SourceGraphic" />
@@ -60,121 +69,119 @@ export function SituationTable() {
           </filter>
         </defs>
 
-        {/* Graticule */}
+        {/* Graticule + Breitengrad-Labels */}
         <g stroke="rgba(126,205,224,0.05)" strokeWidth="0.5">
-          {Array.from({ length: 13 }, (_, i) => (
-            <line key={`v${i}`} x1={40 + i * 40} y1="16" x2={40 + i * 40} y2="304" />
+          {Array.from({ length: 16 }, (_, i) => (
+            <line key={`v${i}`} x1={40 + i * 44} y1="18" x2={40 + i * 44} y2="422" />
           ))}
-          {Array.from({ length: 8 }, (_, i) => (
-            <line key={`h${i}`} x1="24" y1={30 + i * 38} x2="536" y2={30 + i * 38} />
+          {Array.from({ length: 10 }, (_, i) => (
+            <line key={`h${i}`} x1="24" y1={34 + i * 42} x2="700" y2={34 + i * 42} />
           ))}
         </g>
-
-        {/* Stilisierte DACH-Kontur (Hologramm-Abstraktion) */}
-        <path
-          d="M 240 60 L 282 52 L 316 62 L 344 56 L 366 76 L 384 104 L 396 140 L 388 176
-             L 402 210 L 384 238 L 350 250 L 356 270 L 322 288 L 282 280 L 244 290
-             L 214 272 L 186 276 L 168 254 L 178 230 L 158 210 L 172 186 L 158 158
-             L 178 132 L 170 104 L 198 92 L 212 66 Z"
-          fill="rgba(63,216,236,0.025)"
-          stroke="rgba(126,205,224,0.22)"
-          strokeWidth="1"
-          strokeLinejoin="round"
-        />
-        {/* AT/CH angedeutet */}
-        <path
-          d="M 244 290 L 282 280 L 322 288 L 372 284 L 420 296 L 380 312 L 300 314 L 252 306 Z"
-          fill="none"
-          stroke="rgba(126,205,224,0.10)"
-          strokeWidth="0.75"
-          strokeLinejoin="round"
-        />
-        <path
-          d="M 168 254 L 214 272 L 244 290 L 252 306 L 196 310 L 152 292 L 140 268 Z"
-          fill="none"
-          stroke="rgba(126,205,224,0.10)"
-          strokeWidth="0.75"
-          strokeLinejoin="round"
-        />
+        {[
+          { y: 118, t: "48.4°N" },
+          { y: 244, t: "48.1°N" },
+          { y: 370, t: "47.8°N" },
+        ].map((l) => (
+          <text
+            key={l.t}
+            x="30"
+            y={l.y}
+            fill="rgba(126,205,224,0.32)"
+            style={{ font: "400 7px var(--font-jbmono)", letterSpacing: "0.14em" }}
+          >
+            {l.t}
+          </text>
+        ))}
 
         {/* Projektor-Bloom */}
-        <circle cx={HQ.x} cy={HQ.y} r="150" fill="url(#cop-bloom)" />
+        <circle cx={HQ.x} cy={HQ.y} r="200" fill="url(#cop-bloom)" />
 
-        {/* Ringe */}
-        <circle cx={HQ.x} cy={HQ.y} r="120" fill="none" stroke="rgba(126,205,224,0.08)" strokeWidth="0.75" />
-        <circle cx={HQ.x} cy={HQ.y} r="80" fill="none" stroke="rgba(126,205,224,0.12)" strokeWidth="0.75" />
-        <circle cx={HQ.x} cy={HQ.y} r="40" fill="none" stroke="rgba(126,205,224,0.18)" strokeWidth="0.75" filter="url(#cop-glow)" />
+        {/* Range-Ringe */}
+        {[56, 112, 168, 224].map((r, i) => (
+          <circle
+            key={r}
+            cx={HQ.x}
+            cy={HQ.y}
+            r={r}
+            fill="none"
+            stroke={`rgba(126,205,224,${0.16 - i * 0.03})`}
+            strokeWidth="0.75"
+            filter={i === 0 ? "url(#cop-glow)" : undefined}
+          />
+        ))}
 
-        {/* Radar-Sweep (7s, stetig) — Keil von 0° bis −28° */}
+        {/* Radar-Sweep (7s, stetig) */}
         <g className="cop-sweep" style={{ transformOrigin: `${HQ.x}px ${HQ.y}px` }}>
           <path
-            d={`M ${HQ.x} ${HQ.y} L ${HQ.x + 150} ${HQ.y} A 150 150 0 0 0 ${HQ.x + 132.4} ${HQ.y - 70.4} Z`}
+            d={`M ${HQ.x} ${HQ.y} L ${HQ.x + 224} ${HQ.y} A 224 224 0 0 0 ${HQ.x + 197.6} ${HQ.y - 105.1} Z`}
             fill="url(#cop-sweep-grad)"
-            opacity="0.55"
           />
         </g>
 
-        {/* HQ-Fadenkreuz */}
+        {/* HQ München — Fadenkreuz */}
         <g stroke="#eafdff" strokeWidth="1" filter="url(#cop-glow)">
-          <line x1={HQ.x - 12} y1={HQ.y} x2={HQ.x - 4} y2={HQ.y} />
-          <line x1={HQ.x + 4} y1={HQ.y} x2={HQ.x + 12} y2={HQ.y} />
-          <line x1={HQ.x} y1={HQ.y - 12} x2={HQ.x} y2={HQ.y - 4} />
-          <line x1={HQ.x} y1={HQ.y + 4} x2={HQ.x} y2={HQ.y + 12} />
-          <circle cx={HQ.x} cy={HQ.y} r="2" fill="#eafdff" stroke="none" />
+          <line x1={HQ.x - 13} y1={HQ.y} x2={HQ.x - 5} y2={HQ.y} />
+          <line x1={HQ.x + 5} y1={HQ.y} x2={HQ.x + 13} y2={HQ.y} />
+          <line x1={HQ.x} y1={HQ.y - 13} x2={HQ.x} y2={HQ.y - 5} />
+          <line x1={HQ.x} y1={HQ.y + 5} x2={HQ.x} y2={HQ.y + 13} />
+          <circle cx={HQ.x} cy={HQ.y} r="2.2" fill="#eafdff" stroke="none" />
         </g>
+        <circle cx={HQ.x} cy={HQ.y} r="18" fill="none" stroke="rgba(234,253,255,0.28)" strokeWidth="0.5" />
         <text
-          x={HQ.x + 18}
-          y={HQ.y - 12}
-          fill="rgba(234,253,255,0.75)"
-          style={{ font: "500 8px var(--font-jbmono)", letterSpacing: "0.18em" }}
+          x={HQ.x + 22}
+          y={HQ.y + 3}
+          fill="rgba(234,253,255,0.78)"
+          style={{ font: "500 8px var(--font-jbmono)", letterSpacing: "0.2em" }}
         >
-          HQ · SÜLZETAL
+          MÜNCHEN · HQ
         </text>
 
-        {/* Entitäten — Callout je Entität in eigene Richtung (keine Label-Kollision) */}
+        {/* Entitäten: Gold-Bullseye-Knoten + Werte-Pille */}
         {ENTITIES.map((e) => {
-          const lx = e.x + e.dx;
-          const ly = e.y + e.dy;
+          const w = pillWidth(e.label);
+          const gap = 16;
+          const pillX = e.side === "r" ? e.x + gap : e.x - gap - w;
+          const textX = e.side === "r" ? pillX + 11 : pillX + w - 11;
+          const lineX2 = e.side === "r" ? pillX : pillX + w;
           return (
             <g key={e.label}>
-              {e.focus && (
-                <circle
-                  className="cop-focus-ring"
-                  cx={e.x}
-                  cy={e.y}
-                  r="9"
-                  fill="none"
-                  stroke={e.color}
-                  strokeWidth="0.75"
-                />
-              )}
+              {/* Konnektor */}
               <line
-                x1={e.x + Math.sign(e.dx) * 4}
-                y1={e.y + Math.sign(e.dy) * 4}
-                x2={lx - Math.sign(e.dx) * 4}
-                y2={ly - 4}
+                x1={e.x + (e.side === "r" ? 6 : -6)}
+                y1={e.y}
+                x2={lineX2}
+                y2={e.y}
                 stroke={e.color}
-                strokeWidth="0.5"
-                opacity="0.55"
+                strokeWidth="0.6"
+                opacity="0.5"
               />
-              <circle cx={e.x} cy={e.y} r="3" fill={e.color} />
+              {/* Bullseye-Knoten */}
+              {e.focus && (
+                <circle className="cop-focus-ring" cx={e.x} cy={e.y} r="11" fill="none" stroke={e.color} strokeWidth="0.75" />
+              )}
+              <circle cx={e.x} cy={e.y} r="6" fill="none" stroke={e.color} strokeWidth="1" opacity="0.9" />
+              <circle cx={e.x} cy={e.y} r="2.3" fill={e.color} />
+              {/* Pille */}
+              <rect
+                x={pillX}
+                y={e.y - 9}
+                width={w}
+                height="18"
+                rx="4"
+                fill="rgba(6, 9, 11, 0.82)"
+                stroke={e.color}
+                strokeOpacity="0.4"
+                strokeWidth="0.75"
+              />
               <text
-                x={lx}
-                y={ly}
+                x={textX}
+                y={e.y + 3}
+                textAnchor={e.side === "r" ? "start" : "end"}
                 fill={e.color}
-                textAnchor={e.dx < 0 ? "end" : "start"}
-                style={{ font: "500 7.5px var(--font-jbmono)", letterSpacing: "0.16em" }}
+                style={{ font: "500 7.5px var(--font-jbmono)", letterSpacing: "0.12em" }}
               >
                 {e.label}
-              </text>
-              <text
-                x={lx}
-                y={ly + 9}
-                fill="rgba(169,167,159,0.6)"
-                textAnchor={e.dx < 0 ? "end" : "start"}
-                style={{ font: "400 6.5px var(--font-jbmono)", letterSpacing: "0.14em" }}
-              >
-                {e.sub}
               </text>
             </g>
           );

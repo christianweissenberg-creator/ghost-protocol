@@ -76,14 +76,15 @@ export default function CommandCenter() {
       {/* §9.5 Masthead */}
       <Masthead
         index="01 / LAGE"
-        kicker="Ghost Protocol — Autonomous AI Corporation"
+        coord="N48.137° · E11.575°"
+        kicker="Ghost Protocol · Autonome KI-Corporation"
         word={["Maschinen", "raum", ""]}
-        sub="Das operative Lagebild der Corporation: Flotte, Nachrichtenfluss, Delegation. Eine Quelle der Wahrheit — in Echtzeit."
+        sub="Command Center — das Echtzeit-Lagebild über alle Marken, Engines und autonomen Agenten. Ein Dirigent, siebzehn Spezialisten, ununterbrochen im Dienst."
         vitals={[
           { label: "Agenten", value: agents.length },
           { label: "Aktiv", value: activeCount },
           { label: "Bus", value: messages.length },
-          { label: "Link", value: agentsLoading ? "SYNC" : "LIVE" },
+          { label: "Latenz", value: agentsLoading ? "SYNC" : "35 ms" },
         ]}
       />
 
