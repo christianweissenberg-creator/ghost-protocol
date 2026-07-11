@@ -5,11 +5,11 @@ const nextConfig: NextConfig = {
   // Cache-Fix: Turbopack (Next 16) hasht CSS-Chunks NICHT content-basiert
   // (gleicher Dateiname über Builds). Zusammen mit dem Default 'immutable'
   // cachen Browser altes CSS dauerhaft → Design-Änderungen kamen nie an.
-  // CSS-Chunks daher revalidieren lassen (ETag greift), statt immutable.
+  // Betrifft CSS UND JS gleichermassen → alle Chunks revalidieren (ETag → 304).
   async headers() {
     return [
       {
-        source: "/_next/static/chunks/:path*.css",
+        source: "/_next/static/chunks/:path*",
         headers: [
           { key: "Cache-Control", value: "public, max-age=0, must-revalidate" },
         ],
