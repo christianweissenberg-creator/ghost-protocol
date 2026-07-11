@@ -193,15 +193,12 @@ export default function ContentPage() {
   );
 
   return (
-    <div className="p-6 lg:p-8 max-w-[1100px]">
+    <div className="boot p-6 lg:p-10 max-w-[1100px]">
       {/* Header */}
-      <div className="mb-6">
-        <h1 className="text-2xl lg:text-3xl font-bold tracking-tight font-[family-name:var(--font-outfit)]">
-          Content Pipeline
-        </h1>
-        <p className="text-text-muted text-xs mt-1">
-          RESEARCHER → SCRIBE → PUBLISHER → AMPLIFIER
-        </p>
+      <div className="gp-masthead">
+        <div className="gp-index-row"><span className="gp-index">05 / PRODUKTION</span><span className="gp-index-rule" /></div>
+        <p className="gp-kicker">RESEARCHER → SCRIBE → PUBLISHER → AMPLIFIER</p>
+        <h1 className="gp-wordmark">Content <em>Pipeline</em></h1>
       </div>
 
       {/* Tab Navigation */}

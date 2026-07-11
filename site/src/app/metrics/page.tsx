@@ -21,14 +21,11 @@ export default function MetricsPage() {
   const haikuAgents = agents.filter((a) => a.llm_model?.includes("haiku")).length;
 
   return (
-    <div className="p-8 max-w-[1200px]">
-      <div className="mb-6">
-        <h1 className="text-3xl font-bold tracking-tight font-[family-name:var(--font-outfit)]">
-          Metrics
-        </h1>
-        <p className="text-text-muted text-sm mt-1">
-          Agent-Performance, API-Kosten, System-Health
-        </p>
+    <div className="boot p-10 max-w-[1200px]">
+      <div className="gp-masthead">
+        <div className="gp-index-row"><span className="gp-index">04 / KENNZAHLEN</span><span className="gp-index-rule" /></div>
+        <p className="gp-kicker">Agent-Performance, API-Kosten, System-Health</p>
+        <h1 className="gp-wordmark">Met<em>rics</em></h1>
       </div>
 
       {/* Budget Overview */}

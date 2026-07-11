@@ -16,17 +16,17 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center" style={{ background: "#08080c" }}>
+    <div className="min-h-screen flex items-center justify-center">
       <div className="w-full max-w-sm">
         <div className="card-ghost p-8">
           {/* Logo */}
           <div className="text-center mb-8">
-            <div className="w-16 h-16 rounded-2xl mx-auto mb-4 flex items-center justify-center text-2xl font-bold"
-              style={{ background: "rgba(139, 92, 246, 0.15)", color: "#8b5cf6" }}>
+            <div className="w-16 h-16 rounded-2xl mx-auto mb-4 flex items-center justify-center text-2xl font-semibold font-[family-name:var(--font-cormorant)]"
+              style={{ background: "rgba(201, 168, 106, 0.10)", color: "var(--gp-gold)", border: "1px solid rgba(201,168,106,0.25)" }}>
               G
             </div>
-            <h1 className="text-xl font-bold font-[family-name:var(--font-outfit)] tracking-tight">
-              Ghost Protocol
+            <h1 className="font-[family-name:var(--font-cormorant)] font-semibold text-2xl tracking-tight">
+              Ghost <em style={{ fontStyle: "italic", color: "var(--gp-gold)" }}>Protocol</em>
             </h1>
             <p className="text-text-muted text-xs mt-1">Command Center Access</p>
           </div>

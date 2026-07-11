@@ -6,6 +6,8 @@ import { TIER_META } from "@/lib/types";
 import { AgentCard } from "@/components/agents/AgentCard";
 import { KPICard } from "@/components/ui/KPICard";
 import { MessageFeed } from "@/components/ui/MessageFeed";
+import { Masthead } from "@/components/ui/Masthead";
+import { SituationTable } from "@/components/ui/SituationTable";
 import type { AgentTier } from "@/lib/types";
 
 interface DelegationAgent {
@@ -70,15 +72,24 @@ export default function CommandCenter() {
   );
 
   return (
-    <div className="p-8 max-w-[1200px]">
-      {/* Header */}
+    <div className="boot p-10 max-w-[1240px]">
+      {/* §9.5 Masthead */}
+      <Masthead
+        index="01 / LAGE"
+        kicker="Ghost Protocol — Autonomous AI Corporation"
+        word={["Maschinen", "raum", ""]}
+        sub="Das operative Lagebild der Corporation: Flotte, Nachrichtenfluss, Delegation. Eine Quelle der Wahrheit — in Echtzeit."
+        vitals={[
+          { label: "Agenten", value: agents.length },
+          { label: "Aktiv", value: activeCount },
+          { label: "Bus", value: messages.length },
+          { label: "Link", value: agentsLoading ? "SYNC" : "LIVE" },
+        ]}
+      />
+
+      {/* §9.4 Signatur-Held: COP-Hologramm */}
       <div className="mb-8">
-        <h1 className="text-3xl font-bold tracking-tight font-[family-name:var(--font-outfit)]">
-          Command Center
-        </h1>
-        <p className="text-text-muted text-sm mt-1">
-          Ghost Protocol — Autonomous AI Corporation
-        </p>
+        <SituationTable />
       </div>
 
       {/* KPI Row */}
@@ -114,15 +125,18 @@ export default function CommandCenter() {
       </div>
 
       {/* L.I.S.A. Quick-Delegate */}
-      <div className="card-ghost p-5 mb-8">
-        <div className="flex items-center gap-2 mb-3">
-          <span className="text-accent-rose text-lg">◈</span>
-          <h2 className="text-sm font-semibold font-[family-name:var(--font-outfit)] tracking-tight">
-            L.I.S.A. — Task delegieren
-          </h2>
-          <span className="text-[10px] text-text-muted ml-auto uppercase tracking-widest">
-            Auto-Delegation
+      <div className="card-ghost card-active p-5 mb-8">
+        <div className="flex items-center gap-3 mb-3">
+          <span
+            className="font-[family-name:var(--font-cormorant)] italic font-semibold text-xl leading-none"
+            style={{ color: "var(--gp-gold)" }}
+          >
+            L.I.S.A.
           </span>
+          <h2 className="text-sm font-medium font-[family-name:var(--font-outfit)] tracking-tight" style={{ color: "var(--gp-ink-2)" }}>
+            Task delegieren
+          </h2>
+          <span className="mono-label ml-auto">Executive Delegation</span>
         </div>
 
         <div className="flex gap-3">
@@ -225,8 +239,8 @@ export default function CommandCenter() {
         {/* Agent Grid — 2 columns */}
         <div className="col-span-2">
           <div className="flex items-center justify-between mb-4">
-            <h2 className="text-lg font-semibold font-[family-name:var(--font-outfit)] tracking-tight">
-              Agent Fleet
+            <h2 className="font-[family-name:var(--font-cormorant)] font-semibold text-[26px] tracking-tight">
+              Agent<em style={{ fontStyle: "italic", color: "var(--gp-gold)" }}>flotte</em>
             </h2>
             <div className="flex items-center gap-3">
               {([0, 1, 2, 3] as AgentTier[]).map((tier) => (
@@ -267,12 +281,10 @@ export default function CommandCenter() {
         {/* Message Feed — 1 column */}
         <div>
           <div className="flex items-center justify-between mb-4">
-            <h2 className="text-lg font-semibold font-[family-name:var(--font-outfit)] tracking-tight">
-              Message Bus
+            <h2 className="font-[family-name:var(--font-cormorant)] font-semibold text-[26px] tracking-tight">
+              Message <em style={{ fontStyle: "italic", color: "var(--gp-gold)" }}>Bus</em>
             </h2>
-            <span className="text-[10px] text-text-muted uppercase tracking-widest">
-              Live
-            </span>
+            <span className="mono-label">Live</span>
           </div>
 
           {messagesLoading ? (

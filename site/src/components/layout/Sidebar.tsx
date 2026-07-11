@@ -4,13 +4,13 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 const NAV_ITEMS = [
-  { href: "/", label: "Command Center", icon: "◈" },
-  { href: "/agents", label: "Agents", icon: "◎" },
-  { href: "/messages", label: "Message Bus", icon: "⇋" },
-  { href: "/metrics", label: "Metrics", icon: "◇" },
-  { href: "/content", label: "Content Pipeline", icon: "▣" },
-  { href: "/donna", label: "L.I.S.A.", icon: "◈" },
-  { href: "/academy", label: "Academy", icon: "◉" },
+  { href: "/", label: "Command Center", index: "01" },
+  { href: "/agents", label: "Agent-Flotte", index: "02" },
+  { href: "/messages", label: "Message Bus", index: "03" },
+  { href: "/metrics", label: "Metrics", index: "04" },
+  { href: "/content", label: "Content Pipeline", index: "05" },
+  { href: "/donna", label: "L.I.S.A.", index: "06" },
+  { href: "/academy", label: "Academy", index: "07" },
 ];
 
 const TIER_INDICATORS = [
@@ -24,62 +24,88 @@ export function Sidebar() {
   const pathname = usePathname();
 
   return (
-    <aside className="fixed left-0 top-0 bottom-0 w-[240px] bg-surface border-r border-border flex flex-col z-50">
-      {/* Logo */}
-      <div className="px-5 py-5 border-b border-border">
-        <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded-lg bg-accent-violet/20 flex items-center justify-center">
-            <span className="text-accent-violet font-bold text-sm font-[family-name:var(--font-outfit)]">G</span>
-          </div>
-          <div>
-            <h1 className="text-sm font-semibold tracking-tight font-[family-name:var(--font-outfit)]">
-              Ghost Protocol
-            </h1>
-            <p className="text-[10px] text-text-muted uppercase tracking-widest">
-              Command Center
-            </p>
-          </div>
-        </div>
+    <aside
+      className="fixed left-0 top-0 bottom-0 w-[240px] flex flex-col z-50 border-r"
+      style={{
+        background: "rgba(9, 10, 13, 0.72)",
+        backdropFilter: "blur(18px) saturate(115%)",
+        WebkitBackdropFilter: "blur(18px) saturate(115%)",
+        borderColor: "var(--gp-hairline)",
+        boxShadow: "inset -1px 0 0 rgba(201,168,106,0.07)",
+      }}
+    >
+      {/* Wortmarke — editorial */}
+      <div className="px-5 pt-6 pb-5" style={{ borderBottom: "1px solid var(--gp-hairline)" }}>
+        <p className="gp-index mb-2">GP / HQ</p>
+        <h1
+          className="font-[family-name:var(--font-cormorant)] font-semibold text-[22px] leading-none tracking-tight"
+          style={{ color: "var(--gp-ink)" }}
+        >
+          Ghost <em style={{ fontStyle: "italic", color: "var(--gp-gold)" }}>Protocol</em>
+        </h1>
+        <p className="mono-label mt-2">Maschinenraum</p>
       </div>
 
       {/* Navigation */}
-      <nav className="flex-1 px-3 py-4 space-y-1">
+      <nav className="flex-1 px-3 py-4 space-y-0.5">
         {NAV_ITEMS.map((item) => {
           const isActive = pathname === item.href;
           return (
             <Link
               key={item.href}
               href={item.href}
-              className={`flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-colors ${
+              className="group flex items-center gap-3 px-3 py-2 rounded-lg text-[13px] transition-colors"
+              style={
                 isActive
-                  ? "bg-accent-violet/10 text-accent-violet"
-                  : "text-text-secondary hover:text-foreground hover:bg-surface-elevated"
-              }`}
+                  ? {
+                      color: "var(--gp-gold-hi)",
+                      background: "rgba(201, 168, 106, 0.08)",
+                      boxShadow: "inset 0 0 0 1px rgba(201,168,106,0.22)",
+                    }
+                  : { color: "var(--gp-ink-2)" }
+              }
             >
-              <span className="text-base opacity-60">{item.icon}</span>
-              {item.label}
+              <span
+                className="font-[family-name:var(--font-jbmono)] text-[9px] tracking-[0.18em]"
+                style={{ color: isActive ? "var(--gp-gold)" : "var(--gp-ink-3)" }}
+              >
+                {item.index}
+              </span>
+              <span className={isActive ? "" : "group-hover:text-[color:var(--gp-ink)]"}>
+                {item.label}
+              </span>
+              {isActive && (
+                <span
+                  className="ml-auto w-1 h-1 rounded-full"
+                  style={{ background: "var(--gp-gold)" }}
+                />
+              )}
             </Link>
           );
         })}
       </nav>
 
       {/* Tier Status */}
-      <div className="px-5 py-4 border-t border-border space-y-2">
-        <p className="text-[10px] text-text-muted uppercase tracking-widest mb-2">
-          Agent Tiers
-        </p>
+      <div className="px-5 py-4 space-y-2" style={{ borderTop: "1px solid var(--gp-hairline)" }}>
+        <p className="mono-label mb-2">Agent Tiers</p>
         {TIER_INDICATORS.map((t) => (
-          <div key={t.tier} className="flex items-center gap-2 text-xs text-text-secondary">
-            <div className={`w-2 h-2 rounded-full ${t.color}`} />
-            <span>Tier {t.tier}</span>
-            <span className="text-text-muted ml-auto">{t.label}</span>
+          <div key={t.tier} className="flex items-center gap-2 text-xs" style={{ color: "var(--gp-ink-2)" }}>
+            <div className={`w-1.5 h-1.5 rounded-full ${t.color}`} />
+            <span className="font-[family-name:var(--font-jbmono)] text-[10px] tracking-[0.14em]">
+              T{t.tier}
+            </span>
+            <span className="ml-auto text-[11px]" style={{ color: "var(--gp-ink-3)" }}>
+              {t.label}
+            </span>
           </div>
         ))}
       </div>
 
       {/* Version */}
-      <div className="px-5 py-3 border-t border-border">
-        <p className="text-[10px] text-text-muted font-mono">v0.1.0 — Phase 1</p>
+      <div className="px-5 py-3" style={{ borderTop: "1px solid var(--gp-hairline)" }}>
+        <p className="font-[family-name:var(--font-jbmono)] text-[9px] tracking-[0.18em]" style={{ color: "var(--gp-ink-3)" }}>
+          V0.2.0 — NEURAL NOIR
+        </p>
       </div>
     </aside>
   );

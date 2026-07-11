@@ -40,15 +40,12 @@ export default function MessagesPage() {
   );
 
   return (
-    <div className="p-8 max-w-[1200px]">
+    <div className="boot p-10 max-w-[1200px]">
       {/* Header */}
-      <div className="mb-6">
-        <h1 className="text-3xl font-bold tracking-tight font-[family-name:var(--font-outfit)]">
-          Message Bus
-        </h1>
-        <p className="text-text-muted text-sm mt-1">
-          Agent-Kommunikation in Echtzeit — Supabase Realtime
-        </p>
+      <div className="gp-masthead">
+        <div className="gp-index-row"><span className="gp-index">03 / SIGNALE</span><span className="gp-index-rule" /></div>
+        <p className="gp-kicker">Agent-Kommunikation in Echtzeit</p>
+        <h1 className="gp-wordmark">Message <em>Bus</em></h1>
       </div>
 
       {/* Stats Row */}

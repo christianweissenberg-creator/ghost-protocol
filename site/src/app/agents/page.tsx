@@ -11,14 +11,12 @@ export default function AgentsPage() {
   const tiers = [0, 1, 2, 3] as AgentTier[];
 
   return (
-    <div className="p-8 max-w-[1400px]">
-      <div className="mb-8">
-        <h1 className="text-3xl font-bold tracking-tight font-[family-name:var(--font-outfit)]">
-          Agent Fleet
-        </h1>
-        <p className="text-text-muted text-sm mt-1">
-          {agents.length} Agents in 4 Tiers — Supabase Realtime
-        </p>
+    <div className="boot p-10 max-w-[1400px]">
+      <div className="gp-masthead">
+        <div className="gp-index-row"><span className="gp-index">02 / FLOTTE</span><span className="gp-index-rule" /></div>
+        <p className="gp-kicker">Operator-Grid — Supabase Realtime</p>
+        <h1 className="gp-wordmark">Agent<em>flotte</em></h1>
+        <p className="gp-sub">{agents.length} Agenten in 4 Tiers. Tier-Farbkodierung, Live-Status, Kosten.</p>
       </div>
 
       {loading ? (

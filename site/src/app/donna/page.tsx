@@ -90,17 +90,18 @@ export default function DonnaPage() {
   }
 
   return (
-    <div className="p-8 max-w-[1400px]">
+    <div className="boot p-10 max-w-[1400px]">
       {/* Header */}
-      <div className="mb-8">
-        <div className="flex items-center gap-3">
-          <span className="text-3xl">◈</span>
+      <div className="gp-masthead">
+        <div className="gp-index-row"><span className="gp-index">06 / EXECUTIVE</span><span className="gp-index-rule" /></div>
+        <div>
+          <p className="gp-kicker">Leadership Intelligence, Strategy &amp; Alignment</p>
           <div>
-            <h1 className="text-3xl font-bold tracking-tight font-[family-name:var(--font-outfit)]">
-              L.I.S.A.
+            <h1 className="gp-wordmark">
+              L.I.S.<em>A.</em>
             </h1>
-            <p className="text-text-muted text-sm mt-1">
-              Leadership Intelligence, Strategy & Alignment — Executive-COO-KI, delegiert Tasks an das Agent-Team
+            <p className="gp-sub">
+              Executive-COO-KI — Donna Paulsens Antizipation, Pepper Potts&apos; operative Disziplin. Delegiert Tasks an das Agent-Team.
             </p>
           </div>
         </div>

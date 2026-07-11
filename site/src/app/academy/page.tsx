@@ -580,15 +580,12 @@ export default function AcademyPage() {
   const selected = TRAINING_DATA.find((t) => t.agentId === selectedAgent);
 
   return (
-    <div className="p-8 max-w-[1400px]">
+    <div className="boot p-10 max-w-[1400px]">
       {/* Header */}
-      <div className="mb-8">
-        <h1 className="text-3xl font-bold tracking-tight font-[family-name:var(--font-outfit)]">
-          Ghost Protocol Academy
-        </h1>
-        <p className="text-text-muted text-sm mt-1">
-          Internes Weiterbildungsmodul — 16 Agents, 48+ Pflichtlektueren, 64+ Pruefungsfragen
-        </p>
+      <div className="gp-masthead">
+        <div className="gp-index-row"><span className="gp-index">07 / AUSBILDUNG</span><span className="gp-index-rule" /></div>
+        <p className="gp-kicker">Internes Weiterbildungsmodul — 16 Agents, 48+ Pflichtlektueren, 64+ Pruefungsfragen</p>
+        <h1 className="gp-wordmark">Aca<em>demy</em></h1>
         <div className="mt-3 flex gap-4 text-xs">
           <div className="px-3 py-1.5 rounded-lg bg-accent-violet/10 text-accent-violet">
             Erstellt: L.I.S.A. (Executive-COO-KI)

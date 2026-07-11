@@ -1,19 +1,49 @@
 @import "tailwindcss";
 
+/* ═══════════════════════════════════════════════════════════════
+   GHOST PROTOCOL — "Neural Noir Editorial"
+   Art-Direction: MASTERPROMPT.md (Teil A) · Rezepte §9.1–§9.6
+   Kino-Schwarz + EINE warme Lichtquelle + Gold als Schmuck.
+   ═══════════════════════════════════════════════════════════════ */
+
 :root {
-  --background: #08080c;
-  --foreground: #e8e8ec;
-  --surface: #111116;
-  --surface-elevated: #1a1a22;
-  --border: #222230;
-  --border-subtle: #18181f;
-  --accent-rose: #ff3366;
-  --accent-violet: #8b5cf6;
-  --accent-cyan: #06b6d4;
-  --accent-emerald: #22c55e;
-  --accent-amber: #f59e0b;
-  --text-muted: #6b6b7b;
-  --text-secondary: #9b9bab;
+  /* §9.1 Design-Tokens */
+  --gp-bg-0: #040405;
+  --gp-bg-1: #070808;
+  --gp-bg-2: #0c0d11;
+  --gp-panel: #0b0c10;
+  --gp-ink: #e6e4dd;
+  --gp-ink-2: #a9a79f;
+  --gp-ink-3: #6f6e69;
+  --gp-gold: #c9a86a;
+  --gp-gold-hi: #e7d3a1;
+  --gp-gold-lo: #8a6d3b;
+  --gp-emerald: #22c55e;
+  --gp-cyan: #38bdf8;
+  --gp-rose: #ff4d6a;
+  --gp-amber: #f59e0b;
+  --gp-violet: #8b5cf6;
+  --gp-hairline: rgba(255, 255, 255, 0.06);
+  --gp-glass: rgba(11, 12, 16, 0.66);
+  --gp-glass-brd: rgba(201, 168, 106, 0.11);
+  --gp-glass-sh: inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    0 26px 60px -28px rgba(0, 0, 0, 0.94);
+  --gp-glass-blur: blur(16px) saturate(115%);
+
+  /* Legacy-Aliase (bestehende Komponenten bleiben unangetastet) */
+  --background: var(--gp-bg-1);
+  --foreground: var(--gp-ink);
+  --surface: var(--gp-panel);
+  --surface-elevated: #101116;
+  --border: var(--gp-hairline);
+  --border-subtle: rgba(255, 255, 255, 0.04);
+  --accent-rose: var(--gp-rose);
+  --accent-violet: var(--gp-violet);
+  --accent-cyan: var(--gp-cyan);
+  --accent-emerald: var(--gp-emerald);
+  --accent-amber: var(--gp-amber);
+  --text-muted: var(--gp-ink-3);
+  --text-secondary: var(--gp-ink-2);
 }
 
 @theme inline {
@@ -30,63 +60,344 @@
   --color-accent-amber: var(--accent-amber);
   --color-text-muted: var(--text-muted);
   --color-text-secondary: var(--text-secondary);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --color-gold: var(--gp-gold);
+  --color-gold-hi: var(--gp-gold-hi);
+  --font-sans: var(--font-outfit);
+  --font-mono: var(--font-jbmono);
   --font-display: var(--font-outfit);
+  --font-serif: var(--font-cormorant);
 }
 
+/* §4 Base — Kino-Schwarz-Verlauf, kein flaches Schwarz/Grau */
+html {
+  background: var(--gp-bg-0);
+}
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: var(--font-sans, system-ui, sans-serif);
+  min-height: 100vh;
+  background: radial-gradient(
+    140% 125% at 22% -12%,
+    #0c0d11 0%,
+    #070808 52%,
+    #040405 100%
+  );
+  color: var(--gp-ink);
+  font-family: var(--font-outfit, system-ui, sans-serif);
+  font-feature-settings: "kern";
+  font-variant-numeric: tabular-nums;
 }
 
-/* Ghost Protocol Design Tokens */
+::selection {
+  background: rgba(201, 168, 106, 0.28);
+  color: var(--gp-gold-hi);
+}
+
+/* ═══ §9.2 ENVIRONMENT-LAYER (global, hinter der App) ═══ */
+.gp-env {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+}
+.gp-env::before {
+  /* 1) EINE warme Lichtquelle oben links — statisch */
+  content: "";
+  position: absolute;
+  top: -28%;
+  left: -14%;
+  width: 78%;
+  height: 88%;
+  background: radial-gradient(
+    closest-side,
+    rgba(201, 168, 106, 0.22),
+    rgba(201, 168, 106, 0.055) 40%,
+    transparent 68%
+  );
+}
+.gp-env::after {
+  /* 2) kühler Tiefen-Glow rechts */
+  content: "";
+  position: absolute;
+  top: 18%;
+  right: -18%;
+  width: 62%;
+  height: 74%;
+  background: radial-gradient(
+    closest-side,
+    rgba(26, 104, 142, 0.13),
+    transparent 64%
+  );
+}
+.gp-vignette {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(
+    125% 105% at 50% 30%,
+    transparent 38%,
+    rgba(0, 0, 0, 0.55) 82%,
+    rgba(0, 0, 0, 0.82) 100%
+  );
+}
+.gp-grain {
+  position: absolute;
+  inset: 0;
+  /* Kein mix-blend-mode: fixe Full-Viewport-Blend-Layer kollabieren den
+     Compositor beim Scrollen zu Schwarz. Stattdessen sehr niedrige Opacity —
+     Textur bleibt, Schwarz bleibt schwarz (§7: kein Grau-Machen). */
+  opacity: 0.05;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='240'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.8' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+/* ═══ §9.3 GLASKACHEL — jede Datenkachel (.card-ghost bleibt der Klassenname)
+   §9.0: backdrop-filter SPARSAM — nur die Shell (Sidebar) blurt.
+   Kacheln: dichteres Glas ohne Filter (auf Kino-Schwarz visuell gleichwertig,
+   10+ parallele Blurs haben den Compositor in die Knie gezwungen). ═══ */
 .card-ghost {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+  position: relative;
+  background: linear-gradient(
+    180deg,
+    rgba(15, 16, 21, 0.92),
+    rgba(9, 10, 13, 0.88)
+  );
+  border: 1px solid var(--gp-glass-brd);
+  box-shadow: var(--gp-glass-sh);
+  border-radius: 17px;
+  transition: border-color 0.35s ease, box-shadow 0.35s ease,
+    transform 0.35s cubic-bezier(0.22, 1, 0.36, 1);
 }
-
+.card-ghost::before {
+  /* Gold-Oberkante als Haarlinie */
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 10%;
+  right: 10%;
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(201, 168, 106, 0.5),
+    transparent
+  );
+  pointer-events: none;
+}
 .card-ghost:hover {
-  border-color: var(--border);
-  box-shadow: 0 0 0 1px rgba(139, 92, 246, 0.1);
+  border-color: rgba(201, 168, 106, 0.24);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.07),
+    0 30px 70px -30px rgba(0, 0, 0, 0.96);
+}
+/* Aktive Kachel: kräftigere Gold-Kante + Eck-Ticks */
+.card-active {
+  border-color: rgba(201, 168, 106, 0.38);
+}
+.card-active::after {
+  content: "";
+  position: absolute;
+  inset: 6px;
+  pointer-events: none;
+  background:
+    linear-gradient(var(--gp-gold), var(--gp-gold)) top left / 10px 0.5px,
+    linear-gradient(var(--gp-gold), var(--gp-gold)) top left / 0.5px 10px,
+    linear-gradient(var(--gp-gold), var(--gp-gold)) bottom right / 10px 0.5px,
+    linear-gradient(var(--gp-gold), var(--gp-gold)) bottom right / 0.5px 10px;
+  background-repeat: no-repeat;
+  opacity: 0.75;
 }
 
-.glow-rose { box-shadow: 0 0 20px rgba(255, 51, 102, 0.15); }
-.glow-violet { box-shadow: 0 0 20px rgba(139, 92, 246, 0.15); }
-.glow-cyan { box-shadow: 0 0 20px rgba(6, 182, 212, 0.15); }
-.glow-emerald { box-shadow: 0 0 20px rgba(34, 197, 94, 0.15); }
+/* ═══ §9.5 MASTHEAD — editorial, wie ein Report-Cover ═══ */
+.gp-masthead {
+  position: relative;
+  margin-bottom: 34px;
+}
+.gp-index-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 18px;
+}
+.gp-index {
+  font-family: var(--font-jbmono);
+  font-size: 10px;
+  letter-spacing: 0.22em;
+  color: var(--gp-gold);
+}
+.gp-index-rule {
+  flex: 1;
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    rgba(201, 168, 106, 0.4),
+    var(--gp-hairline) 34%,
+    transparent
+  );
+}
+.gp-kicker {
+  font-family: var(--font-jbmono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.24em;
+  color: var(--gp-ink-3);
+  margin-bottom: 10px;
+}
+.gp-wordmark {
+  font-family: var(--font-cormorant), serif;
+  font-weight: 600;
+  font-size: clamp(44px, 6vw, 72px);
+  line-height: 0.98;
+  letter-spacing: -0.01em;
+  color: var(--gp-ink);
+}
+.gp-wordmark em {
+  font-style: italic;
+  color: var(--gp-gold);
+}
+.gp-sub {
+  margin-top: 12px;
+  max-width: 560px;
+  font-size: 13.5px;
+  line-height: 1.65;
+  color: var(--gp-ink-2);
+}
+
+/* Vitals-Chip (Mono, mit Eck-Ticks) */
+.gp-chip {
+  position: relative;
+  padding: 8px 14px;
+  font-family: var(--font-jbmono);
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--gp-ink-2);
+  background: rgba(11, 12, 16, 0.5);
+  border: 1px solid var(--gp-hairline);
+  border-radius: 8px;
+}
+.gp-chip b {
+  color: var(--gp-gold-hi);
+  font-weight: 500;
+}
+.gp-chip::before,
+.gp-chip::after {
+  content: "";
+  position: absolute;
+  width: 7px;
+  height: 7px;
+  border-color: rgba(201, 168, 106, 0.55);
+  border-style: solid;
+}
+.gp-chip::before {
+  top: -1px;
+  left: -1px;
+  border-width: 1px 0 0 1px;
+  border-top-left-radius: 8px;
+}
+.gp-chip::after {
+  bottom: -1px;
+  right: -1px;
+  border-width: 0 1px 1px 0;
+  border-bottom-right-radius: 8px;
+}
+
+/* Mono-Label (§3) */
+.mono-label {
+  font-family: var(--font-jbmono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+  color: var(--gp-ink-3);
+}
+
+/* ═══ §9.6 BOOT-SEQUENZ — gestaffeltes Einblenden, einmal pro Mount ═══ */
+@keyframes gp-boot {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+    filter: blur(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+    filter: blur(0);
+  }
+}
+.boot > * {
+  animation: gp-boot 0.62s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+.boot > *:nth-child(1) { animation-delay: 0.04s; }
+.boot > *:nth-child(2) { animation-delay: 0.1s; }
+.boot > *:nth-child(3) { animation-delay: 0.16s; }
+.boot > *:nth-child(4) { animation-delay: 0.22s; }
+.boot > *:nth-child(5) { animation-delay: 0.28s; }
+.boot > *:nth-child(6) { animation-delay: 0.34s; }
+.boot > *:nth-child(7) { animation-delay: 0.4s; }
+.boot > *:nth-child(8) { animation-delay: 0.46s; }
+.boot > *:nth-child(9) { animation-delay: 0.52s; }
+.boot > *:nth-child(10) { animation-delay: 0.58s; }
+.boot > *:nth-child(n + 11) { animation-delay: 0.64s; }
+
+/* ═══ §9.4 COP-HOLOGRAMM (Situation Table) ═══ */
+.cop-panel {
+  background: radial-gradient(
+    96% 132% at 27% 48%,
+    #0a1317 0%,
+    #070809 58%,
+    #050507 100%
+  );
+}
+@keyframes cop-sweep {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+.cop-sweep {
+  transform-origin: center;
+  animation: cop-sweep 7s linear infinite;
+}
+@keyframes cop-pulse {
+  0%, 100% { opacity: 0.85; }
+  50% { opacity: 0.2; }
+}
+.cop-focus-ring {
+  animation: cop-pulse 2.6s ease-in-out infinite;
+}
+
+/* ═══ Reduced Motion (§9.0) ═══ */
+@media (prefers-reduced-motion: reduce) {
+  .boot > * {
+    animation: none !important;
+  }
+  .cop-sweep,
+  .cop-focus-ring,
+  .animate-pulse-subtle {
+    animation: none !important;
+  }
+}
+
+/* ═══ Legacy-Utilities (Namen stabil, Look angepasst) ═══ */
+.glow-rose { box-shadow: 0 0 22px rgba(255, 77, 106, 0.12); }
+.glow-violet { box-shadow: 0 0 22px rgba(139, 92, 246, 0.12); }
+.glow-cyan { box-shadow: 0 0 22px rgba(56, 189, 248, 0.12); }
+.glow-emerald { box-shadow: 0 0 22px rgba(34, 197, 94, 0.12); }
 
 @keyframes pulse-subtle {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.6; }
 }
-
 @keyframes slide-up {
   from { opacity: 0; transform: translateY(8px); }
   to { opacity: 1; transform: translateY(0); }
 }
-
 .animate-pulse-subtle { animation: pulse-subtle 2s ease-in-out infinite; }
 .animate-slide-up { animation: slide-up 0.3s ease-out; }
 
-/* Status indicators */
-.status-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-}
-
-.status-online { background: var(--accent-emerald); box-shadow: 0 0 8px rgba(34, 197, 94, 0.5); }
-.status-working { background: var(--accent-amber); box-shadow: 0 0 8px rgba(245, 158, 11, 0.5); animation: pulse-subtle 1.5s ease-in-out infinite; }
-.status-maintenance { background: var(--accent-cyan); }
-.status-error { background: var(--accent-rose); box-shadow: 0 0 8px rgba(255, 51, 102, 0.5); }
-.status-offline { background: #333; }
+/* Status-Punkte (Datenkodierung, §2.6) */
+.status-dot { width: 8px; height: 8px; border-radius: 50%; }
+.status-online { background: var(--gp-emerald); box-shadow: 0 0 8px rgba(34, 197, 94, 0.5); }
+.status-working { background: var(--gp-amber); box-shadow: 0 0 8px rgba(245, 158, 11, 0.5); animation: pulse-subtle 1.5s ease-in-out infinite; }
+.status-maintenance { background: var(--gp-cyan); }
+.status-error { background: var(--gp-rose); box-shadow: 0 0 8px rgba(255, 77, 106, 0.5); }
+.status-offline { background: #2c2c31; }
 
 /* Scrollbar */
 ::-webkit-scrollbar { width: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
-::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+::-webkit-scrollbar-thumb { background: rgba(201, 168, 106, 0.18); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(201, 168, 106, 0.34); }
