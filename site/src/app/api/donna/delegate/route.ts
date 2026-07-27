@@ -23,9 +23,16 @@ const AGENT_CAPABILITIES: Record<string, string> = {
   localizer: "Übersetzung, Lokalisierung, Kulturelle Adaption (EN/DE)",
 };
 
-async function callClaude(systemPrompt: string, userMessage: string, model: string, maxTokens: number): Promise<string> {
+interface ClaudeCallResult {
+  text: string;
+  // "max_tokens" heisst: Antwort abgeschnitten (Thinking + Text teilen sich das Budget)
+  stopReason: string | null;
+  error: string | null;
+}
+
+async function callClaude(systemPrompt: string, userMessage: string, model: string, maxTokens: number): Promise<ClaudeCallResult> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) return "ERROR: No API key";
+  if (!apiKey) return { text: "", stopReason: null, error: "No API key" };
 
   const res = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
@@ -42,10 +49,14 @@ async function callClaude(systemPrompt: string, userMessage: string, model: stri
     }),
   });
 
-  if (!res.ok) return `ERROR: Claude ${res.status}`;
+  if (!res.ok) return { text: "", stopReason: null, error: `Claude ${res.status}` };
   const data = await res.json();
-  // Sonnet-5+ kann thinking-Bloecke VOR dem Text liefern → ersten Text-Block nehmen
-  return data.content?.find((b: { type?: string }) => b.type === "text")?.text ?? "";
+  return {
+    // Sonnet-5+ kann thinking-Bloecke VOR dem Text liefern → ersten Text-Block nehmen
+    text: data.content?.find((b: { type?: string }) => b.type === "text")?.text ?? "",
+    stopReason: data.stop_reason ?? null,
+    error: null,
+  };
 }
 
 async function activateAgent(agentId: string, task: string, cookie: string): Promise<{ response: string; cost: number }> {
@@ -94,26 +105,47 @@ REGELN:
 
 {"agents":[{"id":"agent_id","task":"Spezifischer Auftrag","priority":1}],"reasoning":"Warum diese Agents"}`;
 
-    const donnaResponse = await callClaude(
+    const donna = await callClaude(
       planningPrompt,
       `TASK: ${task}`,
       donnaPrompt?.model ?? "claude-haiku-4-5-20251001",
-      // Sonnet-5 verbraucht Budget fuer thinking-Bloecke VOR dem Text —
-      // 1024 schnitt das Plan-JSON mittendrin ab (Parse-Fail → 500)
-      4096
+      // Sonnet-5: adaptives Thinking ist default-AN und teilt sich max_tokens mit dem
+      // Antwort-Text. 4096 reichte bei langen Auftraegen immer noch nicht (Thinking
+      // fraß das Budget, Plan-JSON abgeschnitten, live beobachtet 27.07.). Kosten
+      // fallen nur fuer tatsaechlich generierte Tokens an — der Cap darf grosszuegig sein.
+      12000
     );
+
+    if (donna.error) {
+      return NextResponse.json(
+        { error: `L.I.S.A. nicht erreichbar: ${donna.error}` },
+        { status: 502 }
+      );
+    }
 
     // Parse L.I.S.A.'s delegation plan
     let plan: DelegationPlan;
+    const truncated = donna.stopReason === "max_tokens";
     try {
+      // Abgeschnittene Antwort NIE parsen — auch wenn sie zufaellig parsebar waere,
+      // koennte der Plan unvollstaendig sein.
+      if (truncated) throw new Error("truncated");
       // Extract JSON from response (L.I.S.A. might add extra text)
-      const jsonMatch = donnaResponse.match(/\{[\s\S]*\}/);
+      const jsonMatch = donna.text.match(/\{[\s\S]*\}/);
       if (!jsonMatch) throw new Error("No JSON found");
       plan = JSON.parse(jsonMatch[0]);
     } catch {
+      // Volle Modellantwort ins Server-Log (docker logs) — die API-Antwort kuerzt.
+      console.error(
+        `[delegate] Plan nicht verwertbar (stop_reason=${donna.stopReason}, ${donna.text.length} Zeichen):\n${donna.text}`
+      );
       return NextResponse.json({
-        error: "L.I.S.A. could not create a delegation plan",
-        raw_response: donnaResponse.slice(0, 500),
+        error: truncated
+          ? "Antwort unvollständig (max_tokens erreicht) — Plan-JSON abgeschnitten. max_tokens im Delegate-Endpoint erhöhen."
+          : "L.I.S.A.-Antwort enthielt kein parsebares Plan-JSON",
+        stop_reason: donna.stopReason,
+        raw_response: donna.text.slice(0, 2000),
+        raw_response_complete: donna.text.length <= 2000,
       }, { status: 500 });
     }
 
