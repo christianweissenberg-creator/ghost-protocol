@@ -24,8 +24,9 @@ export const AGENT_PROMPTS: Record<string, AgentPrompt> = {
 
   strategist: {
     model: "claude-sonnet-5",
-    // Sonnet-5: adaptives Thinking teilt sich max_tokens mit dem Text (vgl. Delegate-Fix)
-    maxTokens: 6000,
+    // Sonnet-5: adaptives Thinking teilt sich max_tokens mit dem Text (vgl. Delegate-Fix).
+    // 6000 reichte empirisch NICHT (Publisher-QS: 6000 Tokens Thinking, 0 Text) → 12000.
+    maxTokens: 12000,
     systemPrompt: `${COMPANY_CONTEXT}
 
 Du bist THE STRATEGIST — Tier 0, Das Gehirn von Ghost Protocol.
@@ -80,8 +81,9 @@ Kommunikationsstil: Direkt, entschlossen, zahlengetrieben. Erst die Entscheidung
   donna: {
     // Interner Slug bleibt "donna" (Routen/IDs) — Persona + Anzeigename sind L.I.S.A.
     model: "claude-sonnet-5",
-    // Sonnet-5: adaptives Thinking teilt sich max_tokens mit dem Text (vgl. Delegate-Fix)
-    maxTokens: 6000,
+    // Sonnet-5: adaptives Thinking teilt sich max_tokens mit dem Text (vgl. Delegate-Fix).
+    // 6000 reichte empirisch NICHT (Publisher-QS: 6000 Tokens Thinking, 0 Text) → 12000.
+    maxTokens: 12000,
     systemPrompt: `${COMPANY_CONTEXT}
 
 Du bist L.I.S.A. (Leadership Intelligence, Strategy & Alignment) — Tier 0, Executive-COO-KI und Chief of Staff.
@@ -145,8 +147,9 @@ Kommunikationsstil: Wie eine exzellente COO — kurz, sicher, analytisch, lösun
 
   oracle: {
     model: "claude-sonnet-5",
-    // Sonnet-5: adaptives Thinking teilt sich max_tokens mit dem Text (vgl. Delegate-Fix)
-    maxTokens: 6000,
+    // Sonnet-5: adaptives Thinking teilt sich max_tokens mit dem Text (vgl. Delegate-Fix).
+    // 6000 reichte empirisch NICHT (Publisher-QS: 6000 Tokens Thinking, 0 Text) → 12000.
+    maxTokens: 12000,
     systemPrompt: `${COMPANY_CONTEXT}
 
 Du bist ORACLE — Tier 1, Chief Intelligence Officer.
@@ -198,8 +201,9 @@ Kommunikationsstil: Daten zuerst, Quellen nennen, probabilistisch denken. "BLUF:
 
   operator: {
     model: "claude-sonnet-5",
-    // Sonnet-5: adaptives Thinking teilt sich max_tokens mit dem Text (vgl. Delegate-Fix)
-    maxTokens: 6000,
+    // Sonnet-5: adaptives Thinking teilt sich max_tokens mit dem Text (vgl. Delegate-Fix).
+    // 6000 reichte empirisch NICHT (Publisher-QS: 6000 Tokens Thinking, 0 Text) → 12000.
+    maxTokens: 12000,
     systemPrompt: `${COMPANY_CONTEXT}
 
 Du bist OPERATOR — Tier 1, Chief Operations Officer.
@@ -252,8 +256,9 @@ Kommunikationsstil: Prozessorientiert, metriklastig, lösungsfokussiert. "Bottle
 
   architect: {
     model: "claude-sonnet-5",
-    // Sonnet-5: adaptives Thinking teilt sich max_tokens mit dem Text (vgl. Delegate-Fix)
-    maxTokens: 6000,
+    // Sonnet-5: adaptives Thinking teilt sich max_tokens mit dem Text (vgl. Delegate-Fix).
+    // 6000 reichte empirisch NICHT (Publisher-QS: 6000 Tokens Thinking, 0 Text) → 12000.
+    maxTokens: 12000,
     systemPrompt: `${COMPANY_CONTEXT}
 
 Du bist ARCHITECT — Tier 1, Chief Technology Officer.
@@ -369,8 +374,9 @@ Kommunikationsstil: Zahlen zuerst, konservative Schätzungen, ROI-fokussiert. "A
 
   publisher: {
     model: "claude-sonnet-5",
-    // Sonnet-5: adaptives Thinking teilt sich max_tokens mit dem Text (vgl. Delegate-Fix)
-    maxTokens: 6000,
+    // Sonnet-5: adaptives Thinking teilt sich max_tokens mit dem Text (vgl. Delegate-Fix).
+    // 6000 reichte empirisch NICHT (Publisher-QS: 6000 Tokens Thinking, 0 Text) → 12000.
+    maxTokens: 12000,
     systemPrompt: `${COMPANY_CONTEXT}
 
 Du bist PUBLISHER — Tier 1, Chief Marketing Officer.
@@ -618,8 +624,9 @@ Kommunikationsstil: Kunde-zuerst, datengestützt, immer an Conversion denkend. "
 
   researcher: {
     model: "claude-sonnet-5",
-    // Sonnet-5: adaptives Thinking teilt sich max_tokens mit dem Text (vgl. Delegate-Fix)
-    maxTokens: 6000,
+    // Sonnet-5: adaptives Thinking teilt sich max_tokens mit dem Text (vgl. Delegate-Fix).
+    // 6000 reichte empirisch NICHT (Publisher-QS: 6000 Tokens Thinking, 0 Text) → 12000.
+    maxTokens: 12000,
     systemPrompt: `${COMPANY_CONTEXT}
 
 Du bist RESEARCHER — Tier 2, Research & Innovation Director.
