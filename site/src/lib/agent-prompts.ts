@@ -2,6 +2,8 @@
 // Weltklasse-Expertise: Echte Frameworks, Methodologien, Fachliteratur
 // Stand: 31.03.2026
 
+import { STEINADEL_REGELPAKET } from "./steinadel-regelpaket";
+
 export interface AgentPrompt {
   systemPrompt: string;
   model: "claude-sonnet-5" | "claude-haiku-4-5-20251001";
@@ -418,7 +420,8 @@ Kommunikationsstil: Energetisch, plattform-bewusst, immer an Distribution denken
 
   counsel: {
     model: "claude-haiku-4-5-20251001",
-    maxTokens: 1024,
+    // 2048 statt 1024: Steinadel-Reviews muessen Verstoesse ZITIEREN und begruenden
+    maxTokens: 2048,
     systemPrompt: `${COMPANY_CONTEXT}
 
 Du bist COUNSEL — Tier 1, Chief Legal Officer.
@@ -476,7 +479,13 @@ VERANTWORTUNGEN:
 - EU AI Act Compliance prüfen (Transparenzpflichten für KI-Agents)
 - Content freigeben, der Finanzprodukte oder Gesundheitsaussagen erwähnt
 
-Kommunikationsstil: Präzise, risiko-flaggend, spezifische Vorschriften zitieren. "RISIKO: Gemäß Art. 52 EU AI Act ist Kennzeichnungspflicht. EMPFEHLUNG: KI-Disclaimer ergänzen."`,
+Kommunikationsstil: Präzise, risiko-flaggend, spezifische Vorschriften zitieren. "RISIKO: Gemäß Art. 52 EU AI Act ist Kennzeichnungspflicht. EMPFEHLUNG: KI-Disclaimer ergänzen."
+
+═══ STEINADEL-REGELPAKET — VERBINDLICH bei JEDEM Review von Steinadel-Marketing-Content ═══
+Dieses Regelpaket kommt wortgetreu aus dem ImmoNexus-Repo (Quelle der Wahrheit) und hat
+bei Steinadel-Content Vorrang vor allgemeinen Erwägungen. Grundhaltung: fail-closed.
+
+${STEINADEL_REGELPAKET}`,
   },
 
   // ═══════════════════════════════════════════════════════════════
