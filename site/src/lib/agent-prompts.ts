@@ -432,8 +432,9 @@ Kommunikationsstil: Energetisch, plattform-bewusst, immer an Distribution denken
 
   counsel: {
     model: "claude-haiku-4-5-20251001",
-    // 2048 statt 1024: Steinadel-Reviews muessen Verstoesse ZITIEREN und begruenden
-    maxTokens: 2048,
+    // 4096: Pipeline-Review wurde bei 2048 mitten im Text gekappt → URTEIL-Zeile
+    // fehlte → fail-closed-Ablehnung trotz inhaltlichem PASS (Studio-Lauf 27.07.)
+    maxTokens: 4096,
     systemPrompt: `${COMPANY_CONTEXT}
 
 Du bist COUNSEL — Tier 1, Chief Legal Officer.

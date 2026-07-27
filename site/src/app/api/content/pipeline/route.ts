@@ -379,7 +379,7 @@ Liefere den fertigen Content, sofort publishbar.${objektBlock ? `\n\n${objektBlo
     try {
       const review = await activateAgent(
         "counsel",
-        `Pruefe den folgenden Content STRIKT gegen dein STEINADEL-REGELPAKET (fail-closed). Zahlen NUR gegen die mitgelieferten Objektdaten abgleichen. Zitiere Verstoesse. Schliesse mit URTEIL:-Zeile ab.
+        `Pruefe den folgenden Content STRIKT gegen dein STEINADEL-REGELPAKET (fail-closed). Zahlen NUR gegen die mitgelieferten Objektdaten abgleichen. Zitiere Verstoesse. HALTE das Review KOMPAKT (max. ~300 Woerter — nur Befunde, keine langen Tabellen) und schliesse ZWINGEND mit der URTEIL:-Zeile ab ('URTEIL: FREIGABE-EMPFEHLUNG' oder 'URTEIL: ABLEHNUNG').
 
 CONTENT:
 ${steps[1].output}
