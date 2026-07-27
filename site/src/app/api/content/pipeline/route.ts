@@ -1,16 +1,19 @@
 import { NextRequest, NextResponse } from "next/server";
+import { createServiceClient } from "@/lib/supabase";
 
 const BASE_URL = process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000";
 
-// Content-First Pipeline: RESEARCHER → SCRIBE → PUBLISHER → AMPLIFIER
-// Orchestriert die 4-Agent-Kette für einen Content-Piece
+// Content-First Pipeline: RESEARCHER → SCRIBE → COUNSEL → PUBLISHER → AMPLIFIER
+// COUNSEL ist Pflicht-Schritt (fail-closed): ohne eindeutige Freigabe-Empfehlung
+// stoppt die Pipeline, PUBLISHER/AMPLIFIER laufen NICHT.
 
 interface PipelineRequest {
-  topic: string;
-  platform: "youtube" | "twitter" | "newsletter" | "tiktok" | "instagram";
+  topic?: string;
+  platform: "youtube" | "twitter" | "x" | "newsletter" | "tiktok" | "instagram";
   format: "longform" | "short" | "thread" | "deep_dive" | "newsletter_issue" | "tiktok_short" | "reel" | "carousel" | "story";
-  category: "ki_automation" | "krypto_trading" | "business_automation" | "ghost_protocol";
+  category?: "ki_automation" | "krypto_trading" | "business_automation" | "ghost_protocol";
   repurpose_from?: string; // Original-Content für Repurposing
+  objekt_slug?: string; // Steinadel-Objekt (optional) — bindet Objektdaten in RESEARCHER/SCRIBE ein
 }
 
 interface PipelineStep {
@@ -19,6 +22,39 @@ interface PipelineStep {
   output?: string;
   cost?: number;
   duration_ms?: number;
+}
+
+// Steinadel-Objekt, wie von /api/objekte geliefert (Export-API, read-only)
+interface Kennzahl {
+  label: string;
+  wert: string;
+}
+interface Kampagne {
+  kampagne: string;
+  lpUrl: string;
+  lpVariant: string;
+}
+interface Urls {
+  objektSeite: string;
+  expose: string;
+  ogBild: string;
+  cover: string;
+}
+interface ObjektApi {
+  slug: string;
+  name: string;
+  untertitel: string;
+  tagline: string;
+  ort: string;
+  baujahr: number;
+  preis: string;
+  kurzbeschreibung: string;
+  statusBadge: string;
+  afaProzent: number;
+  istDenkmal: boolean;
+  kennzahlen: Kennzahl[];
+  urls: Urls;
+  kampagnen: Kampagne[];
 }
 
 // Activate an agent via internal API call
@@ -50,23 +86,131 @@ async function activateAgent(
   };
 }
 
-// POST — Run full content pipeline for a topic
+// Objektdaten per Slug aus der Steinadel-Export-API laden (Cookie-Weiterreichung
+// wie bei activateAgent, da /api/objekte hinter der Auth-Middleware liegt)
+async function fetchObjekt(slug: string, cookie: string): Promise<ObjektApi | null> {
+  const res = await fetch(`${BASE_URL}/api/objekte`, {
+    headers: { Cookie: cookie },
+    cache: "no-store",
+  });
+  if (!res.ok) return null;
+  const data = await res.json().catch(() => ({}));
+  const objekte: ObjektApi[] = data.objekte ?? [];
+  return objekte.find((o) => o.slug === slug) ?? null;
+}
+
+// OBJEKTDATEN-Block für RESEARCHER/SCRIBE/COUNSEL — inkl. Zahlen-Regel
+function buildObjektBlock(o: ObjektApi): string {
+  const kennzahlenText = o.kennzahlen.map((k) => `- ${k.label}: ${k.wert}`).join("\n");
+  const kampagnenText = o.kampagnen.length
+    ? o.kampagnen.map((k) => `- ${k.kampagne} (${k.lpVariant}): ${k.lpUrl}`).join("\n")
+    : "- (keine Kampagne hinterlegt)";
+  return `OBJEKTDATEN (Steinadel-Export, read-only):
+Name: ${o.name}
+Untertitel: ${o.untertitel}
+Tagline: ${o.tagline}
+Ort: ${o.ort}
+Baujahr: ${o.baujahr}
+Preis: ${o.preis}
+Kurzbeschreibung: ${o.kurzbeschreibung}
+Status: ${o.statusBadge}
+AfA-Satz: ${o.afaProzent} %
+Denkmalobjekt: ${o.istDenkmal ? "ja" : "nein"}
+Kennzahlen:
+${kennzahlenText}
+Kampagnen:
+${kampagnenText}
+
+REGEL: JEDE Zahl im Content muss aus diesen Objektdaten stammen — keine erfundenen
+oder aus dem Gedächtnis ergänzten Zahlen. "${o.preis}" (preis) ist ein String und
+wird WÖRTLICH übernommen, nicht gerundet oder umgerechnet. Das Wort "ImmoNexus"
+darf NIEMALS im Content vorkommen (interner Codename, öffentliche Marke ist
+ausschließlich "Steinadel").`;
+}
+
+// Erlaubtes Zeichenset für utm_content erzwingen
+function sanitizeUtm(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/-+/g, "-");
+}
+
+// POST — Run full content pipeline for a topic (optional: an ein Steinadel-Objekt gebunden)
 export async function POST(request: NextRequest) {
+  const supabase = createServiceClient();
+  let contentId: number | null = null;
+
   try {
     const body: PipelineRequest = await request.json();
-    const { topic, platform, format, category } = body;
+    const { topic, platform, format, category, objekt_slug } = body;
 
-    if (!topic || !platform || !format) {
+    if (!platform || !format || (!topic && !objekt_slug)) {
       return NextResponse.json(
-        { error: "topic, platform, and format are required" },
+        { error: "platform, format und (topic oder objekt_slug) sind erforderlich" },
         { status: 400 }
       );
     }
 
     const cookie = request.headers.get("cookie") ?? "";
+
+    // ═══ Objektdaten laden (falls objekt_slug gesetzt) ═══
+    let objekt: ObjektApi | null = null;
+    if (objekt_slug) {
+      objekt = await fetchObjekt(objekt_slug, cookie);
+      if (!objekt) {
+        return NextResponse.json(
+          { error: `Objekt "${objekt_slug}" nicht in der Steinadel-Export-API gefunden` },
+          { status: 404 }
+        );
+      }
+    }
+
+    const thema = objekt ? objekt.name : (topic as string);
+    const objektBlock = objekt ? buildObjektBlock(objekt) : null;
+
+    const platformLabel: Record<string, string> = { youtube: "YouTube-Video", twitter: "X/Twitter-Thread", x: "X/Twitter-Thread", newsletter: "Newsletter-Ausgabe", tiktok: "TikTok-Video", instagram: "Instagram-Post" };
+    const formatLabel: Record<string, string> = { longform: "Longform (8-12 Min)", short: "Short (60 Sek)", thread: "Thread (5-8 Posts)", deep_dive: "Deep Dive (15+ Min)", newsletter_issue: "Newsletter-Ausgabe", tiktok_short: "TikTok Short (30-60 Sek)", reel: "Reel (30-90 Sek)", carousel: "Carousel (5-10 Slides)", story: "Story (15 Sek Clips)" };
+    const categoryLabel: Record<string, string> = { ki_automation: "KI & Automation", krypto_trading: "Krypto-Trading & DeFi", business_automation: "Business-Automation", ghost_protocol: "Ghost Protocol Behind-the-Scenes" };
+    const categoryKey = category ?? "ghost_protocol";
+
+    // ═══ Content-Zeile anlegen (Persistenz ab Start des Laufs) ═══
+    const { data: inserted, error: insertErr } = await supabase
+      .from("content")
+      .insert({
+        title: thema,
+        content_type: format,
+        status: "entwurf",
+        platform,
+        language: "de",
+        created_by: "scribe",
+      })
+      .select("id")
+      .single();
+
+    if (insertErr || !inserted) {
+      return NextResponse.json(
+        { error: `Content-Eintrag konnte nicht angelegt werden: ${insertErr?.message ?? "unbekannt"}` },
+        { status: 500 }
+      );
+    }
+    contentId = inserted.id as number;
+
+    // ═══ UTM-Registry (nur bei Objekt + vorhandener Kampagne) ═══
+    let utmContent: string | null = null;
+    let ctaLink: string | null = null;
+    let kampagneSlug: string | null = null;
+    if (objekt && objekt.kampagnen.length > 0) {
+      const kampagne = objekt.kampagnen[0];
+      utmContent = sanitizeUtm(`${platform}-${objekt_slug}-${contentId}`);
+      ctaLink =
+        `${kampagne.lpUrl}?utm_source=${encodeURIComponent(platform)}` +
+        `&utm_medium=social&utm_campaign=${encodeURIComponent(kampagne.kampagne)}` +
+        `&utm_content=${utmContent}`;
+      kampagneSlug = kampagne.kampagne;
+    }
+
     const steps: PipelineStep[] = [
       { agent: "researcher", status: "pending" },
       { agent: "scribe", status: "pending" },
+      { agent: "counsel", status: "pending" },
       { agent: "publisher", status: "pending" },
       { agent: "amplifier", status: "pending" },
     ];
@@ -75,14 +219,10 @@ export async function POST(request: NextRequest) {
 
     // ═══ STEP 1: RESEARCHER — Recherche & Fakten ═══
     steps[0].status = "running";
-    const platformLabel: Record<string, string> = { youtube: "YouTube-Video", twitter: "X/Twitter-Thread", newsletter: "Newsletter-Ausgabe", tiktok: "TikTok-Video", instagram: "Instagram-Post" };
-    const formatLabel: Record<string, string> = { longform: "Longform (8-12 Min)", short: "Short (60 Sek)", thread: "Thread (5-8 Posts)", deep_dive: "Deep Dive (15+ Min)", newsletter_issue: "Newsletter-Ausgabe", tiktok_short: "TikTok Short (30-60 Sek)", reel: "Reel (30-90 Sek)", carousel: "Carousel (5-10 Slides)", story: "Story (15 Sek Clips)" };
-    const categoryLabel: Record<string, string> = { ki_automation: "KI & Automation", krypto_trading: "Krypto-Trading & DeFi", business_automation: "Business-Automation", ghost_protocol: "Ghost Protocol Behind-the-Scenes" };
-
     try {
       const research = await activateAgent(
         "researcher",
-        `RESEARCH-AUFTRAG: Recherchiere das Thema "${topic}" für ein ${platformLabel[platform]} im Format ${formatLabel[format]}, Kategorie: ${categoryLabel[category]}.
+        `RESEARCH-AUFTRAG: Recherchiere das Thema "${thema}" für ein ${platformLabel[platform]} im Format ${formatLabel[format]}, Kategorie: ${categoryLabel[categoryKey]}.
 
 Liefere:
 1. 5 Kernfakten mit Quellen (Studien, Statistiken, Experten-Zitate)
@@ -91,7 +231,7 @@ Liefere:
 4. 3 konkrete Beispiele oder Case Studies
 5. SEO-Keywords (5 Stück) für ${platform}
 
-Format: Strukturierte Bullet-Points, deutsch. Keine Floskeln, nur Fakten.`,
+Format: Strukturierte Bullet-Points, deutsch. Keine Floskeln, nur Fakten.${objektBlock ? `\n\n${objektBlock}` : ""}`,
         cookie
       );
       steps[0].status = "done";
@@ -123,6 +263,16 @@ Format: Strukturierte Bullet-Points, deutsch. Keine Floskeln, nur Fakten.`,
 - Letzter Tweet: CTA (Follow + Retweet-Bitte)
 - Jeder Tweet: Max 280 Zeichen, Emoji sparsam (max 1 pro Tweet)
 - Verwende Thread-Nummering: 1/ 2/ 3/ etc.`,
+        x: `Schreibe einen X-Thread im Steinadel-Ton (premium, editorial, ruhig, max 1 Emoji):
+- 6-7 Tweets, je maximal 270 Zeichen
+- Nummerierung im Stil "1/7", "2/7", ...
+- Tweet 1: Hook (Zahl, Frage oder These aus den Objektdaten — NICHT erfunden)
+- Tweet 2-5/6: Hauptpunkte zum Objekt, jeder Tweet eigenständig lesbar
+- Falls AfA/Steuerzahlen erwähnt werden: Modellrechnung-Disclaimer-Satz PFLICHT
+  ("Modellrechnung — individuelle steuerliche Wirkung abhängig von persönlicher
+  Situation und Behördenbescheinigung; keine Steuerberatung.")
+- Letzter Tweet: CTA mit EXAKT diesem Link${ctaLink ? `: ${ctaLink}` : " (kein Kampagnen-Link hinterlegt — allgemeiner CTA)"}
+- Keine Superlativ-Ketten, keine Caps-Lock-Dringlichkeit`,
         newsletter: `Schreibe eine Newsletter-Ausgabe (${formatLabel[format]}):
 - Betreffzeile (max 50 Zeichen, Öffnungsrate-optimiert)
 - Preview-Text (max 90 Zeichen)
@@ -172,25 +322,25 @@ format === "reel" ? `REEL (30-90 Sek):
       try {
         const content = await activateAgent(
           "scribe",
-          `CONTENT-PRODUKTION: Schreibe Content zum Thema "${topic}".
+          `CONTENT-PRODUKTION: Schreibe Content zum Thema "${thema}".
 
 PLATTFORM: ${platformLabel[platform]}
-KATEGORIE: ${categoryLabel[category]}
+KATEGORIE: ${categoryLabel[categoryKey]}
 
 RECHERCHE-ERGEBNISSE (von RESEARCHER):
 ${steps[0].output}
 
 ANWEISUNGEN:
-${platformInstructions[platform]}
+${platformInstructions[platform] ?? platformInstructions.twitter}
 
 STILREGELN:
-- Tonalität: Professionell aber zugänglich, keine Corporate-Sprache
-- Zielgruppe: Tech-affine Professionals, 25-45 Jahre, DACH-Raum
+- Tonalität: ${objekt ? "Steinadel — premium, editorial, ruhig" : "Professionell aber zugänglich, keine Corporate-Sprache"}
+- Zielgruppe: ${objekt ? "Vermögende Kapitalanleger, Spitzensteuersatz, DACH-Raum" : "Tech-affine Professionals, 25-45 Jahre, DACH-Raum"}
 - Sprache: Deutsch, Anglizismen erlaubt bei Fachbegriffen
 - Ghost Protocol NICHT erwähnen (Agenten sind unsichtbar)
-- Brandname für extern: "AI Insider" (Arbeitstitel)
+${objekt ? "" : `- Brandname für extern: "AI Insider" (Arbeitstitel)`}
 
-Liefere den fertigen Content, sofort publishbar.`,
+Liefere den fertigen Content, sofort publishbar.${objektBlock ? `\n\n${objektBlock}` : ""}`,
           cookie
         );
         steps[1].status = "done";
@@ -204,19 +354,109 @@ Liefere den fertigen Content, sofort publishbar.`,
       }
     }
 
-    // ═══ STEP 3: PUBLISHER — Formatierung & Scheduling ═══
-    if (steps[1].status === "done") {
-      steps[2].status = "running";
-      try {
-        const published = await activateAgent(
-          "publisher",
-          `PUBLISHING-AUFTRAG: Bereite diesen Content für die Veröffentlichung vor.
+    // Technischer Fehler in RESEARCHER/SCRIBE → Pipeline abbrechen, kein COUNSEL
+    if (steps[0].status !== "done" || steps[1].status !== "done") {
+      const failedStep = steps[0].status !== "done" ? steps[0] : steps[1];
+      await supabase
+        .from("content")
+        .update({
+          status: "fehler",
+          metadata: { steps, fehler: `${failedStep.agent} fehlgeschlagen: ${failedStep.output}` },
+        })
+        .eq("id", contentId);
+
+      return NextResponse.json({
+        pipeline: "content-first",
+        contentId,
+        status: "fehler",
+        steps,
+        summary: { total_cost_usd: Math.round(totalCost * 100000) / 100000 },
+      });
+    }
+
+    // ═══ STEP 3: COUNSEL — Pflicht-Review, fail-closed ═══
+    steps[2].status = "running";
+    try {
+      const review = await activateAgent(
+        "counsel",
+        `Pruefe den folgenden Content STRIKT gegen dein STEINADEL-REGELPAKET (fail-closed). Zahlen NUR gegen die mitgelieferten Objektdaten abgleichen. Zitiere Verstoesse. Schliesse mit URTEIL:-Zeile ab.
+
+CONTENT:
+${steps[1].output}
+
+${objektBlock ?? "OBJEKTDATEN: keine (Freitext-Content ohne Steinadel-Objektbezug)"}`,
+        cookie
+      );
+      steps[2].status = "done";
+      steps[2].output = review.response;
+      steps[2].cost = review.cost;
+      steps[2].duration_ms = review.duration_ms;
+      totalCost += review.cost;
+    } catch (err) {
+      steps[2].status = "error";
+      steps[2].output = err instanceof Error ? err.message : "Unknown error";
+    }
+
+    const counselOutput = steps[2].output ?? "";
+    // Technischer Fehler ist KEINE fachliche Ablehnung — 'fehler' statt 'abgelehnt',
+    // damit die Freigabe-Ansicht nicht faelschlich "COUNSEL lehnt ab" anzeigt.
+    const counselTechnischGescheitert = steps[2].status !== "done";
+    const rejected =
+      counselTechnischGescheitert ||
+      counselOutput.includes("URTEIL: ABLEHNUNG") ||
+      !counselOutput.includes("URTEIL:");
+
+    // COUNSEL-Ergebnis immer persistieren (auch bei Ablehnung) — inkl. steps,
+    // sonst zeigt die Freigabe-Ansicht abgelehnte Laeufe ohne Kontext.
+    await supabase
+      .from("content")
+      .update({
+        reviewed_by: "counsel",
+        review_notes: counselOutput,
+        status: counselTechnischGescheitert ? "fehler" : rejected ? "abgelehnt" : "counsel_geprueft",
+        metadata: {
+          steps: steps.map((s) => ({ agent: s.agent, output: s.output, cost: s.cost, duration_ms: s.duration_ms })),
+          thema,
+          objekt_slug: objekt_slug ?? null,
+          utm_content: utmContent,
+          kampagne: kampagneSlug,
+          cta_link: ctaLink,
+        },
+      })
+      .eq("id", contentId);
+
+    if (rejected) {
+      return NextResponse.json({
+        pipeline: "content-first",
+        contentId,
+        thema,
+        platform,
+        format,
+        status: "abgelehnt",
+        steps,
+        summary: {
+          total_cost_usd: Math.round(totalCost * 100000) / 100000,
+          total_duration_ms: steps.reduce((sum, s) => sum + (s.duration_ms ?? 0), 0),
+          completed: `${steps.filter((s) => s.status === "done").length}/5`,
+        },
+      });
+    }
+
+    // ═══ STEP 4: PUBLISHER — Formatierung & Scheduling ═══
+    steps[3].status = "running";
+    try {
+      const published = await activateAgent(
+        "publisher",
+        `PUBLISHING-AUFTRAG: Bereite diesen Content für die Veröffentlichung vor.
 
 PLATTFORM: ${platform}
 FORMAT: ${format}
 
-CONTENT (von SCRIBE):
+CONTENT (von SCRIBE, COUNSEL-geprüft):
 ${steps[1].output}
+
+COUNSEL-REVIEW:
+${counselOutput}
 
 AUFGABEN:
 1. Qualitätsprüfung: Fakten-Check, Ton, Länge
@@ -230,107 +470,128 @@ Liefere:
 - Metadaten (Title, Description, Tags, Hashtags)
 - Publishing-Zeitpunkt (Tag + Uhrzeit, DACH-optimiert)
 - Cross-Promotion-Posts (1 Tweet, 1 Newsletter-Teaser)`,
-          cookie
-        );
-        steps[2].status = "done";
-        steps[2].output = published.response;
-        steps[2].cost = published.cost;
-        steps[2].duration_ms = published.duration_ms;
-        totalCost += published.cost;
-      } catch (err) {
-        steps[2].status = "error";
-        steps[2].output = err instanceof Error ? err.message : "Unknown error";
-      }
+        cookie
+      );
+      steps[3].status = "done";
+      steps[3].output = published.response;
+      steps[3].cost = published.cost;
+      steps[3].duration_ms = published.duration_ms;
+      totalCost += published.cost;
+    } catch (err) {
+      steps[3].status = "error";
+      steps[3].output = err instanceof Error ? err.message : "Unknown error";
     }
 
-    // ═══ STEP 4: AMPLIFIER — Distribution-Plan ═══
-    if (steps[2].status === "done") {
-      steps[3].status = "running";
+    // ═══ STEP 5: AMPLIFIER — Distribution-Plan ═══
+    if (steps[3].status === "done") {
+      steps[4].status = "running";
       try {
         const amplified = await activateAgent(
           "amplifier",
           `AMPLIFICATION-AUFTRAG: Erstelle den Distribution- und Repurposing-Plan für diesen Content.
 
 ORIGINAL-PLATTFORM: ${platform}
-THEMA: ${topic}
+THEMA: ${thema}
 
 PUBLISHER-OUTPUT:
-${steps[2].output}
+${steps[3].output}
 
 ALLE 5 PLATTFORMEN: YouTube, X/Twitter, TikTok, Instagram, Newsletter
 
 AUFGABEN:
 1. Distribution-Timeline: 7-Tage-Plan über ALLE 5 Plattformen
-2. Repurposing-Matrix (KRITISCH — 1→6 Strategie):
-   ${platform === "youtube" ? `- YouTube Longform → 2 TikTok Shorts (Best-Of-Clips, je 30-60 Sek)
-   - YouTube Longform → 1 Instagram Carousel (Key Points als Slides)
-   - YouTube Longform → 1 Instagram Reel (Hook + Highlight, 60 Sek)
-   - YouTube Longform → 1 X/Twitter Thread (Kernaussagen als Tweets)
-   - YouTube Longform → Newsletter-Teaser (1 Absatz + Link)` :
-   platform === "twitter" ? `- X Thread → 1 TikTok Short (Thread als Voiceover mit Text-Overlays)
-   - X Thread → 1 Instagram Carousel (1 Tweet = 1 Slide)
-   - X Thread → Newsletter Quick-Link
-   - X Thread → YouTube Community Post` :
-   platform === "tiktok" ? `- TikTok → Instagram Reel (Cross-Post mit angepasster Caption)
-   - TikTok → YouTube Short (Cross-Post mit End-Screen)
-   - TikTok → X/Twitter Post mit Video-Link
-   - TikTok → Newsletter "Video der Woche"` :
-   platform === "instagram" ? `- Instagram Carousel → TikTok (Slide-Slideshow mit Voiceover)
-   - Instagram Carousel → X/Twitter Thread (1 Slide = 1 Tweet)
-   - Instagram Reel → TikTok (Cross-Post)
-   - Instagram → Newsletter Visual-Teaser` :
-   `- Newsletter → 3 X/Twitter Tweets (Key Quotes)
-   - Newsletter → 1 Instagram Carousel (Highlights)
-   - Newsletter → 1 TikTok (Hot Take als Short)
-   - Newsletter → YouTube Community Post (Teaser)`}
+2. Repurposing-Matrix (1→6 Strategie) passend zur Original-Plattform
 3. Für JEDEN Repurpose-Piece: Konkreten Content-Entwurf liefern (nicht nur Beschreibung!)
-4. Hashtag-Strategie pro Plattform (plattform-spezifisch!)
-5. Engagement-Strategie: Kommentar-Antworten, Community-Posts
-6. Influencer-Outreach: 3 Accounts zum Taggen/Mentionieren (deutsch, KI/Tech-Nische)
-7. KPI-Ziele pro Plattform (Views, Engagement-Rate, Follower-Growth, 7-Tage-Ziel)
-8. Optimale Posting-Zeiten pro Plattform (DACH-Zielgruppe):
-   - YouTube: Di/Do 17:00
-   - X/Twitter: Mo-Fr 08:00 + 12:00
-   - TikTok: Mo-Fr 18:00-20:00
-   - Instagram: Di/Mi/Do 11:00 + 18:00
-   - Newsletter: Di 09:00
+4. Hashtag-Strategie pro Plattform
+5. KPI-Ziele pro Plattform (Views, Engagement-Rate, Follower-Growth, 7-Tage-Ziel)
 
 Liefere einen konkreten Aktionsplan mit fertigen Repurpose-Entwürfen.`,
           cookie
         );
-        steps[3].status = "done";
-        steps[3].output = amplified.response;
-        steps[3].cost = amplified.cost;
-        steps[3].duration_ms = amplified.duration_ms;
+        steps[4].status = "done";
+        steps[4].output = amplified.response;
+        steps[4].cost = amplified.cost;
+        steps[4].duration_ms = amplified.duration_ms;
         totalCost += amplified.cost;
       } catch (err) {
-        steps[3].status = "error";
-        steps[3].output = err instanceof Error ? err.message : "Unknown error";
+        steps[4].status = "error";
+        steps[4].output = err instanceof Error ? err.message : "Unknown error";
       }
     }
 
     const totalDuration = steps.reduce((sum, s) => sum + (s.duration_ms ?? 0), 0);
     const completedSteps = steps.filter((s) => s.status === "done").length;
 
+    // Technischer Fehler in PUBLISHER/AMPLIFIER → status 'fehler'
+    if (steps[3].status !== "done" || steps[4].status !== "done") {
+      const failedStep = steps[3].status !== "done" ? steps[3] : steps[4];
+      await supabase
+        .from("content")
+        .update({
+          status: "fehler",
+          metadata: {
+            steps,
+            fehler: `${failedStep.agent} fehlgeschlagen: ${failedStep.output}`,
+            thema,
+            objekt_slug: objekt_slug ?? null,
+            utm_content: utmContent,
+            kampagne: kampagneSlug,
+            cta_link: ctaLink,
+          },
+        })
+        .eq("id", contentId);
+
+      return NextResponse.json({
+        pipeline: "content-first",
+        contentId,
+        status: "fehler",
+        steps,
+        summary: { total_cost_usd: Math.round(totalCost * 100000) / 100000, total_duration_ms: totalDuration, completed: `${completedSteps}/5` },
+      });
+    }
+
+    // ═══ Erfolgreicher Durchlauf: zur menschlichen Freigabe ═══
+    await supabase
+      .from("content")
+      .update({
+        body: steps[3].output,
+        status: "zur_freigabe",
+        metadata: {
+          steps: steps.map((s) => ({ agent: s.agent, output: s.output, cost: s.cost, duration_ms: s.duration_ms })),
+          thema,
+          objekt_slug: objekt_slug ?? null,
+          utm_content: utmContent,
+          kampagne: kampagneSlug,
+          cta_link: ctaLink,
+          amplifier_empfehlung: steps[4].output,
+        },
+      })
+      .eq("id", contentId);
+
     return NextResponse.json({
       pipeline: "content-first",
-      topic,
+      contentId,
+      thema,
       platform,
       format,
-      category,
-      status: completedSteps === 4 ? "complete" : "partial",
+      category: categoryKey,
+      status: completedSteps === 5 ? "complete" : "partial",
       steps,
       summary: {
         total_cost_usd: Math.round(totalCost * 100000) / 100000,
         total_duration_ms: totalDuration,
-        completed: `${completedSteps}/4`,
+        completed: `${completedSteps}/5`,
       },
     });
   } catch (err) {
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Unknown error" },
-      { status: 500 }
-    );
+    const message = err instanceof Error ? err.message : "Unknown error";
+    if (contentId !== null) {
+      await supabase
+        .from("content")
+        .update({ status: "fehler", metadata: { fehler: message } })
+        .eq("id", contentId);
+    }
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }
 
@@ -338,23 +599,24 @@ Liefere einen konkreten Aktionsplan mit fertigen Repurpose-Entwürfen.`,
 export async function GET() {
   return NextResponse.json({
     pipeline: "content-first",
-    description: "RESEARCHER → SCRIBE → PUBLISHER → AMPLIFIER (5 Plattformen, 1→6 Repurposing)",
-    platforms: ["youtube", "twitter", "newsletter", "tiktok", "instagram"],
+    description: "RESEARCHER → SCRIBE → COUNSEL → PUBLISHER → AMPLIFIER (5 Plattformen, COUNSEL fail-closed, optional an Steinadel-Objekt gebunden)",
+    platforms: ["youtube", "twitter", "x", "newsletter", "tiktok", "instagram"],
     formats: {
       youtube: ["longform", "short", "deep_dive"],
       twitter: ["thread"],
+      x: ["thread"],
       newsletter: ["newsletter_issue"],
       tiktok: ["tiktok_short"],
       instagram: ["carousel", "reel", "story"],
     },
     categories: ["ki_automation", "krypto_trading", "business_automation", "ghost_protocol"],
     estimated_cost_per_piece: {
-      youtube_longform: "$0.04-0.08 (4 Sonnet calls)",
-      twitter_thread: "$0.02-0.04 (2 Sonnet + 2 Haiku)",
-      newsletter: "$0.03-0.06 (4 mixed calls)",
-      tiktok_short: "$0.02-0.04 (4 Haiku/Sonnet calls)",
-      instagram_carousel: "$0.03-0.06 (4 mixed calls)",
-      instagram_reel: "$0.02-0.04 (4 mixed calls)",
+      youtube_longform: "$0.04-0.08 (5 Sonnet/Haiku calls)",
+      x_thread: "$0.03-0.05 (2 Sonnet + Haiku COUNSEL + 2 Sonnet)",
+      newsletter: "$0.03-0.06 (5 mixed calls)",
+      tiktok_short: "$0.02-0.04 (5 Haiku/Sonnet calls)",
+      instagram_carousel: "$0.03-0.06 (5 mixed calls)",
+      instagram_reel: "$0.02-0.04 (5 mixed calls)",
     },
     repurposing_strategy: {
       description: "1→6: Jedes Anchor-Piece (YouTube) wird zu 6+ Derivaten auf allen Plattformen",

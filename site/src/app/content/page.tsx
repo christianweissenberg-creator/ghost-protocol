@@ -7,14 +7,36 @@ import { KPICard } from "@/components/ui/KPICard";
 // ═══ TYPES ═══
 
 interface ContentItem {
-  id: string;
+  id: number;
   title: string;
   content_type: string;
   status: string;
-  agent_id: string;
-  metadata: Record<string, unknown>;
+  body: string | null;
+  platform: string | null;
+  created_by: string | null;
+  reviewed_by: string | null;
+  review_notes: string | null;
+  published_url: string | null;
+  published_at: string | null;
+  views: number | null;
+  engagement: number | null;
+  metadata: {
+    thema?: string;
+    objekt_slug?: string | null;
+    utm_content?: string | null;
+    kampagne?: string | null;
+    cta_link?: string | null;
+    amplifier_empfehlung?: string;
+    fehler?: string;
+    steps?: { agent: string; output?: string; cost?: number; duration_ms?: number }[];
+  } | null;
   created_at: string;
   updated_at: string;
+}
+
+interface ObjektOption {
+  slug: string;
+  name: string;
 }
 
 interface CalendarEntry {
@@ -41,7 +63,8 @@ interface PipelineStep {
 }
 
 interface PipelineResult {
-  topic: string;
+  contentId?: number;
+  thema?: string;
   platform: string;
   status: string;
   steps: PipelineStep[];
@@ -50,12 +73,19 @@ interface PipelineResult {
 
 // ═══ CONSTANTS ═══
 
-const STATUS_FLOW = [
-  { key: "draft", label: "Draft", color: "#6b6b7b", agent: "SCRIBE" },
-  { key: "review", label: "Review", color: "#f59e0b", agent: "COUNSEL" },
-  { key: "approved", label: "Approved", color: "#06b6d4", agent: "PUBLISHER" },
-  { key: "published", label: "Published", color: "#22c55e", agent: "AMPLIFIER" },
-];
+// Status-Reihenfolge in der Freigabe-Ansicht: zur_freigabe zuerst (braucht Aktion),
+// dann Entwurfs-/Zwischenstände & Fehlschläge, dann freigegeben, dann gepostet.
+const STATUS_ORDER = ["zur_freigabe", "entwurf", "counsel_geprueft", "fehler", "abgelehnt", "freigegeben", "gepostet"];
+
+const STATUS_META: Record<string, { label: string; color: string }> = {
+  entwurf: { label: "Entwurf", color: "#6b6b7b" },
+  counsel_geprueft: { label: "Counsel geprüft", color: "#38bdf8" },
+  zur_freigabe: { label: "Zur Freigabe", color: "#f59e0b" },
+  fehler: { label: "Fehler", color: "#ff4d6a" },
+  abgelehnt: { label: "Abgelehnt", color: "#ff4d6a" },
+  freigegeben: { label: "Freigegeben", color: "#22c55e" },
+  gepostet: { label: "Gepostet", color: "#8b5cf6" },
+};
 
 const TYPE_LABELS: Record<string, string> = {
   article: "Artikel",
@@ -63,10 +93,14 @@ const TYPE_LABELS: Record<string, string> = {
   social_post: "Social Post",
   newsletter: "Newsletter",
   product: "Produkt",
+  thread: "Thread",
+  longform: "Longform",
+  carousel: "Carousel",
 };
 
 const PLATFORM_ICONS: Record<string, string> = {
   youtube: "▶",
+  x: "𝕏",
   twitter: "𝕏",
   newsletter: "✉",
   tiktok: "♪",
@@ -75,6 +109,7 @@ const PLATFORM_ICONS: Record<string, string> = {
 
 const PLATFORM_COLORS: Record<string, string> = {
   youtube: "#ff0000",
+  x: "#1da1f2",
   twitter: "#1da1f2",
   newsletter: "#8b5cf6",
   tiktok: "#00f2ea",
@@ -97,6 +132,34 @@ const CATEGORIES = [
   { value: "ghost_protocol", label: "Behind the Scenes" },
 ];
 
+const TWEET_MAX = 280;
+
+// body an Tweet-Grenzen splitten: Zeilen die mit "N/" oder "**N/M**" beginnen,
+// Markdown-Bold-Sterne entfernen. Ohne Treffer: gesamter Body als ein Block.
+function splitTweets(body: string): string[] {
+  const lines = body.split("\n");
+  const tweetStart = /^\*{0,2}\d+\/\d*\*{0,2}/;
+  const tweets: string[] = [];
+  let current: string[] = [];
+  for (const line of lines) {
+    if (tweetStart.test(line.trim())) {
+      if (current.length) tweets.push(current.join("\n").trim());
+      current = [line];
+    } else {
+      current.push(line);
+    }
+  }
+  if (current.length) tweets.push(current.join("\n").trim());
+  const cleaned = tweets.map((t) => t.replace(/\*\*/g, "")).filter((t) => t.length > 0);
+  return cleaned.length > 0 ? cleaned : [body.trim()];
+}
+
+function charCountColor(len: number): string {
+  if (len > TWEET_MAX) return "var(--gp-rose)";
+  if (len > TWEET_MAX - 30) return "var(--gp-amber)";
+  return "var(--gp-ink-3)";
+}
+
 // ═══ COMPONENT ═══
 
 export default function ContentPage() {
@@ -110,9 +173,19 @@ export default function ContentPage() {
 
   // Custom pipeline form
   const [customTopic, setCustomTopic] = useState("");
-  const [customPlatform, setCustomPlatform] = useState<string>("youtube");
-  const [customFormat, setCustomFormat] = useState<string>("longform");
+  const [customPlatform, setCustomPlatform] = useState<string>("x");
+  const [customFormat, setCustomFormat] = useState<string>("thread");
   const [customCategory, setCustomCategory] = useState<string>("ki_automation");
+  const [objekte, setObjekte] = useState<ObjektOption[]>([]);
+  const [selectedObjekt, setSelectedObjekt] = useState<string>("");
+
+  // Freigabe-Ansicht (Content-Tab)
+  const [expandedId, setExpandedId] = useState<number | null>(null);
+  const [counselOpen, setCounselOpen] = useState<Record<number, boolean>>({});
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
+  const [publishedUrlDraft, setPublishedUrlDraft] = useState<Record<number, string>>({});
+  const [metricsDraft, setMetricsDraft] = useState<Record<number, { impressions: string; likes: string }>>({});
+  const [actionPending, setActionPending] = useState<number | null>(null);
 
   useEffect(() => {
     async function fetchContent() {
@@ -137,8 +210,25 @@ export default function ContentPage() {
       }
     }
 
+    async function fetchObjekte() {
+      try {
+        const res = await fetch("/api/objekte", { cache: "no-store" });
+        if (res.ok) {
+          const data = await res.json();
+          const liste: ObjektOption[] = (data.objekte ?? []).map((o: { slug: string; name: string }) => ({
+            slug: o.slug,
+            name: o.name,
+          }));
+          setObjekte(liste);
+        }
+      } catch {
+        // Objekt-Liste optional — Formular funktioniert auch ohne
+      }
+    }
+
     fetchContent();
     fetchCalendar();
+    fetchObjekte();
 
     const channel = supabase
       .channel("content-realtime")
@@ -164,24 +254,57 @@ export default function ContentPage() {
     };
   }, []);
 
-  const runPipeline = useCallback(async (topic: string, platform: string, format: string, category: string) => {
-    setPipelineRunning(true);
-    setPipelineResult(null);
-    try {
-      const res = await fetch("/api/content/pipeline", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ topic, platform, format, category }),
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setPipelineResult(data);
+  const runPipeline = useCallback(
+    async (topic: string, platform: string, format: string, category: string, objektSlug: string) => {
+      setPipelineRunning(true);
+      setPipelineResult(null);
+      try {
+        const res = await fetch("/api/content/pipeline", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            topic: topic || undefined,
+            platform,
+            format,
+            category,
+            objekt_slug: objektSlug || undefined,
+          }),
+        });
+        if (res.ok) {
+          const data = await res.json();
+          setPipelineResult(data);
+        }
+      } catch {
+        // Pipeline error
+      } finally {
+        setPipelineRunning(false);
       }
-    } catch {
-      // Pipeline error
-    } finally {
-      setPipelineRunning(false);
-    }
+    },
+    []
+  );
+
+  // Aktion an /api/content/status senden — Ergebnis kommt via Realtime zurück,
+  // hier nur optimistisches Fehler-Feedback.
+  const sendStatusAction = useCallback(
+    async (id: number, aktion: string, extra?: Record<string, unknown>) => {
+      setActionPending(id);
+      try {
+        await fetch("/api/content/status", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id, aktion, ...extra }),
+        });
+      } finally {
+        setActionPending(null);
+      }
+    },
+    []
+  );
+
+  const copyTweet = useCallback((key: string, text: string) => {
+    navigator.clipboard.writeText(text);
+    setCopiedKey(key);
+    setTimeout(() => setCopiedKey((k) => (k === key ? null : k)), 2000);
   }, []);
 
   const statusCounts = content.reduce(
@@ -192,12 +315,18 @@ export default function ContentPage() {
     {} as Record<string, number>
   );
 
+  // Content nach STATUS_ORDER gruppieren
+  const grouped = STATUS_ORDER.map((status) => ({
+    status,
+    items: content.filter((c) => c.status === status),
+  })).filter((g) => g.items.length > 0);
+
   return (
     <div className="boot p-6 lg:p-10 max-w-[1100px]">
       {/* Header */}
       <div className="gp-masthead">
         <div className="gp-index-row"><span className="gp-index">05 / PRODUKTION</span><span className="gp-index-rule" /></div>
-        <p className="gp-kicker">RESEARCHER → SCRIBE → PUBLISHER → AMPLIFIER</p>
+        <p className="gp-kicker">RESEARCHER → SCRIBE → COUNSEL → PUBLISHER → AMPLIFIER</p>
         <h1 className="gp-wordmark">Content <em>Pipeline</em></h1>
       </div>
 
@@ -226,8 +355,8 @@ export default function ContentPage() {
             <h2 className="text-[10px] text-text-muted uppercase tracking-widest mb-4">
               Agent-Pipeline Flow
             </h2>
-            <div className="grid grid-cols-[1fr_auto_1fr_auto_1fr_auto_1fr] items-center gap-1">
-              {["RESEARCHER", "SCRIBE", "PUBLISHER", "AMPLIFIER"].flatMap((agent, i) => {
+            <div className="grid grid-cols-[1fr_auto_1fr_auto_1fr_auto_1fr_auto_1fr] items-center gap-1">
+              {["RESEARCHER", "SCRIBE", "COUNSEL", "PUBLISHER", "AMPLIFIER"].flatMap((agent, i) => {
                 const step = pipelineResult?.steps?.[i];
                 const color = step?.status === "done" ? "#22c55e" : step?.status === "running" ? "#f59e0b" : step?.status === "error" ? "#ff3366" : "#6b6b7b";
                 const items = [
@@ -247,10 +376,15 @@ export default function ContentPage() {
                     )}
                   </div>,
                 ];
-                if (i < 3) items.push(<span key={`arrow-${i}`} className="text-text-muted text-sm">→</span>);
+                if (i < 4) items.push(<span key={`arrow-${i}`} className="text-text-muted text-sm">→</span>);
                 return items;
               })}
             </div>
+            {pipelineResult?.status === "abgelehnt" && (
+              <p className="mt-3 text-[11px]" style={{ color: "var(--gp-rose)" }}>
+                COUNSEL hat den Content abgelehnt — PUBLISHER/AMPLIFIER wurden NICHT ausgeführt.
+              </p>
+            )}
           </div>
 
           {/* Run Pipeline Form */}
@@ -261,14 +395,30 @@ export default function ContentPage() {
             <div className="grid grid-cols-2 gap-4 mb-4">
               <div>
                 <label className="text-[10px] text-text-muted uppercase tracking-widest block mb-1">
-                  Thema
+                  Objekt (Steinadel)
+                </label>
+                <select
+                  value={selectedObjekt}
+                  onChange={(e) => setSelectedObjekt(e.target.value)}
+                  className="w-full bg-surface-elevated border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:border-accent-violet"
+                >
+                  <option value="">ohne Objekt</option>
+                  {objekte.map((o) => (
+                    <option key={o.slug} value={o.slug}>{o.name}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="text-[10px] text-text-muted uppercase tracking-widest block mb-1">
+                  Thema {selectedObjekt && <span className="normal-case opacity-60">(wird aus Objekt übernommen)</span>}
                 </label>
                 <input
                   type="text"
                   value={customTopic}
                   onChange={(e) => setCustomTopic(e.target.value)}
+                  disabled={!!selectedObjekt}
                   placeholder="z.B. Wie KI-Agenten zusammenarbeiten..."
-                  className="w-full bg-surface-elevated border border-border rounded-lg px-3 py-2 text-sm text-foreground placeholder-text-muted focus:outline-none focus:border-accent-violet"
+                  className="w-full bg-surface-elevated border border-border rounded-lg px-3 py-2 text-sm text-foreground placeholder-text-muted focus:outline-none focus:border-accent-violet disabled:opacity-40"
                 />
               </div>
               <div>
@@ -290,9 +440,9 @@ export default function ContentPage() {
                   Plattform
                 </label>
                 <div className="grid grid-cols-5 gap-1.5">
-                  {(["youtube", "twitter", "tiktok", "instagram", "newsletter"] as const).map((p) => {
-                    const labels: Record<string, string> = { youtube: "YT", twitter: "X", tiktok: "TT", instagram: "IG", newsletter: "Mail" };
-                    const defaultFormats: Record<string, string> = { youtube: "longform", twitter: "thread", tiktok: "tiktok_short", instagram: "carousel", newsletter: "newsletter_issue" };
+                  {(["youtube", "x", "tiktok", "instagram", "newsletter"] as const).map((p) => {
+                    const labels: Record<string, string> = { youtube: "YT", x: "X", tiktok: "TT", instagram: "IG", newsletter: "Mail" };
+                    const defaultFormats: Record<string, string> = { youtube: "longform", x: "thread", tiktok: "tiktok_short", instagram: "carousel", newsletter: "newsletter_issue" };
                     return (
                       <button
                         key={p}
@@ -333,8 +483,8 @@ export default function ContentPage() {
                       <option value="deep_dive">Deep Dive (15+ Min)</option>
                     </>
                   )}
-                  {customPlatform === "twitter" && (
-                    <option value="thread">Thread (5-8 Posts)</option>
+                  {customPlatform === "x" && (
+                    <option value="thread">Thread (6-7 Tweets, Steinadel-Ton)</option>
                   )}
                   {customPlatform === "tiktok" && (
                     <option value="tiktok_short">TikTok Short (30-60 Sek)</option>
@@ -354,18 +504,18 @@ export default function ContentPage() {
             </div>
             <button
               onClick={() => {
-                if (customTopic.trim()) {
-                  runPipeline(customTopic, customPlatform, customFormat, customCategory);
+                if (customTopic.trim() || selectedObjekt) {
+                  runPipeline(customTopic, customPlatform, customFormat, customCategory, selectedObjekt);
                 }
               }}
-              disabled={pipelineRunning || !customTopic.trim()}
+              disabled={pipelineRunning || (!customTopic.trim() && !selectedObjekt)}
               className={`w-full py-2.5 rounded-lg text-sm font-medium transition-all ${
                 pipelineRunning
                   ? "bg-accent-violet/10 text-accent-violet cursor-wait"
                   : "bg-accent-violet/20 text-accent-violet hover:bg-accent-violet/30"
               } disabled:opacity-40 disabled:cursor-not-allowed`}
             >
-              {pipelineRunning ? "Pipeline läuft... (4 Agents, ~30-60 Sek)" : "Content produzieren"}
+              {pipelineRunning ? "Pipeline läuft... (5 Agents, ~30-60 Sek)" : "Content produzieren"}
             </button>
           </div>
 
@@ -378,13 +528,17 @@ export default function ContentPage() {
                 </h2>
                 <div className="flex items-center gap-3 text-[10px] text-text-muted">
                   <span>Kosten: ${pipelineResult.summary.total_cost_usd.toFixed(4)}</span>
-                  <span>Dauer: {(pipelineResult.summary.total_duration_ms / 1000).toFixed(1)}s</span>
+                  {pipelineResult.summary.total_duration_ms !== undefined && (
+                    <span>Dauer: {(pipelineResult.summary.total_duration_ms / 1000).toFixed(1)}s</span>
+                  )}
                   <span
                     className={`px-2 py-0.5 rounded font-mono ${
-                      pipelineResult.status === "complete" ? "bg-green-500/10 text-green-400" : "bg-yellow-500/10 text-yellow-400"
+                      pipelineResult.status === "complete" ? "bg-green-500/10 text-green-400" :
+                      pipelineResult.status === "abgelehnt" ? "bg-red-500/10 text-red-400" :
+                      "bg-yellow-500/10 text-yellow-400"
                     }`}
                   >
-                    {pipelineResult.summary.completed}
+                    {pipelineResult.summary.completed ?? pipelineResult.status}
                   </span>
                 </div>
               </div>
@@ -421,7 +575,7 @@ export default function ContentPage() {
               <div className="text-[8px] text-text-muted uppercase tracking-wider mt-0.5">YouTube</div>
             </div>
             <div className="card-ghost p-2.5 text-center">
-              <div className="text-lg font-bold font-[family-name:var(--font-outfit)]" style={{ color: "#1da1f2" }}>~$0.03</div>
+              <div className="text-lg font-bold font-[family-name:var(--font-outfit)]" style={{ color: "#1da1f2" }}>~$0.04</div>
               <div className="text-[8px] text-text-muted uppercase tracking-wider mt-0.5">X/Thread</div>
             </div>
             <div className="card-ghost p-2.5 text-center">
@@ -562,44 +716,17 @@ export default function ContentPage() {
         </div>
       )}
 
-      {/* ═══ TAB: CONTENT ═══ */}
+      {/* ═══ TAB: CONTENT — FREIGABE-ANSICHT ═══ */}
       {activeTab === "content" && (
         <div className="space-y-6">
-          {/* Pipeline Flow */}
-          <div className="card-ghost p-5">
-            <h2 className="text-[10px] text-text-muted uppercase tracking-widest mb-4">
-              Pipeline Status
-            </h2>
-            <div className="grid grid-cols-[1fr_auto_1fr_auto_1fr_auto_1fr] items-center gap-1">
-              {STATUS_FLOW.flatMap((step, i) => {
-                const items = [
-                  <div
-                    key={step.key}
-                    className="rounded-lg p-2 text-center transition-all"
-                    style={{ background: `${step.color}10`, border: `1px solid ${step.color}30` }}
-                  >
-                    <div className="text-xl font-bold font-[family-name:var(--font-outfit)]" style={{ color: step.color }}>
-                      {statusCounts[step.key] ?? 0}
-                    </div>
-                    <div className="text-[9px] text-text-muted uppercase tracking-wider mt-0.5">{step.label}</div>
-                    <div className="text-[8px] mt-0.5 font-mono" style={{ color: step.color }}>{step.agent}</div>
-                  </div>,
-                ];
-                if (i < STATUS_FLOW.length - 1) items.push(<span key={`a-${i}`} className="text-text-muted text-sm">→</span>);
-                return items;
-              })}
-            </div>
-          </div>
-
           {/* KPIs */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-            <KPICard label="Total Content" value={content.length} color="#8b5cf6" icon="▣" />
-            <KPICard label="Published" value={statusCounts["published"] ?? 0} subtitle="Live & aktiv" color="#22c55e" />
-            <KPICard label="In Review" value={statusCounts["review"] ?? 0} subtitle="Wartet auf Legal" color="#f59e0b" />
-            <KPICard label="Draft" value={statusCounts["draft"] ?? 0} subtitle="In Arbeit" color="#6b6b7b" />
+            <KPICard label="Zur Freigabe" value={statusCounts["zur_freigabe"] ?? 0} subtitle="Wartet auf dich" color="#f59e0b" />
+            <KPICard label="Freigegeben" value={statusCounts["freigegeben"] ?? 0} subtitle="Bereit zum Posten" color="#22c55e" />
+            <KPICard label="Gepostet" value={statusCounts["gepostet"] ?? 0} subtitle="Live" color="#8b5cf6" />
+            <KPICard label="Abgelehnt/Fehler" value={(statusCounts["abgelehnt"] ?? 0) + (statusCounts["fehler"] ?? 0)} subtitle="COUNSEL/Technik" color="#ff4d6a" />
           </div>
 
-          {/* Content List */}
           {loading ? (
             <div className="space-y-2">
               {Array.from({ length: 5 }).map((_, i) => (
@@ -623,29 +750,213 @@ export default function ContentPage() {
               </button>
             </div>
           ) : (
-            <div className="space-y-2">
-              {content.map((item) => {
-                const statusMeta = STATUS_FLOW.find((s) => s.key === item.status) ?? STATUS_FLOW[0];
+            <div className="space-y-6">
+              {grouped.map((group) => {
+                const meta = STATUS_META[group.status] ?? { label: group.status, color: "#6b6b7b" };
                 return (
-                  <div key={item.id} className="card-ghost p-4 hover:border-border transition-all">
-                    <div className="flex items-center gap-3 mb-2">
+                  <div key={group.status} className="space-y-2">
+                    <div className="flex items-center gap-2">
                       <span
                         className="text-[9px] px-2 py-0.5 rounded font-mono uppercase tracking-wider"
-                        style={{ background: `${statusMeta.color}20`, color: statusMeta.color }}
+                        style={{ background: `${meta.color}20`, color: meta.color }}
                       >
-                        {statusMeta.label}
+                        {meta.label}
                       </span>
-                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-surface-elevated text-text-muted">
-                        {TYPE_LABELS[item.content_type] ?? item.content_type}
-                      </span>
-                      <span className="text-[10px] text-text-muted ml-auto font-mono">
-                        {new Date(item.created_at).toLocaleDateString("de-DE")}
-                      </span>
+                      <span className="text-[10px] text-text-muted">{group.items.length} Eintrag/Einträge</span>
                     </div>
-                    <h3 className="text-sm font-semibold text-foreground">{item.title}</h3>
-                    <div className="flex items-center gap-2 mt-2">
-                      <span className="text-[10px] text-text-muted font-mono">Agent: {item.agent_id}</span>
-                    </div>
+
+                    {group.items.map((item) => {
+                      const open = expandedId === item.id;
+                      const tweets = item.body ? splitTweets(item.body) : [];
+                      const meta_ = item.metadata ?? {};
+                      const pubDraft = publishedUrlDraft[item.id] ?? "";
+                      const metricsD = metricsDraft[item.id] ?? { impressions: "", likes: "" };
+
+                      return (
+                        <div key={item.id} className="card-ghost p-4 hover:border-border transition-all">
+                          <div
+                            className="flex items-center gap-3 mb-1 cursor-pointer"
+                            onClick={() => setExpandedId(open ? null : item.id)}
+                          >
+                            <span
+                              className="text-[9px] px-2 py-0.5 rounded font-mono uppercase tracking-wider"
+                              style={{ background: `${meta.color}20`, color: meta.color }}
+                            >
+                              {meta.label}
+                            </span>
+                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-surface-elevated text-text-muted">
+                              {TYPE_LABELS[item.content_type] ?? item.content_type}
+                            </span>
+                            {item.platform && (
+                              <span className="text-[10px] px-1.5 py-0.5 rounded bg-surface-elevated text-text-muted">
+                                {PLATFORM_ICONS[item.platform] ?? ""} {item.platform}
+                              </span>
+                            )}
+                            <span className="text-[10px] text-text-muted ml-auto font-mono">
+                              {new Date(item.created_at).toLocaleDateString("de-DE")}
+                            </span>
+                            <span className="text-text-muted text-xs">{open ? "▾" : "▸"}</span>
+                          </div>
+                          <h3 className="text-sm font-semibold text-foreground">{item.title}</h3>
+
+                          {open && (
+                            <div className="mt-4 space-y-4" onClick={(e) => e.stopPropagation()}>
+                              {/* X-Thread-Vorschau */}
+                              {item.body && (
+                                <div>
+                                  <h4 className="text-[10px] text-text-muted uppercase tracking-widest mb-2">
+                                    X-Thread-Vorschau
+                                  </h4>
+                                  <div className="space-y-2">
+                                    {tweets.map((tweet, idx) => {
+                                      const key = `${item.id}-${idx}`;
+                                      const len = tweet.length;
+                                      return (
+                                        <div key={key} className="card-ghost p-3">
+                                          <p className="text-xs text-text-secondary whitespace-pre-wrap leading-relaxed">
+                                            {tweet}
+                                          </p>
+                                          <div className="flex items-center justify-between mt-2">
+                                            <button
+                                              onClick={() => copyTweet(key, tweet)}
+                                              className="text-[10px] px-2 py-1 rounded bg-surface-elevated text-text-muted hover:text-foreground transition-colors"
+                                            >
+                                              {copiedKey === key ? "Kopiert ✓" : "Kopieren"}
+                                            </button>
+                                            <span className="text-[10px] font-mono" style={{ color: charCountColor(len) }}>
+                                              {len}/{TWEET_MAX}
+                                            </span>
+                                          </div>
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                </div>
+                              )}
+
+                              {/* COUNSEL-Review */}
+                              {item.review_notes && (
+                                <div>
+                                  <button
+                                    onClick={() => setCounselOpen((prev) => ({ ...prev, [item.id]: !prev[item.id] }))}
+                                    className="text-[10px] text-text-muted uppercase tracking-widest hover:text-foreground transition-colors"
+                                  >
+                                    {counselOpen[item.id] ? "▾" : "▸"} COUNSEL-Review
+                                  </button>
+                                  {counselOpen[item.id] && (
+                                    <pre className="mt-2 text-xs text-text-secondary whitespace-pre-wrap bg-surface-elevated rounded-lg p-3 max-h-[300px] overflow-y-auto font-mono leading-relaxed">
+                                      {item.review_notes}
+                                    </pre>
+                                  )}
+                                </div>
+                              )}
+
+                              {/* CTA-Link / UTM */}
+                              {(meta_.cta_link || meta_.utm_content) && (
+                                <div className="text-[11px] text-text-secondary space-y-1">
+                                  {meta_.cta_link && (
+                                    <div>
+                                      <span className="text-text-muted">CTA-Link: </span>
+                                      <a href={meta_.cta_link} target="_blank" rel="noopener" className="break-all" style={{ color: "var(--gp-gold-hi)" }}>
+                                        {meta_.cta_link}
+                                      </a>
+                                    </div>
+                                  )}
+                                  {meta_.utm_content && (
+                                    <div>
+                                      <span className="text-text-muted">utm_content: </span>
+                                      <span className="font-mono">{meta_.utm_content}</span>
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+
+                              {/* Technischer Fehler */}
+                              {item.status === "fehler" && meta_.fehler && (
+                                <p className="text-[11px]" style={{ color: "var(--gp-rose)" }}>
+                                  Fehler: {meta_.fehler}
+                                </p>
+                              )}
+
+                              {/* Aktionen nach Status */}
+                              {item.status === "zur_freigabe" && (
+                                <div className="flex gap-2">
+                                  <button
+                                    onClick={() => sendStatusAction(item.id, "freigeben")}
+                                    disabled={actionPending === item.id}
+                                    className="px-4 py-2 rounded-lg text-xs font-medium bg-green-500/20 text-green-400 hover:bg-green-500/30 transition-all disabled:opacity-40"
+                                  >
+                                    Freigeben
+                                  </button>
+                                  <button
+                                    onClick={() => sendStatusAction(item.id, "ablehnen")}
+                                    disabled={actionPending === item.id}
+                                    className="px-4 py-2 rounded-lg text-xs font-medium bg-red-500/20 text-red-400 hover:bg-red-500/30 transition-all disabled:opacity-40"
+                                  >
+                                    Ablehnen
+                                  </button>
+                                </div>
+                              )}
+
+                              {item.status === "freigegeben" && (
+                                <div className="flex items-center gap-2">
+                                  <input
+                                    type="text"
+                                    value={pubDraft}
+                                    onChange={(e) => setPublishedUrlDraft((prev) => ({ ...prev, [item.id]: e.target.value }))}
+                                    placeholder="Published URL (optional)"
+                                    className="flex-1 bg-surface-elevated border border-border rounded-lg px-3 py-2 text-xs text-foreground placeholder-text-muted focus:outline-none focus:border-accent-violet"
+                                  />
+                                  <button
+                                    onClick={() => sendStatusAction(item.id, "gepostet", { published_url: pubDraft || undefined })}
+                                    disabled={actionPending === item.id}
+                                    className="px-4 py-2 rounded-lg text-xs font-medium bg-accent-violet/20 text-accent-violet hover:bg-accent-violet/30 transition-all disabled:opacity-40 whitespace-nowrap"
+                                  >
+                                    Als gepostet markieren
+                                  </button>
+                                </div>
+                              )}
+
+                              {item.status === "gepostet" && (
+                                <div className="flex items-center gap-2">
+                                  <input
+                                    type="number"
+                                    value={metricsD.impressions}
+                                    onChange={(e) => setMetricsDraft((prev) => ({ ...prev, [item.id]: { ...metricsD, impressions: e.target.value } }))}
+                                    placeholder="Impressions"
+                                    className="w-28 bg-surface-elevated border border-border rounded-lg px-3 py-2 text-xs text-foreground placeholder-text-muted focus:outline-none focus:border-accent-violet"
+                                  />
+                                  <input
+                                    type="number"
+                                    value={metricsD.likes}
+                                    onChange={(e) => setMetricsDraft((prev) => ({ ...prev, [item.id]: { ...metricsD, likes: e.target.value } }))}
+                                    placeholder="Likes"
+                                    className="w-28 bg-surface-elevated border border-border rounded-lg px-3 py-2 text-xs text-foreground placeholder-text-muted focus:outline-none focus:border-accent-violet"
+                                  />
+                                  <button
+                                    onClick={() =>
+                                      sendStatusAction(item.id, "metriken", {
+                                        impressions: Number(metricsD.impressions) || 0,
+                                        likes: Number(metricsD.likes) || 0,
+                                      })
+                                    }
+                                    disabled={actionPending === item.id}
+                                    className="px-4 py-2 rounded-lg text-xs font-medium bg-accent-violet/20 text-accent-violet hover:bg-accent-violet/30 transition-all disabled:opacity-40"
+                                  >
+                                    Speichern
+                                  </button>
+                                  {(item.views ?? 0) > 0 && (
+                                    <span className="text-[10px] text-text-muted ml-auto">
+                                      Erfasst: {item.views} Impressions · {item.engagement} Likes
+                                    </span>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
                   </div>
                 );
               })}

@@ -506,7 +506,8 @@ ${STEINADEL_REGELPAKET}`,
 
   amplifier: {
     model: "claude-haiku-4-5-20251001",
-    maxTokens: 1024,
+    // 2048: Distribution-Empfehlungen schnitten bei 1024 die letzte Zeile ab (E-Lauf 27.07.)
+    maxTokens: 2048,
     systemPrompt: `${COMPANY_CONTEXT}
 
 Du bist AMPLIFIER — Tier 2, Growth & Distribution Director.

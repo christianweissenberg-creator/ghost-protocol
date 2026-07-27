@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 const AGENT_CAPABILITIES: Record<string, { label: string; skills: string; tier: number; color: string }> = {
   oracle: { label: "ORACLE", skills: "Marktanalyse, Wettbewerber-Intel, Trend-Erkennung", tier: 1, color: "#06b6d4" },
@@ -57,6 +57,28 @@ export default function DonnaPage() {
   const [result, setResult] = useState<DelegationResult | null>(null);
   const [history, setHistory] = useState<DelegationResult[]>([]);
   const [error, setError] = useState("");
+
+  // Persistenz (Befund C, 27.07.): Plaene und Historie gingen bei jedem Reload
+  // verloren — der Server persistiert plan_only bewusst nicht, also localStorage.
+  useEffect(() => {
+    try {
+      const r = localStorage.getItem("gp-donna-result");
+      const h = localStorage.getItem("gp-donna-history");
+      if (r) setResult(JSON.parse(r));
+      if (h) setHistory(JSON.parse(h));
+    } catch {
+      // korrupte Eintraege ignorieren — frischer Start
+    }
+  }, []);
+  useEffect(() => {
+    try {
+      if (result) localStorage.setItem("gp-donna-result", JSON.stringify(result));
+      else localStorage.removeItem("gp-donna-result");
+      localStorage.setItem("gp-donna-history", JSON.stringify(history.slice(0, 10)));
+    } catch {
+      // Speicher voll o.ae. — Persistenz ist Komfort, kein Muss
+    }
+  }, [result, history]);
 
   async function handleDelegate(autoExecute = false, customTask?: string) {
     const taskText = customTask || task;

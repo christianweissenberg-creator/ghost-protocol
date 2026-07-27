@@ -3,6 +3,7 @@
 import { useMetrics } from "@/lib/hooks-metrics";
 import { useAgents } from "@/lib/hooks";
 import { KPICard } from "@/components/ui/KPICard";
+import { AttributionPanel } from "@/components/ui/AttributionPanel";
 
 const METRIC_ICONS: Record<string, string> = {
   api_cost: "💰",
@@ -171,6 +172,9 @@ export default function MetricsPage() {
           </table>
         </div>
       </div>
+
+      {/* Steinadel-Kampagnen-Attribution (Rückkanal, reine Aggregate) */}
+      <AttributionPanel />
     </div>
   );
 }
