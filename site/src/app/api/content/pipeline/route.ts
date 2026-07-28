@@ -166,7 +166,9 @@ export async function POST(request: NextRequest) {
     const thema = objekt ? objekt.name : (topic as string);
     const objektBlock = objekt ? buildObjektBlock(objekt) : null;
 
-    const platformLabel: Record<string, string> = { youtube: "YouTube-Video", twitter: "X/Twitter-Thread", x: "X/Twitter-Thread", newsletter: "Newsletter-Ausgabe", tiktok: "TikTok-Video", instagram: "Instagram-Post" };
+    // LinkedIn = Qualitätskanal laut Steinadel-Funnel-Plan (P2/P4): Fachton,
+    // belegte Marktdaten mit Quelle, keine Reel-Ästhetik.
+    const platformLabel: Record<string, string> = { youtube: "YouTube-Video", twitter: "X/Twitter-Thread", x: "X/Twitter-Thread", newsletter: "Newsletter-Ausgabe", tiktok: "TikTok-Video", instagram: "Instagram-Post", linkedin: "LinkedIn-Post (Fachton, keine Reel-Ästhetik)" };
     const formatLabel: Record<string, string> = { longform: "Longform (8-12 Min)", short: "Short (60 Sek)", thread: "Thread (5-8 Posts)", deep_dive: "Deep Dive (15+ Min)", newsletter_issue: "Newsletter-Ausgabe", tiktok_short: "TikTok Short (30-60 Sek)", reel: "Reel (30-90 Sek)", carousel: "Carousel (5-10 Slides)", story: "Story (15 Sek Clips)" };
     const categoryLabel: Record<string, string> = { ki_automation: "KI & Automation", krypto_trading: "Krypto-Trading & DeFi", business_automation: "Business-Automation", ghost_protocol: "Ghost Protocol Behind-the-Scenes" };
     const categoryKey = category ?? "ghost_protocol";

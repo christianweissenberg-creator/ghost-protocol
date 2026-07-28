@@ -105,6 +105,7 @@ const PLATFORM_ICONS: Record<string, string> = {
   newsletter: "✉",
   tiktok: "♪",
   instagram: "◎",
+  linkedin: "in",
 };
 
 const PLATFORM_COLORS: Record<string, string> = {
@@ -114,6 +115,7 @@ const PLATFORM_COLORS: Record<string, string> = {
   newsletter: "#8b5cf6",
   tiktok: "#00f2ea",
   instagram: "#e1306c",
+  linkedin: "#0a66c2",
 };
 
 const WEEKDAYS = ["monday", "tuesday", "wednesday", "thursday", "friday"] as const;
@@ -440,7 +442,7 @@ export default function ContentPage() {
                   Plattform
                 </label>
                 <div className="grid grid-cols-5 gap-1.5">
-                  {(["youtube", "x", "tiktok", "instagram", "newsletter"] as const).map((p) => {
+                  {(["youtube", "x", "linkedin", "tiktok", "instagram", "newsletter"] as const).map((p) => {
                     const labels: Record<string, string> = { youtube: "YT", x: "X", tiktok: "TT", instagram: "IG", newsletter: "Mail" };
                     const defaultFormats: Record<string, string> = { youtube: "longform", x: "thread", tiktok: "tiktok_short", instagram: "carousel", newsletter: "newsletter_issue" };
                     return (
