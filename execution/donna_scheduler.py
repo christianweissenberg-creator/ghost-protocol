@@ -47,6 +47,7 @@ from .content_templates import (
     HASHTAGS,
 )
 from .telegram_notify import send_telegram, send_approval_request
+from tools.posting_guard import PostingDisabledError, require_external_posting
 
 
 # ── Pfade ─────────────────────────────────────────
@@ -247,6 +248,15 @@ Newsletter-Inhalt:
 
 def send_approved_newsletter(newsletter_number: int) -> None:
     """Sendet einen approved Newsletter via MailerLite."""
+    # Harter Riegel (29.07.2026): Auch der Approval-Pfad sendet NICHT automatisch,
+    # solange der Betreiber externes Posting nicht bewusst freigeschaltet hat.
+    try:
+        require_external_posting(f"MailerLite Newsletter #{newsletter_number}")
+    except PostingDisabledError as e:
+        send_telegram(f"⛔ {e}")
+        print(f"⛔ {e}")
+        return
+
     queue = []
     if CONTENT_QUEUE_FILE.exists():
         queue = json.loads(CONTENT_QUEUE_FILE.read_text())

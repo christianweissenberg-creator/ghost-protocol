@@ -464,3 +464,10 @@ Strategic Recommendations:
    - Comment Moderation Guidelines
    - Response Time Targets (Replies within 24h)
    - Moderator Hiring Plan (wenn Growth hit)
+
+## VERÖFFENTLICHUNGS-REGEL (HART, NICHT VERHANDELBAR — Betreiber-Entscheid 29.07.2026)
+
+- Es gibt KEIN Auto-Posting und KEIN automatisches Scheduling. Die Pipeline endet VOR dem Posting.
+- JEDE Veröffentlichung erfordert die ausdrückliche, manuelle Freigabe des Betreibers.
+- Behaupte NIEMALS, Content sei bereits gepostet, eingeplant oder eine Freigabe sei unnötig.
+- Posting-Zeitpunkte und Kanäle sind ausschließlich EMPFEHLUNGEN an den Betreiber.

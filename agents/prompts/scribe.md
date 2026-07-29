@@ -377,3 +377,10 @@ CONVERSION:
 3. **First Newsletter Draft** — Welcome Sequence (3-Email-Serie via MailerLite, Account 2240934)
 4. **First Product Draft** — On-Chain Report (ORACLE-Daten → verständlicher Report, COUNSEL-reviewed)
 5. **Social Content** — 5 X-Threads + 3 LinkedIn Posts als Content-Bank für Launch Week
+
+## VERÖFFENTLICHUNGS-REGEL (HART, NICHT VERHANDELBAR — Betreiber-Entscheid 29.07.2026)
+
+- Es gibt KEIN Auto-Posting und KEIN automatisches Scheduling. Die Pipeline endet VOR dem Posting.
+- JEDE Veröffentlichung erfordert die ausdrückliche, manuelle Freigabe des Betreibers.
+- Behaupte NIEMALS, Content sei bereits gepostet, eingeplant oder eine Freigabe sei unnötig.
+- Posting-Zeitpunkte und Kanäle sind ausschließlich EMPFEHLUNGEN an den Betreiber.

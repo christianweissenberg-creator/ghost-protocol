@@ -20,6 +20,8 @@ try:
 except ImportError:
     httpx = None
 
+from .posting_guard import require_external_posting
+
 logger: logging.Logger = logging.getLogger(__name__)
 
 X_API_BASE = "https://api.x.com/2"
@@ -56,7 +58,11 @@ def post_tweet(text: str, reply_to_id: str | None = None) -> dict[str, Any]:
 
     Returns:
         {"id": str, "text": str} oder {} bei Fehler
+
+    Raises:
+        PostingDisabledError: solange GP_EXTERNAL_POSTING nicht gesetzt ist.
     """
+    require_external_posting("X/Twitter post_tweet")
     if httpx is None:
         logger.warning("httpx nicht installiert — X API deaktiviert")
         return {}
@@ -146,7 +152,11 @@ def post_thread(tweets: list[str]) -> list[dict[str, Any]]:
 
     Returns:
         Liste von {"id": str, "text": str} pro Tweet
+
+    Raises:
+        PostingDisabledError: solange GP_EXTERNAL_POSTING nicht gesetzt ist.
     """
+    require_external_posting("X/Twitter post_thread")
     if not tweets:
         return []
 
