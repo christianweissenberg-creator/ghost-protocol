@@ -1,6 +1,13 @@
+"use client";
+
 // MASTERPROMPT §9.4 + abgenommener Prototyp "Command Center.dc.html"
 // COP-Hologramm: DACH/Sektor-Süd-Lagebild, München-HQ, teal Gitter + Radar-Sweep,
-// Gold-Bullseye-Knoten mit bordeten Werte-Pillen. Rein präsentational.
+// Gold-Bullseye-Knoten mit bordeten Werte-Pillen.
+// Objekt-Pillen kommen LIVE aus /api/objekte (Steinadel-Export-API) — keine
+// hartkodierten Objekte oder erfundenen Preise (Betreiber-Auftrag 29.07.2026).
+// Fail-closed: Quelle nicht erreichbar → Störungs-Pille statt Platzhalter.
+
+import { useObjekte } from "@/lib/hooks";
 
 type Entity = {
   x: number;
@@ -14,13 +21,21 @@ type Entity = {
 // HQ München (N48.137° E11.575°)
 const HQ = { x: 236, y: 232 };
 
-const ENTITIES: Entity[] = [
-  // Steinadel-Objekte (gold) — mit Objektwert
-  { x: 392, y: 132, color: "var(--gp-gold)", label: "GUT FALKENHOF · €22,5M", side: "r", focus: true },
-  { x: 372, y: 330, color: "var(--gp-gold)", label: "VILLA SEEBLICK · €14,8M · REVIEW", side: "r" },
-  { x: 486, y: 372, color: "var(--gp-gold)", label: "CHALET ALPENBLICK · €9,9M", side: "r" },
-  // System-Entitäten nach Marken-/Signalfarbe
-  { x: 508, y: 176, color: "var(--gp-cyan)", label: "HUBSPOT · STEINADEL-SYNC", side: "r" },
+// Feste Slots für bis zu 5 Objekt-Pillen (Positionen so gewählt, dass auch
+// lange Labels wie "… · PREIS AUF ANFRAGE" im 720er-viewBox bleiben)
+const OBJEKT_SLOTS: Array<Pick<Entity, "x" | "y" | "side" | "focus">> = [
+  { x: 392, y: 112, side: "r", focus: true },
+  { x: 372, y: 330, side: "r" },
+  { x: 430, y: 372, side: "r" },
+  { x: 300, y: 64, side: "r" },
+  { x: 290, y: 180, side: "l" },
+];
+
+// System-Entitäten nach Marken-/Signalfarbe. "STEINADEL · EXPORT-API" ist die
+// reale Anbindung (die frühere "HUBSPOT · STEINADEL-SYNC"-Pille suggerierte
+// eine Synchronisation, die es nicht gibt — HubSpot trägt nur Lead-Kontakte).
+const SYSTEM_ENTITIES: Entity[] = [
+  { x: 508, y: 176, color: "var(--gp-cyan)", label: "STEINADEL · EXPORT-API", side: "r" },
   { x: 486, y: 250, color: "var(--gp-violet)", label: "WHITEPULSE · SIGNAL-NET", side: "r" },
   { x: 452, y: 300, color: "var(--gp-amber)", label: "GOLDDIGGER · XAU", side: "r" },
 ];
@@ -30,6 +45,18 @@ function pillWidth(label: string) {
 }
 
 export function SituationTable() {
+  const { objekte, loading, error } = useObjekte();
+
+  const objektEntities: Entity[] = error
+    ? [{ ...OBJEKT_SLOTS[0], color: "var(--gp-amber)", label: "STEINADEL-EXPORT · QUELLE NICHT ERREICHBAR" }]
+    : objekte.slice(0, OBJEKT_SLOTS.length).map((o, i) => ({
+        ...OBJEKT_SLOTS[i],
+        color: "var(--gp-gold)",
+        label: `${o.name} · ${o.preis}`.toUpperCase(),
+      }));
+  const entities: Entity[] = [...objektEntities, ...SYSTEM_ENTITIES];
+  const statusLabel = loading ? "SYNC…" : error ? "EXPORT OFFLINE" : `${objekte.length} OBJEKTE · LIVE`;
+
   return (
     <div className="card-ghost cop-panel overflow-hidden">
       <div className="flex items-center justify-between px-5 pt-4">
@@ -40,7 +67,7 @@ export function SituationTable() {
           </h2>
         </div>
         <span className="mono-label" style={{ color: "var(--gp-gold)" }}>
-          N48.137° E11.575° · STATUS 235
+          N48.137° E11.575° · {statusLabel}
         </span>
       </div>
 
@@ -138,7 +165,7 @@ export function SituationTable() {
         </text>
 
         {/* Entitäten: Gold-Bullseye-Knoten + Werte-Pille */}
-        {ENTITIES.map((e) => {
+        {entities.map((e) => {
           const w = pillWidth(e.label);
           const gap = 16;
           const pillX = e.side === "r" ? e.x + gap : e.x - gap - w;

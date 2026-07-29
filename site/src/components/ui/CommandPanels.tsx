@@ -1,6 +1,11 @@
+"use client";
+
 // Command-Center-Panels nach abgenommenem Prototyp (Command Center.dc.html):
 // Neural Core (L.I.S.A.-Orchestrierung), System-Telemetrie, Die Engines (Marken).
-// Rein präsentational; Demo-Werte im Prototyp-Stil.
+// Die Engines-Kachel zeigt die ECHTE Objektzahl aus /api/objekte (Steinadel-
+// Export-API, fail-closed) — kein hartkodiertes "3 Objekte" mehr (29.07.2026).
+
+import { useObjekte } from "@/lib/hooks";
 
 function PanelHead({ index, title }: { index: string; title: string }) {
   return (
@@ -72,12 +77,19 @@ export function SystemTelemetry({ activeAgents = 0 }: { activeAgents?: number })
 }
 
 // ── Die Engines (Marken/Motoren der Corporation) ──
-const ENGINES = [
-  { name: "ImmoNexus", tag: "STEINADEL · EXPOSÉ", metric: "3 Objekte", state: "AKTIV", color: "var(--gp-gold)" },
-  { name: "CryptoDog", tag: "WHITEPULSE · TRADING", metric: "FLAT", state: "WACHE", color: "var(--gp-cyan)" },
-  { name: "Edelmetall", tag: "GOLDDIGGER · XAU", metric: "PAUSIERT", state: "STANDBY", color: "var(--gp-amber)" },
-];
 export function BrandsEngines() {
+  const { objekte, loading, error } = useObjekte();
+  const ENGINES = [
+    {
+      name: "ImmoNexus",
+      tag: "STEINADEL · EXPOSÉ",
+      metric: loading ? "SYNC…" : error ? "QUELLE NICHT ERREICHBAR" : `${objekte.length} Objekte`,
+      state: error ? "STÖRUNG" : "AKTIV",
+      color: "var(--gp-gold)",
+    },
+    { name: "CryptoDog", tag: "WHITEPULSE · TRADING", metric: "FLAT", state: "WACHE", color: "var(--gp-cyan)" },
+    { name: "Edelmetall", tag: "GOLDDIGGER · XAU", metric: "PAUSIERT", state: "STANDBY", color: "var(--gp-amber)" },
+  ];
   return (
     <div className="card-ghost p-5">
       <PanelHead index="▤" title="Die Engines" />

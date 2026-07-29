@@ -4,6 +4,46 @@ import { useEffect, useState, useCallback } from "react";
 import { supabase } from "./supabase";
 import type { Agent, Message } from "./types";
 
+// Steinadel-Objekt (Teilmenge der Export-API-Felder, wie /api/objekte liefert)
+export interface ObjektLite {
+  slug: string;
+  name: string;
+  preis: string;
+  statusBadge?: string;
+}
+
+// Steinadel-Objekte über den Server-Proxy /api/objekte (Export-API, read-only).
+// Fail-closed: bei Fehler leere Liste + error — NIEMALS Platzhalter-Objekte
+// oder erfundene Preise (Betreiber-Auftrag 29.07.2026).
+export function useObjekte() {
+  const [objekte, setObjekte] = useState<ObjektLite[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let abgebrochen = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/objekte", { cache: "no-store" });
+        const daten = await res.json().catch(() => ({}));
+        if (!res.ok || daten.fehler || !Array.isArray(daten.objekte)) {
+          throw new Error(typeof daten.fehler === "string" ? daten.fehler : `HTTP ${res.status}`);
+        }
+        if (!abgebrochen) setObjekte(daten.objekte);
+      } catch (e) {
+        if (!abgebrochen) setError(e instanceof Error ? e.message : "unbekannt");
+      } finally {
+        if (!abgebrochen) setLoading(false);
+      }
+    })();
+    return () => {
+      abgebrochen = true;
+    };
+  }, []);
+
+  return { objekte, loading, error };
+}
+
 // Fetch all agents from Supabase
 export function useAgents() {
   const [agents, setAgents] = useState<Agent[]>([]);
