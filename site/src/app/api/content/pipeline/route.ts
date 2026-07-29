@@ -403,10 +403,13 @@ ${objektBlock ?? "OBJEKTDATEN: keine (Freitext-Content ohne Steinadel-Objektbezu
     // Technischer Fehler ist KEINE fachliche Ablehnung — 'fehler' statt 'abgelehnt',
     // damit die Freigabe-Ansicht nicht faelschlich "COUNSEL lehnt ab" anzeigt.
     const counselTechnischGescheitert = steps[2].status !== "done";
+    // Fail-closed heisst: NUR ein explizites "URTEIL: FREIGABE…" laesst die Pipeline
+    // weiter. Der fruehere Negativ-Match auf "URTEIL: ABLEHNUNG" war formatierungs-
+    // abhaengig fail-open: COUNSEL schrieb "URTEIL: **ABLEHNUNG**" (Markdown-fett),
+    // und Lauf #4 (28.07.) lief trotz Ablehnung bis PUBLISHER/AMPLIFIER durch.
+    const urteilNormalisiert = counselOutput.replace(/[*_#`]/g, "");
     const rejected =
-      counselTechnischGescheitert ||
-      counselOutput.includes("URTEIL: ABLEHNUNG") ||
-      !counselOutput.includes("URTEIL:");
+      counselTechnischGescheitert || !/URTEIL:\s*FREIGABE/.test(urteilNormalisiert);
 
     // COUNSEL-Ergebnis immer persistieren (auch bei Ablehnung) — inkl. steps,
     // sonst zeigt die Freigabe-Ansicht abgelehnte Laeufe ohne Kontext.
