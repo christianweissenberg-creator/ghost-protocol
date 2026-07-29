@@ -125,7 +125,29 @@ REGEL: JEDE Zahl im Content muss aus diesen Objektdaten stammen — keine erfund
 oder aus dem Gedächtnis ergänzten Zahlen. "${o.preis}" (preis) ist ein String und
 wird WÖRTLICH übernommen, nicht gerundet oder umgerechnet. Das Wort "ImmoNexus"
 darf NIEMALS im Content vorkommen (interner Codename, öffentliche Marke ist
-ausschließlich "Steinadel").`;
+ausschließlich "Steinadel").
+
+PFLICHT-ELEMENTE (COUNSEL lehnt ohne diese ab — plattform-unabhängig, sie standen
+früher nur in der X-Anweisung, weshalb Instagram-/Newsletter-Läufe systematisch
+scheiterten):
+1. MODELLRECHNUNG-DISCLAIMER: Sobald AfA, Steuer, Abschreibung oder Ersparnis
+   vorkommt, MUSS dieser Satz wörtlich im Content stehen (Caption, Slide-Subtext
+   oder Fußzeile — sichtbar, nicht versteckt): "Modellrechnung — individuelle
+   steuerliche Wirkung abhängig von persönlicher Situation und
+   Behördenbescheinigung; keine Steuerberatung."
+2. KI-KENNZEICHNUNG: Beschreibe/fordere du ein Visual, kennzeichne es sichtbar als
+   "KI-generiert" — im Bild UND in der Caption (EU AI Act Art. 50, ab 02.08.2026
+   ausnahmslos). Ist der Bildstatus unklar, benenne ihn ausdrücklich als klärungs-
+   bedürftig statt ihn zu verschweigen.
+3. KEINE SOCIAL-HANDLES: Stand heute existieren KEINE bestätigten Steinadel-Konten.
+   Erfinde niemals ein Handle (kein "@steinadel", kein "@steinadel_immobilien").
+   Der CTA verweist auf die oben genannte Kampagnen-/Objekt-URL, nicht auf ein Profil.
+4. KEINE GESCHÄFTS-/ERFOLGSZAHLEN: kein Umsatz, MRR, Kunden-, Abonnenten- oder
+   Followerzahlen, kein "ausgebucht"/"Warteliste" — auch nicht aus anderen
+   Projekten (Ghost Protocol/WHITEPULSE-Interna gehören NIE in Steinadel-Content).
+5. KEINE POSTING-BEHAUPTUNGEN: Der Content wird NICHT automatisch veröffentlicht.
+   Schreibe nichts, was ein Posting, Scheduling oder eine erledigte Freigabe
+   behauptet.`;
 }
 
 // Erlaubtes Zeichenset für utm_content erzwingen
