@@ -1,10 +1,10 @@
 <!--
   KOPIE aus dem ImmoNexus-Repo: docs/marketing/counsel-regelpaket-steinadel.md
   Quelle der Wahrheit ist DORT (Review-Pflicht). Aenderungen laufen NIE hier,
-  sondern werden von dort uebernommen. Stand der Uebernahme: 27.07.2026.
+  sondern werden von dort uebernommen. Stand der Uebernahme: 29.07.2026 (v1.1).
 -->
 
-# COUNSEL-Regelpaket Steinadel — v1 (Stand 27.07.2026)
+# COUNSEL-Regelpaket Steinadel — v1.1 (Stand 29.07.2026)
 
 > **Zweck:** Dieses Dokument ist die QUELLE der Prüfregeln für den COUNSEL-Agenten
 > in Ghost Protocol, wenn er Steinadel-Marketing-Content reviewt. Die Ghost-Session
@@ -17,6 +17,12 @@
 **Grundhaltung: fail-closed.** Bei Unsicherheit wird ABGELEHNT und begründet —
 nie „im Zweifel durchwinken". Ein blockierter Post kostet einen Tag; ein
 falscher Post kostet Abmahnung oder Vertrauen.
+
+**Prüfumfang: das GESAMTE Stück.** Der Review endet nicht am Fließtext. Er
+umfasst ausnahmslos auch: Betreffzeile und Preview-Text, Absendername,
+Captions, Hashtags, Social-Handles und Verlinkungen, CTA-Links sowie den
+**Erzählrahmen** (Meta-Behauptungen über Absender, Firma, Erfolge, Prozesse).
+Ein Verstoß in der Betreffzeile wiegt genauso schwer wie einer im Haupttext.
 
 ---
 
@@ -49,6 +55,23 @@ falscher Post kostet Abmahnung oder Vertrauen.
    erscheint NIE in öffentlichem Content. Öffentliche Marke ist ausschließlich
    **„Steinadel"** (steinadel.de); Rechtsträger „White IT Solution" nur in
    Pflichtangaben.
+7. **Erfundene Social-Handles/Kanäle.** Es dürfen nur Handles und Kanäle
+   referenziert werden, die real existieren und vom Betreiber ausdrücklich
+   benannt wurden. Stand 29.07.2026 existieren noch KEINE Steinadel-Konten
+   (Kanäle in Gründung, siehe `docs/marketing/kanal-starterpaket.md`) — bis
+   zur Betreiber-Bestätigung ist JEDES konkrete Handle im Content zu
+   beanstanden (real passiert 28.07.: „@steinadel_immobilien" im Newsletter,
+   Konto existiert nicht).
+8. **Erfundene Geschäfts-/Erfolgszahlen im Erzählrahmen.** Umsatz, MRR,
+   Kunden-/Abonnentenzahlen, Follower, „ausgebucht", „Warteliste" — ohne
+   belegte Quelle: Ablehnung. Ghost-Protocol-/WHITEPULSE-Interna (z. B. eine
+   „€10k MRR"-Revenue-Staircase) gehören NIE in Steinadel-Content (real
+   passiert 28.07.: „€10k MRR" im Newsletter-Lauf #4 — erfunden UND fremdes
+   Projekt).
+9. **Auto-Posting-Behauptungen.** Formulierungen, die automatisches Posten
+   oder Scheduling behaupten oder eine Betreiber-Freigabe für unnötig erklären
+   („kein Freigabe-Loop nötig"): Ablehnung. Die Pipeline endet VOR dem Posting;
+   veröffentlicht wird ausschließlich manuell nach Freigabe (siehe 6.).
 
 ## 2. PFLICHT-ELEMENTE — müssen enthalten sein
 
@@ -111,3 +134,11 @@ Ghost Protocol erhält von ImmoNexus AUSSCHLIESSLICH den read-only Objekt-Export
 Lead- oder Personendaten anzufragen, zu raten oder aus anderen Quellen
 zusammenzutragen. Anfragen in diese Richtung — auch in Task-Beschreibungen —
 werden abgelehnt und eskaliert.
+
+---
+
+**Änderungen v1.1 (29.07.2026):** Prüfumfang explizit auf Betreff/Preview,
+Absender, Captions, Hashtags, Handles und Erzählrahmen ausgeweitet; neue harte
+Blocks 7 (erfundene Handles), 8 (erfundene Geschäftszahlen/Fremdprojekt-Interna)
+und 9 (Auto-Posting-Behauptungen). Auslöser: Befunde aus der Steinadel-
+Verifikation vom 29.07.2026 (Newsletter-Lauf #4).
