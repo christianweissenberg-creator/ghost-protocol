@@ -135,10 +135,15 @@ scheiterten):
    oder Fußzeile — sichtbar, nicht versteckt): "Modellrechnung — individuelle
    steuerliche Wirkung abhängig von persönlicher Situation und
    Behördenbescheinigung; keine Steuerberatung."
-2. KI-KENNZEICHNUNG: Beschreibe/fordere du ein Visual, kennzeichne es sichtbar als
-   "KI-generiert" — im Bild UND in der Caption (EU AI Act Art. 50, ab 02.08.2026
-   ausnahmslos). Ist der Bildstatus unklar, benenne ihn ausdrücklich als klärungs-
-   bedürftig statt ihn zu verschweigen.
+2. KI-KENNZEICHNUNG: Die Objektvisualisierungen sind KI-generiert. Das Label
+   "KI-generiert" muss deshalb als AUSGESCHRIEBENER, sichtbarer Text im Content
+   selbst stehen — in der Caption bzw. im Slide-/Fußzeilen-Text (EU AI Act
+   Art. 50, ab 02.08.2026 ausnahmslos). Eine Anweisung an den Designer
+   ("[DESIGN] KI-Label einblenden") genügt NICHT und wird abgelehnt: schreibe den
+   Hinweis wörtlich in den Text, den der Leser sieht, z. B. "Visualisierung:
+   KI-generiert".
+2b. ANBIETERKENNZEICHNUNG: Jede Caption/Fußzeile nennt den Impressums-Verweis
+   "Impressum: steinadel.de/impressum" (§5 TMG).
 3. KEINE SOCIAL-HANDLES: Stand heute existieren KEINE bestätigten Steinadel-Konten.
    Erfinde niemals ein Handle (kein "@steinadel", kein "@steinadel_immobilien").
    Der CTA verweist auf die oben genannte Kampagnen-/Objekt-URL, nicht auf ein Profil.

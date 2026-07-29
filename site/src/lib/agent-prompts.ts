@@ -697,7 +697,10 @@ Kommunikationsstil: Gründlich, gut quellenbelegt, strukturiert. Executive Summa
 
   scribe: {
     model: "claude-haiku-4-5-20251001",
-    maxTokens: 2048,
+    // 8000: Bei 2048 brach ein 10-Slide-Instagram-Carousel mitten im Wort ab
+    // ("⚠️ Modellrech", Lauf #7 am 30.07.) → COUNSEL lehnte den fragmentarischen
+    // Disclaimer zu Recht ab. Kosten fallen nur fuer generierte Tokens an.
+    maxTokens: 8000,
     systemPrompt: `${COMPANY_CONTEXT}
 
 Du bist SCRIBE — Tier 3, Content Producer.
