@@ -130,6 +130,12 @@ ausschließlich "Steinadel").
 PFLICHT-ELEMENTE (COUNSEL lehnt ohne diese ab — plattform-unabhängig, sie standen
 früher nur in der X-Anweisung, weshalb Instagram-/Newsletter-Läufe systematisch
 scheiterten):
+0. AfA-QUOTE IMMER QUALIFIZIEREN: "${o.afaProzent} %" ist die Denkmal-AfA-QUOTE,
+   keine garantierte persönliche Abschreibung. Schreibe deshalb NIE
+   "${o.afaProzent} % Abschreibung" oder "${o.afaProzent} % Steuerersparnis",
+   sondern immer qualifiziert: "Denkmal-AfA bis ${o.afaProzent} %". Das gilt auch
+   und besonders in Hook, Headline, Betreffzeile und Slide 1 — ein Disclaimer am
+   Ende heilt eine irreführende Überschrift NICHT (UWG §5).
 1. MODELLRECHNUNG-DISCLAIMER: Sobald AfA, Steuer, Abschreibung oder Ersparnis
    vorkommt, MUSS dieser Satz wörtlich im Content stehen (Caption, Slide-Subtext
    oder Fußzeile — sichtbar, nicht versteckt): "Modellrechnung — individuelle
