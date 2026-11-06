@@ -1,15 +1,30 @@
 "use client";
 
 // MASTERPROMPT §9.4 + abgenommener Prototyp "Command Center.dc.html"
-// COP-Hologramm: DACH/Sektor-Süd-Lagebild, München-HQ, teal Gitter + Radar-Sweep,
-// Gold-Bullseye-Knoten mit bordeten Werte-Pillen.
-// Objekt-Pillen kommen LIVE aus /api/objekte (Steinadel-Export-API) — keine
-// hartkodierten Objekte oder erfundenen Preise (Betreiber-Auftrag 29.07.2026).
-// Fail-closed: Quelle nicht erreichbar → Störungs-Pille statt Platzhalter.
+// COP-Hologramm: teal Gitter + Radar-Sweep, Gold-Bullseye-Knoten mit bordeten Werte-Pillen.
+// Objekt-Pillen kommen aus /api/objekte (Steinadel-Export-API, einmal beim Laden der Seite)
+// — keine hartkodierten Objekte oder erfundenen Preise (Betreiber-Auftrag 29.07.2026).
+// Stufe 1 (05.11.2026): Das Bild ist schematisch. Stadtname am HQ, Koordinaten,
+// Breitengrade und Sektor-Angabe sind entfernt (der Ort war nicht der Firmensitz, eine
+// belegte Geokoordinate gibt es nicht); die Positionen sind feste Plätze, keine Orte.
+// Die beiden Pillen ohne Bezug zu Ghost Protocol sind gelöscht. Die Export-Pille zeigt den
+// echten Abrufzustand, und mehr Objekte als Plätze erscheinen als "+N WEITERE" statt still
+// zu fehlen.
+// Fixrunde 06.11.2026 (R28): Das Command Center lädt /api/objekte einmal und reicht die Objekte
+// als Prop an Lagebild und Steinadel-Panel; beide zeigen damit denselben Abrufzustand. Ohne
+// Prop ruft das Lagebild selbst ab. Fehlertexte kommen bereinigt an (objektFehlerText).
+// Nachprüfung 06.11.2026: Ein 401 (keine Sitzung) ist kein Ausfall des Exports; der wurde gar
+// nicht abgefragt. Das Lagebild sagt dann bernstein "NICHT ANGEMELDET" wie die TopBar, nicht rot
+// "EXPORT OFFLINE".
+// Gesamtprüfung 06.11.2026 (R24 einheitlich): Name und Preis aus dem Export erscheinen maskiert
+// wie auf /content — der geschützte Name steht in keinem sichtbaren Text.
 
+import { maskiereGeschuetzteNamen } from "@/lib/freigabe-regeln";
 import { useObjekte } from "@/lib/hooks";
+import { objekteFehlerAnzeige, objekteLesungAus, objekteLesungFehlerArt, type ObjekteLesung } from "@/lib/hooks-status";
 
 type Entity = {
+  key: string;
   x: number;
   y: number;
   color: string;
@@ -18,11 +33,11 @@ type Entity = {
   focus?: boolean;
 };
 
-// HQ München (N48.137° E11.575°)
+// Schematischer Mittelpunkt des Lagebilds — keine Geokoordinate.
 const HQ = { x: 236, y: 232 };
 
-// Feste Slots für bis zu 5 Objekt-Pillen (Positionen so gewählt, dass auch
-// lange Labels wie "… · PREIS AUF ANFRAGE" im 720er-viewBox bleiben)
+// Feste Plätze für bis zu 5 Objekt-Pillen (so gewählt, dass auch lange Labels wie
+// "… · PREIS AUF ANFRAGE" im 720er-viewBox bleiben)
 const OBJEKT_SLOTS: Array<Pick<Entity, "x" | "y" | "side" | "focus">> = [
   { x: 392, y: 112, side: "r", focus: true },
   { x: 372, y: 330, side: "r" },
@@ -31,31 +46,67 @@ const OBJEKT_SLOTS: Array<Pick<Entity, "x" | "y" | "side" | "focus">> = [
   { x: 290, y: 180, side: "l" },
 ];
 
-// System-Entitäten nach Marken-/Signalfarbe. "STEINADEL · EXPORT-API" ist die
-// reale Anbindung (die frühere "HUBSPOT · STEINADEL-SYNC"-Pille suggerierte
-// eine Synchronisation, die es nicht gibt — HubSpot trägt nur Lead-Kontakte).
-const SYSTEM_ENTITIES: Entity[] = [
-  { x: 508, y: 176, color: "var(--gp-cyan)", label: "STEINADEL · EXPORT-API", side: "r" },
-  { x: 486, y: 250, color: "var(--gp-violet)", label: "WHITEPULSE · SIGNAL-NET", side: "r" },
-  { x: 452, y: 300, color: "var(--gp-amber)", label: "GOLDDIGGER · XAU", side: "r" },
-];
+// Platz der Export-Pille und der "+N WEITERE"-Pille (frei gewordener Platz).
+const EXPORT_SLOT = { x: 508, y: 176, side: "r" as const };
+const WEITERE_SLOT = { x: 486, y: 250, side: "r" as const };
 
 function pillWidth(label: string) {
   return label.length * 5.15 + 22;
 }
 
-export function SituationTable() {
-  const { objekte, loading, error } = useObjekte();
+/** Rückfall ohne Prop: eigener Abruf von /api/objekte, Fehlertext bereinigt, 401 erkannt. */
+function LagebildMitAbruf() {
+  return <Lagebild lesung={objekteLesungAus(useObjekte())} />;
+}
+
+export function SituationTable({ lesung }: { lesung?: ObjekteLesung }) {
+  return lesung ? <Lagebild lesung={lesung} /> : <LagebildMitAbruf />;
+}
+
+function Lagebild({ lesung }: { lesung: ObjekteLesung }) {
+  const { objekte, loading, error } = lesung;
+  // Nachprüfung im Browser 06.11.2026: Die Ursache bestimmt Wortlaut und Farbe
+  // (objekteFehlerAnzeige). 401: Die Sitzung fehlt, der Export wurde nicht abgefragt — sein
+  // Zustand ist ungemessen. Fehlendes Token: "nicht konfiguriert" statt "offline".
+  const fehlerArt = objekteLesungFehlerArt(lesung);
+  const anzeige = fehlerArt ? objekteFehlerAnzeige(fehlerArt) : null;
+  const ohneSitzung = fehlerArt === "nicht_angemeldet";
+  const fehlerFarbe = anzeige?.farbe === "amber" ? "var(--gp-amber)" : "var(--gp-rose)";
 
   const objektEntities: Entity[] = error
-    ? [{ ...OBJEKT_SLOTS[0], color: "var(--gp-amber)", label: "STEINADEL-EXPORT · QUELLE NICHT ERREICHBAR" }]
+    ? []
     : objekte.slice(0, OBJEKT_SLOTS.length).map((o, i) => ({
         ...OBJEKT_SLOTS[i],
+        key: `objekt-${o.slug}-${i}`,
         color: "var(--gp-gold)",
-        label: `${o.name} · ${o.preis}`.toUpperCase(),
+        label: maskiereGeschuetzteNamen(`${o.name} · ${o.preis}`).toUpperCase(),
       }));
-  const entities: Entity[] = [...objektEntities, ...SYSTEM_ENTITIES];
-  const statusLabel = loading ? "SYNC…" : error ? "EXPORT OFFLINE" : `${objekte.length} OBJEKTE · LIVE`;
+
+  // "STEINADEL · EXPORT-API" ist die reale Anbindung; die Farbe folgt dem Abruf statt fest
+  // zu leuchten (laden = gedämpft, ohne Sitzung = bernstein, Fehler = rose, ok = cyan). Ohne
+  // Sitzung steht "EXPORT" statt "EXPORT-API": "UNGEMESSEN" ist länger, und die Pille muss im
+  // 720er-viewBox bleiben (pillWidth, höchstens 33 Zeichen ab EXPORT_SLOT).
+  const exportEntity: Entity = {
+    ...EXPORT_SLOT,
+    key: "export-api",
+    color: loading ? "var(--gp-ink-3)" : anzeige ? fehlerFarbe : "var(--gp-cyan)",
+    label: loading ? "STEINADEL · EXPORT-API · SYNC…" : anzeige ? anzeige.pille : "STEINADEL · EXPORT-API · OK",
+  };
+
+  const weitere = error ? 0 : Math.max(objekte.length - OBJEKT_SLOTS.length, 0);
+  const weitereEntity: Entity[] =
+    weitere > 0
+      ? [{ ...WEITERE_SLOT, key: "weitere", color: "var(--gp-ink-2)", label: `+${weitere} WEITERE` }]
+      : [];
+
+  const entities: Entity[] = [...objektEntities, exportEntity, ...weitereEntity];
+  const statusLabel = loading ? "SYNC…" : anzeige ? anzeige.kopf : `${objekte.length} OBJEKTE`;
+  const statusFarbe = anzeige ? fehlerFarbe : "var(--gp-gold)";
+  const statusTitel = anzeige
+    ? ohneSitzung
+      ? anzeige.titel
+      : `${anzeige.titel} Fehler: ${error}`
+    : "Quelle: /api/objekte (Steinadel-Export, beim Laden der Seite)";
 
   return (
     <div className="card-ghost cop-panel overflow-hidden">
@@ -63,11 +114,11 @@ export function SituationTable() {
         <div className="flex items-center gap-3">
           <span className="gp-index">COP</span>
           <h2 className="mono-label" style={{ color: "var(--gp-ink-2)" }}>
-            Common Operational Picture — DACH · Sektor Süd
+            Lagebild · Steinadel-Objekte
           </h2>
         </div>
-        <span className="mono-label" style={{ color: "var(--gp-gold)" }}>
-          N48.137° E11.575° · {statusLabel}
+        <span className="mono-label" style={{ color: statusFarbe }} title={statusTitel}>
+          {statusLabel}
         </span>
       </div>
 
@@ -75,7 +126,7 @@ export function SituationTable() {
         viewBox="0 0 720 440"
         className="w-full h-auto block"
         role="img"
-        aria-label="Lagebild Sektor Süd: Steinadel-Objekte und Engines um München-HQ"
+        aria-label="Lagebild, schematisch, keine Geokoordinaten: Steinadel-Objekte und Export-Anbindung um das HQ"
       >
         <defs>
           <radialGradient id="cop-bloom" cx="50%" cy="50%" r="50%">
@@ -96,7 +147,7 @@ export function SituationTable() {
           </filter>
         </defs>
 
-        {/* Graticule + Breitengrad-Labels */}
+        {/* Gitter (schematisch, ohne Breitengrad-Beschriftung) */}
         <g stroke="rgba(126,205,224,0.05)" strokeWidth="0.5">
           {Array.from({ length: 16 }, (_, i) => (
             <line key={`v${i}`} x1={40 + i * 44} y1="18" x2={40 + i * 44} y2="422" />
@@ -105,21 +156,6 @@ export function SituationTable() {
             <line key={`h${i}`} x1="24" y1={34 + i * 42} x2="700" y2={34 + i * 42} />
           ))}
         </g>
-        {[
-          { y: 118, t: "48.4°N" },
-          { y: 244, t: "48.1°N" },
-          { y: 370, t: "47.8°N" },
-        ].map((l) => (
-          <text
-            key={l.t}
-            x="30"
-            y={l.y}
-            fill="rgba(126,205,224,0.32)"
-            style={{ font: "400 7px var(--font-jbmono)", letterSpacing: "0.14em" }}
-          >
-            {l.t}
-          </text>
-        ))}
 
         {/* Projektor-Bloom */}
         <circle cx={HQ.x} cy={HQ.y} r="200" fill="url(#cop-bloom)" />
@@ -146,7 +182,7 @@ export function SituationTable() {
           />
         </g>
 
-        {/* HQ München — Fadenkreuz */}
+        {/* HQ — Fadenkreuz */}
         <g stroke="#eafdff" strokeWidth="1" filter="url(#cop-glow)">
           <line x1={HQ.x - 13} y1={HQ.y} x2={HQ.x - 5} y2={HQ.y} />
           <line x1={HQ.x + 5} y1={HQ.y} x2={HQ.x + 13} y2={HQ.y} />
@@ -161,7 +197,7 @@ export function SituationTable() {
           fill="rgba(234,253,255,0.78)"
           style={{ font: "500 8px var(--font-jbmono)", letterSpacing: "0.2em" }}
         >
-          MÜNCHEN · HQ
+          HQ
         </text>
 
         {/* Entitäten: Gold-Bullseye-Knoten + Werte-Pille */}
@@ -172,7 +208,7 @@ export function SituationTable() {
           const textX = e.side === "r" ? pillX + 11 : pillX + w - 11;
           const lineX2 = e.side === "r" ? pillX : pillX + w;
           return (
-            <g key={e.label}>
+            <g key={e.key}>
               {/* Konnektor */}
               <line
                 x1={e.x + (e.side === "r" ? 6 : -6)}

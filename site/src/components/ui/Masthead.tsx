@@ -5,6 +5,8 @@
 interface Vital {
   label: string;
   value: string | number;
+  /** Stufe 1 (05.11.2026): Quelle und Messzeit des Werts als Tooltip — jede Zahl braucht eine Quelle. */
+  title?: string;
 }
 
 interface MastheadProps {
@@ -14,7 +16,7 @@ interface MastheadProps {
   word: [string, string, string?];
   sub?: string;
   vitals?: Vital[];
-  coord?: string; // z.B. "N48.137° · E11.575°" — rechts in der Index-Zeile
+  coord?: string; // rechts in der Index-Zeile — Stufe 1 (05.11.2026): nur mit belegter Angabe, sonst weglassen
 }
 
 export function Masthead({ index, kicker, word, sub, vitals, coord }: MastheadProps) {
@@ -45,7 +47,7 @@ export function Masthead({ index, kicker, word, sub, vitals, coord }: MastheadPr
         {vitals && vitals.length > 0 && (
           <div className="flex gap-2.5 flex-wrap pb-1.5">
             {vitals.map((v) => (
-              <span key={v.label} className="gp-chip">
+              <span key={v.label} className="gp-chip" title={v.title}>
                 {v.label} <b>{v.value}</b>
               </span>
             ))}

@@ -2,7 +2,16 @@
 
 // Kampagnen-Attribution aus dem Steinadel-Rückkanal (/api/attribution) —
 // reine Aggregate (Leads/Termine/Klicks/Spend/CPL), keine Personendaten.
+// Gesamtprüfung 06.11.2026: Vorher stand bei JEDEM Fehler "RÜCKKANAL NICHT ERREICHBAR" — auch
+// ohne Sitzung (401) oder ohne Token (500), also mit falscher Ursache. Jetzt: 401 nicht
+// angemeldet, 500 Serverkonfiguration (Meldung des Servers, maskiert), 502 nicht erreichbar.
+// Gegencheck 06.11.2026: Die Ursache kommt aus "fehler_art" der Route, nicht mehr aus dem Status
+// allein. Vorher hieß jede 502 "RÜCKKANAL NICHT ERREICHBAR", auch wenn steinadel.de mit 401/403
+// oder unlesbarem JSON geantwortet hatte, und jede 500 "Serverkonfiguration", auch ohne Beleg.
+// Werte aus dem Rückkanal (Kampagne, Kanal, utm_content, Variante) erscheinen maskiert wie auf
+// /content (R24).
 import { Fragment, useEffect, useState } from "react";
+import { maskiereGeschuetzteNamen } from "@/lib/freigabe-regeln";
 
 interface UtmContentSplit {
   utm_content: string;
@@ -29,6 +38,7 @@ interface AttributionResponse {
   moeglicherweise_unvollstaendig?: boolean;
   kampagnen?: KampagnenZeile[];
   fehler?: string;
+  fehler_art?: string;
 }
 
 function euro(cents: number | null): string {
@@ -36,27 +46,82 @@ function euro(cents: number | null): string {
   return (cents / 100).toLocaleString("de-DE", { style: "currency", currency: "EUR" });
 }
 
+/** Wert aus dem Rückkanal für die Anzeige: Text, geschützter Name maskiert. */
+function wert(w: unknown): string {
+  return maskiereGeschuetzteNamen(w === null || w === undefined ? "" : String(w));
+}
+
+export interface AttributionFehler {
+  text: string;
+  /** "amber": ungemessen oder Quelle nicht erreichbar; "rose": Konfigurations- oder Antwortfehler. */
+  ton: "amber" | "rose";
+}
+
+const RUECKKANAL_HTTP = /^rueckkanal_http_(\d{3})$/;
+
+/**
+ * Fehlerzustand des Rückkanals aus HTTP-Status und Antwort; null = Antwort verwertbar. 401 kommt
+ * von der Middleware (keine Sitzung). Sonst entscheidet "fehler_art" der Route (api/attribution):
+ * konfiguration, nicht_erreichbar oder quelle_fehler. Ein Fehlerstatus ohne fehler_art (etwa eine
+ * 500 von Next selbst oder eine 502 des Reverse-Proxys) nennt keine Ursache.
+ */
+export function attributionFehler(status: number | null, daten: unknown): AttributionFehler | null {
+  const d = daten !== null && typeof daten === "object" && !Array.isArray(daten) ? (daten as Record<string, unknown>) : null;
+  const meldung = d && typeof d.fehler === "string" && d.fehler.trim() ? d.fehler.trim() : null;
+  const art = d && typeof d.fehler_art === "string" ? d.fehler_art : null;
+  if (status === null) return { text: "RÜCKKANAL NICHT ABRUFBAR — keine Antwort vom Dashboard-Server", ton: "amber" };
+  if (status === 401) return { text: "NICHT ANGEMELDET (HTTP 401) — Rückkanal erst nach der Anmeldung lesbar", ton: "amber" };
+  if (status < 200 || status >= 300) {
+    if (art === "konfiguration") {
+      return { text: `SERVERKONFIGURATION (HTTP ${status}): ${maskiereGeschuetzteNamen(meldung ?? "ohne Fehlertext")}`, ton: "rose" };
+    }
+    if (art === "nicht_erreichbar") {
+      return { text: "RÜCKKANAL NICHT ERREICHBAR — steinadel.de /api/kampagnen/attribution (Netzfehler oder Zeitlimit)", ton: "amber" };
+    }
+    if (art === "quelle_fehler") {
+      const http = meldung ? RUECKKANAL_HTTP.exec(meldung) : null;
+      const was = http
+        ? `antwortete mit HTTP ${http[1]}`
+        : meldung === "rueckkanal_antwort_unlesbar"
+          ? "Antwort nicht lesbar (kein JSON)"
+          : maskiereGeschuetzteNamen(meldung ?? "ohne Fehlertext");
+      return { text: `RÜCKKANAL MELDET FEHLER — steinadel.de ${was}`, ton: "rose" };
+    }
+    return { text: `FEHLER (HTTP ${status}): ${maskiereGeschuetzteNamen(meldung ?? "ohne Fehlertext")}`, ton: "rose" };
+  }
+  if (!d) return { text: "ANTWORT NICHT LESBAR — kein JSON-Objekt", ton: "rose" };
+  if (meldung) return { text: `FEHLER: ${maskiereGeschuetzteNamen(meldung)}`, ton: "rose" };
+  if (!Array.isArray(d.kampagnen)) return { text: "ANTWORT OHNE KAMPAGNENLISTE", ton: "rose" };
+  return null;
+}
+
 export function AttributionPanel() {
   const [zustand, setZustand] = useState<"laden" | "fehler" | "erfolg">("laden");
   const [daten, setDaten] = useState<AttributionResponse | null>(null);
+  const [fehler, setFehler] = useState<AttributionFehler | null>(null);
   const [offen, setOffen] = useState<string | null>(null);
 
   useEffect(() => {
     let abgebrochen = false;
     (async () => {
+      let status: number | null = null;
+      let d: unknown = null;
       try {
         const res = await fetch("/api/attribution", { cache: "no-store" });
-        const d: AttributionResponse = await res.json();
-        if (abgebrochen) return;
-        if (!res.ok || d.fehler || !d.kampagnen) {
-          setZustand("fehler");
-          return;
-        }
-        setDaten(d);
-        setZustand("erfolg");
+        status = res.status;
+        d = await res.json().catch(() => null);
       } catch {
-        if (!abgebrochen) setZustand("fehler");
+        status = null;
       }
+      if (abgebrochen) return;
+      const f = attributionFehler(status, d);
+      if (f) {
+        setFehler(f);
+        setZustand("fehler");
+        return;
+      }
+      setDaten(d as AttributionResponse);
+      setZustand("erfolg");
     })();
     return () => {
       abgebrochen = true;
@@ -79,9 +144,9 @@ export function AttributionPanel() {
       {zustand === "laden" && (
         <p className="mono-label" style={{ color: "var(--gp-ink-3)" }}>Lade Kampagnen-Aggregate …</p>
       )}
-      {zustand === "fehler" && (
-        <p className="mono-label" style={{ color: "var(--gp-amber)" }}>
-          RÜCKKANAL NICHT ERREICHBAR — steinadel.de /api/kampagnen/attribution
+      {zustand === "fehler" && fehler && (
+        <p className="mono-label break-words" style={{ color: fehler.ton === "rose" ? "var(--gp-rose)" : "var(--gp-amber)" }}>
+          {fehler.text}
         </p>
       )}
 
@@ -112,17 +177,17 @@ export function AttributionPanel() {
                   </tr>
                 </thead>
                 <tbody>
-                  {daten.kampagnen.map((k) => (
-                    <Fragment key={k.kampagne}>
+                  {daten.kampagnen.map((k, zeile) => (
+                    <Fragment key={`${zeile}-${String(k.kampagne)}`}>
                       <tr
                         className="cursor-pointer"
                         style={{ borderTop: "1px solid var(--gp-hairline)" }}
                         onClick={() => setOffen(offen === k.kampagne ? null : k.kampagne)}
                       >
                         <td className="py-2 pr-4 font-[family-name:var(--font-jbmono)]" style={{ color: "var(--gp-ink)" }}>
-                          {k.kampagne}
+                          {wert(k.kampagne)}
                         </td>
-                        <td className="py-2 pr-4">{k.kanal ?? "—"}</td>
+                        <td className="py-2 pr-4">{k.kanal === null || k.kanal === undefined ? "—" : wert(k.kanal)}</td>
                         <td className="py-2 pr-4 text-right">{k.klicks}</td>
                         <td className="py-2 pr-4 text-right" style={{ color: "var(--gp-emerald)" }}>{k.leads}</td>
                         <td className="py-2 pr-4 text-right">{k.termine}</td>
@@ -133,14 +198,14 @@ export function AttributionPanel() {
                         <tr>
                           <td colSpan={7} className="pb-3">
                             <div className="pl-2 space-y-1">
-                              {k.nach_utm_content.map((c) => (
-                                <div key={c.utm_content} className="mono-label">
-                                  {c.utm_content}: {c.klicks} Klicks · {c.leads} Leads
+                              {(Array.isArray(k.nach_utm_content) ? k.nach_utm_content : []).map((c, i) => (
+                                <div key={`${i}-${String(c.utm_content)}`} className="mono-label">
+                                  {wert(c.utm_content)}: {c.klicks} Klicks · {c.leads} Leads
                                 </div>
                               ))}
-                              {k.nach_lp_variant.length > 0 && (
+                              {Array.isArray(k.nach_lp_variant) && k.nach_lp_variant.length > 0 && (
                                 <div className="mono-label" style={{ color: "var(--gp-cyan)" }}>
-                                  A/B: {k.nach_lp_variant.map((v) => `${v.lp_variant}=${v.leads}`).join(" · ")}
+                                  A/B: {wert(k.nach_lp_variant.map((v) => `${v.lp_variant}=${v.leads}`).join(" · "))}
                                 </div>
                               )}
                             </div>

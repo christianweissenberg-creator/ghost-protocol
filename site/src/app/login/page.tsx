@@ -2,6 +2,22 @@
 
 import { useState } from "react";
 
+/**
+ * Text zu einer abgelehnten Anmeldung (Gegencheck 06.11.2026). Vorher hieß jede Antwort außer
+ * 429 "Falsches Passwort" — auch 500 (Anmeldung auf dem Server nicht konfiguriert), 400
+ * (unlesbare Anfrage) und 502/504 eines Reverse-Proxys, wo das Passwort gar nicht geprüft
+ * wurde. Nur 401 kommt von der Passwortprüfung (api/auth/login/route.ts).
+ */
+function loginFehlerText(status: number, daten: unknown): string {
+  if (status === 401) return "Falsches Passwort";
+  if (status === 429) return "Zu viele Fehlversuche. Bitte einige Minuten warten.";
+  const d = typeof daten === "object" && daten !== null && !Array.isArray(daten) ? (daten as Record<string, unknown>) : null;
+  const text = d && typeof d.error === "string" && d.error.trim() ? d.error.trim() : null;
+  return text
+    ? `Anmeldung nicht möglich (HTTP ${status}): ${text}`
+    : `Anmeldung nicht möglich (HTTP ${status}) — das Passwort wurde nicht geprüft.`;
+}
+
 export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
@@ -22,11 +38,8 @@ export default function LoginPage() {
         window.location.href = "/";
         return;
       }
-      if (res.status === 429) {
-        setError("Zu viele Fehlversuche. Bitte einige Minuten warten.");
-      } else {
-        setError("Falsches Passwort");
-      }
+      const daten: unknown = await res.json().catch(() => null);
+      setError(loginFehlerText(res.status, daten));
     } catch {
       setError("Verbindungsfehler. Bitte erneut versuchen.");
     } finally {

@@ -120,7 +120,6 @@ const TRAINING_DATA: TrainingModule[] = [
     ],
     crossTraining: [
       { partner: "RESEARCHER", thema: "Deep-Dive Recherchemethodik" },
-      { partner: "TRADER", thema: "Quantitative Marktdatenanalyse" },
       { partner: "STRATEGIST", thema: "Strategische Entscheidungsfindung" },
     ],
     pruefungsfragen: [
@@ -190,7 +189,6 @@ const TRAINING_DATA: TrainingModule[] = [
     pflichtlektuere: [
       { titel: "Financial Intelligence", autor: "Berman & Knight", jahr: 2013, relevanz: "Finanz-Grundlagen" },
       { titel: "Venture Deals", autor: "Brad Feld", jahr: 2019, relevanz: "Startup-Finanzierung" },
-      { titel: "The Intelligent Investor", autor: "Benjamin Graham", jahr: 1949, relevanz: "Value Investing" },
       { titel: "SaaS Metrics 2.0", autor: "David Skok (Blog)", jahr: 2023, relevanz: "SaaS-KPIs" },
     ],
     crossTraining: [
@@ -377,7 +375,6 @@ const TRAINING_DATA: TrainingModule[] = [
     crossTraining: [
       { partner: "ORACLE", thema: "Market Intelligence" },
       { partner: "ARCHITECT", thema: "Technology Evaluation" },
-      { partner: "TRADER", thema: "Quantitative Methoden" },
     ],
     pruefungsfragen: [
       "Erstelle eine MECE-Zerlegung des AI-SaaS-Marktes.",
@@ -461,41 +458,6 @@ const TRAINING_DATA: TrainingModule[] = [
     ],
   },
   {
-    agentId: "trader",
-    agentName: "TRADER",
-    role: "Marktanalyst",
-    tier: 3,
-    tierColor: "#10b981",
-    kernkompetenzen: [
-      "Elliott Wave Theory — 5+3 Wellenmuster",
-      "Fibonacci-Levels — Retracements & Extensions",
-      "Risk-Metriken — Sharpe, Sortino, Calmar, MaxDD",
-      "Kelly Criterion — Optimale Positionsgroesse",
-      "On-Chain — MVRV, SOPR, Exchange Flows",
-      "Makro — DXY, VIX, Fed Funds, M2",
-    ],
-    pflichtlektuere: [
-      { titel: "Technical Analysis of Financial Markets", autor: "John Murphy", jahr: 1999, relevanz: "TA-Bibel" },
-      { titel: "Market Wizards", autor: "Jack Schwager", jahr: 1989, relevanz: "Trading-Psychologie" },
-      { titel: "Quantitative Trading", autor: "Ernest Chan", jahr: 2008, relevanz: "Quant Methoden" },
-    ],
-    crossTraining: [
-      { partner: "ORACLE", thema: "Marktintelligenz-Interpretation" },
-      { partner: "RESEARCHER", thema: "Quantitative Forschungsmethoden" },
-      { partner: "TREASURER", thema: "Risk-Adjusted Returns" },
-    ],
-    pruefungsfragen: [
-      "Berechne den Profit Factor aus 10 Beispiel-Trades.",
-      "Wann ist ein Sharpe Ratio von 1.5 'gut'?",
-      "Erklaere Funding Rate Divergence als Signal.",
-    ],
-    lernpfad: [
-      { stufe: "Junior", kriterien: ["Chart-Patterns erkennen", "RSI/MACD lesen", "Risiko-Basics"] },
-      { stufe: "Senior", kriterien: ["Elliott Wave zaehlen", "Position Sizing (Kelly)", "On-Chain Analyse"] },
-      { stufe: "Expert", kriterien: ["Quantitative Strategien", "Walk-Forward Validierung", "Regime Detection"] },
-    ],
-  },
-  {
     agentId: "concierge",
     agentName: "CONCIERGE",
     role: "Community & Customer Success",
@@ -566,12 +528,13 @@ const TRAINING_DATA: TrainingModule[] = [
   },
 ];
 
-const TIER_LABELS: Record<number, { label: string; color: string }> = {
-  0: { label: "Brain", color: "#f43f5e" },
-  1: { label: "C-Suite", color: "#8b5cf6" },
-  2: { label: "Directors", color: "#22d3ee" },
-  3: { label: "Operators", color: "#10b981" },
-};
+// Stufe 1 (05.11.2026): Die Kopfzahlen ("16 Agents", "48+", "64+", "48") waren fest
+// eingetragen und schon vorher falsch (15 Module, 52 Fragen). Sie werden jetzt aus
+// TRAINING_DATA gezählt. Das unbenutzte TIER_LABELS ist entfernt.
+const ANZAHL_MODULE = TRAINING_DATA.length;
+const ANZAHL_LEKTUERE = TRAINING_DATA.reduce((n, m) => n + m.pflichtlektuere.length, 0);
+const ANZAHL_FRAGEN = TRAINING_DATA.reduce((n, m) => n + m.pruefungsfragen.length, 0);
+const ANZAHL_CROSS = TRAINING_DATA.reduce((n, m) => n + m.crossTraining.length, 0);
 
 export default function AcademyPage() {
   const [selectedAgent, setSelectedAgent] = useState<string | null>(null);
@@ -584,7 +547,9 @@ export default function AcademyPage() {
       {/* Header */}
       <div className="gp-masthead">
         <div className="gp-index-row"><span className="gp-index">07 / AUSBILDUNG</span><span className="gp-index-rule" /></div>
-        <p className="gp-kicker">Internes Weiterbildungsmodul — 16 Agents, 48+ Pflichtlektueren, 64+ Pruefungsfragen</p>
+        <p className="gp-kicker">
+          Internes Weiterbildungsmodul — {ANZAHL_MODULE} Agents, {ANZAHL_LEKTUERE} Pflichtlektueren, {ANZAHL_FRAGEN} Pruefungsfragen
+        </p>
         <h1 className="gp-wordmark">Aca<em>demy</em></h1>
         <div className="mt-3 flex gap-4 text-xs">
           <div className="px-3 py-1.5 rounded-lg bg-accent-violet/10 text-accent-violet">
@@ -792,15 +757,15 @@ export default function AcademyPage() {
 
           <div className="mt-6 grid grid-cols-3 gap-4">
             <div className="p-4 rounded-lg bg-accent-violet/5 border border-accent-violet/20 text-center">
-              <p className="text-2xl font-bold text-accent-violet">48+</p>
+              <p className="text-2xl font-bold text-accent-violet">{ANZAHL_LEKTUERE}</p>
               <p className="text-xs text-text-muted mt-1">Pflichtlektueren</p>
             </div>
             <div className="p-4 rounded-lg bg-accent-cyan/5 border border-accent-cyan/20 text-center">
-              <p className="text-2xl font-bold text-accent-cyan">64+</p>
+              <p className="text-2xl font-bold text-accent-cyan">{ANZAHL_FRAGEN}</p>
               <p className="text-xs text-text-muted mt-1">Pruefungsfragen</p>
             </div>
             <div className="p-4 rounded-lg bg-accent-emerald/5 border border-accent-emerald/20 text-center">
-              <p className="text-2xl font-bold text-accent-emerald">48</p>
+              <p className="text-2xl font-bold text-accent-emerald">{ANZAHL_CROSS}</p>
               <p className="text-xs text-text-muted mt-1">Cross-Training Sessions</p>
             </div>
           </div>
