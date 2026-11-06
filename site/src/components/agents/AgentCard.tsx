@@ -2,19 +2,25 @@
 
 import Link from "next/link";
 import type { Agent } from "@/lib/types";
-import { AGENT_REGISTRY, TIER_META } from "@/lib/types";
+import { aktivierungsAnzeige, registerEintragFuer, tierMetaFuer } from "@/lib/types";
+import { useJetztIso } from "@/lib/hooks";
 
 interface AgentCardProps {
   agent: Agent;
 }
 
+// Stufe 1 (06.11.2026, Befunde R3, R9, R13): Die Karte zeigt die letzte Aktivierung mit
+// Zeit (agents.last_heartbeat) statt agents.status — der Registerstatus ist ein gespeicherter
+// Wert ohne Messung und steht nur noch im title, als "nicht gemessen". Tier und Persona kommen
+// mit Rückfall aus lib/types (tierMetaFuer, registerEintragFuer).
 export function AgentCard({ agent }: AgentCardProps) {
-  const registry = AGENT_REGISTRY[agent.name] ?? {
-    icon: agent.name.slice(0, 2),
-    persona: agent.role,
-    tierColor: "#666",
-  };
-  const tierMeta = TIER_META[agent.tier];
+  const registry = registerEintragFuer(agent);
+  const tierMeta = tierMetaFuer(agent.tier);
+  const jetzt = useJetztIso();
+  const aktivierung = aktivierungsAnzeige(agent.last_heartbeat, jetzt, agent.status);
+  // Ohne eigene Persona fällt die Anzeige auf die Rolle zurück; die steht schon unter dem
+  // Namen und wird nicht doppelt gezeigt.
+  const persona = registry.persona && registry.persona !== agent.role ? registry.persona : null;
 
   return (
     <Link href={`/agents/${agent.id}`} className="card-ghost p-4 group animate-slide-up block cursor-pointer hover:border-accent-violet/30">
@@ -38,13 +44,13 @@ export function AgentCard({ agent }: AgentCardProps) {
           </div>
         </div>
 
-        {/* Status */}
-        <div className="flex items-center gap-1.5">
-          <div className={`status-dot status-${agent.status}`} />
-          <span className="text-[10px] text-text-muted uppercase tracking-wide">
-            {agent.status}
-          </span>
-        </div>
+        {/* Letzte Aktivierung (Ereignis mit Zeit), kein Registerstatus */}
+        <span
+          className="text-[10px] text-text-muted tracking-wide text-right max-w-[45%]"
+          title={aktivierung.titel}
+        >
+          {aktivierung.text}
+        </span>
       </div>
 
       {/* Tier Badge */}
@@ -56,19 +62,24 @@ export function AgentCard({ agent }: AgentCardProps) {
             color: tierMeta.color,
           }}
         >
-          Tier {agent.tier} — {tierMeta.label}
+          Tier {String(agent.tier ?? "?")} — {tierMeta.label}
         </span>
       </div>
 
       {/* Persona */}
-      <p className="text-xs text-text-secondary leading-relaxed">
-        {registry.persona}
-      </p>
+      {persona && (
+        <p className="text-xs text-text-secondary leading-relaxed">
+          {persona}
+        </p>
+      )}
 
-      {/* LLM Model */}
+      {/* LLM Model — laut Register (agents.llm_model) */}
       <div className="mt-3 pt-3 border-t border-border-subtle flex items-center justify-between">
-        <span className="text-[10px] text-text-muted font-mono">
-          {agent.llm_model}
+        <span
+          className="text-[10px] text-text-muted font-mono"
+          title="Modell laut Register (agents.llm_model). Das bei einem Lauf aufgerufene Modell steht in metadata.model der Bus-Nachricht."
+        >
+          {agent.llm_model || "Modell nicht eingetragen"}
         </span>
         <div className="flex gap-1">
           {(agent.channels ?? []).slice(0, 3).map((ch) => (

@@ -4,7 +4,7 @@
     {
       "name": "ghost-protocol",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev"],
+      "runtimeArgs": ["run", "dev:lokal"],
       "port": 3000
     }
   ]

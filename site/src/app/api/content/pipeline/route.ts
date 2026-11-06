@@ -1,69 +1,457 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServiceClient } from "@/lib/supabase";
+import { werteCounselAus } from "@/lib/counsel-urteil";
+import { MIN_FREIGABE_ZEICHEN, enthaeltGeschuetztenNamen, maskiereGeschuetzteNamen } from "@/lib/freigabe-regeln";
+import { bereinigeFehler, leseProtokollEintraege, pruefeAnfrageHerkunft } from "@/lib/status-server";
+import { STEINADEL_REGELPAKET } from "@/lib/steinadel-regelpaket";
 
 const BASE_URL = process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000";
 
 // Content-First Pipeline: RESEARCHER → SCRIBE → COUNSEL → PUBLISHER → AMPLIFIER
 // COUNSEL ist Pflicht-Schritt (fail-closed): ohne eindeutige Freigabe-Empfehlung
 // stoppt die Pipeline, PUBLISHER/AMPLIFIER laufen NICHT.
+//
+// Stufe 1 (05.11.2026) — Freigabe und Beleg-Kette:
+// - Das COUNSEL-Urteil wertet werteCounselAus() aus (lib/counsel-urteil.ts); die frühere
+//   Regex ließ zitierte Optionen und verneinte Freigaben durch. Nur FREIGABE geht weiter.
+// - Jeder activate-Aufruf wird auf HTTP-Fehler UND "abgeschnitten" geprüft. Bei SCRIBE,
+//   COUNSEL und PUBLISHER ist eine abgeschnittene Antwort ein Fehler: sonst prüft COUNSEL
+//   einen halben Text oder ein halbes Urteil zählt.
+// - Jede Zeile trägt ihre Belege in metadata (Regelpaket-Version, Objekt-Snapshot,
+//   Herkunft der RESEARCHER-Quellen), damit die Freigabe-Ansicht zeigen kann, worauf das
+//   Urteil beruht.
+// - Jedes Schreiben der content-Zeile wird geprüft; Fehler gehen nach console.error und
+//   als speicherfehler in die Antwort, statt still verloren zu gehen.
+//
+// Fixrunde 06.11.2026:
+// - R10: Optionale Lauf-ID (Idempotenzschlüssel, metadata.lauf_id; der Browser schickt sie
+//   nach unbekanntem Ausgang erneut mit). Ist sie schon vergeben, antwortet die Route
+//   409 { fehler, content_id, status } ohne bezahlten Aufruf. Direkt nach dem Insert und vor
+//   dem ersten bezahlten Aufruf liest sie die Zeilen mit dieser Lauf-ID: Weiter läuft nur,
+//   wer die eigene Zeile als EINZIGE sieht; wer eine fremde sieht, endet als "fehler" + 409.
+//   Nachbesserung: Die frühere Regel "kleinste id gewinnt" ließ zwei Läufe zu, wenn die
+//   kleinere id erst nach der Lesung der größeren sichtbar wurde (Commit- ≠ id-Reihenfolge).
+//   Jetzt gilt höchstens ein Lauf je Lauf-ID; sehen sich zwei gleichzeitige Anfragen
+//   gegenseitig, brechen beide ohne bezahlten Aufruf ab (fail-closed). "Genau einer" ginge
+//   nur mit einem eindeutigen Index auf metadata->>lauf_id (Schema-Änderung, Inhaber/DB).
+// - R21: Das Export-Objekt wird vor Snapshot, Prompt und Insert geprüft (502 "Export-Objekt
+//   unvollständig: <Feld>"); fehlende optionale Felder stehen im Prompt als "nicht im
+//   Export", nie als "undefined".
+// - R6: Scheitert das Speichern des COUNSEL-Ergebnisses, endet der Lauf mit status "fehler";
+//   der Abbruch versucht, Review und Urteil erneut zu speichern. Bei FREIGABE laufen PUBLISHER
+//   und AMPLIFIER nicht mehr; bei ABLEHNUNG/UNKLAR gibt es keine Antwort "abgelehnt" über einer
+//   Zeile, die als "entwurf" ohne Review hängen bliebe (Nachbesserung). Scheitert das
+//   Speichern von "zur_freigabe", antwortet die Route 500 mit status "fehler" statt "complete".
+// - R17: Fehlertexte werden vor jedem Speichern und jeder Antwort bereinigt (fehlerText).
+// - activate-Vertrag (Gesamtprüfung 06.11.2026): Protokollfehler kommen als Liste
+//   (protokoll_fehler_liste); fehlt sie, wird der Text protokoll_fehler am Trenner "; " geteilt
+//   (leseProtokollEintraege, lib/status-server.ts); die Liste aus der Zeit vor der Fixrunde wird
+//   weiter gelesen. Jeder Eintrag wird einzeln bereinigt und auf höchstens 160 Zeichen gekürzt,
+//   steht in steps[n].protokoll_fehler und als eigene Warnung im Lauf, auch aus einer
+//   Fehlerantwort (z. B. Fehllauf-Zeile fehlt). Vorher wurde der ganze Text als EIN Eintrag
+//   gekürzt; spätere Vermerke wie "metrics-Insert" fielen weg.
+// - Fehllauf-Kosten (Gesamtprüfung 06.11.2026): Meldet activate in einer Fehlerantwort
+//   usage.cost_usd (bezahlter Aufruf ohne verwertbare Antwort, HTTP 502), übernimmt die Stufe
+//   diese Kosten statt null — wie delegate und /api/status.
+// - platform und format nur aus FORMATE_JE_PLATTFORM, sonst 400 vor jedem Aufruf (vorher lief
+//   eine unbekannte Plattform mit den X-Anweisungen als Rückfall). LinkedIn steht nicht darin:
+//   ob es eine Plattform der Pipeline wird, entscheidet der Inhaber (R39).
+// - Ein CTA-Link mit geschütztem Namen wird weder in den SCRIBE-Auftrag geschrieben noch als
+//   metadata.cta_link gespeichert (Warnung mit Stufe "objekt").
+// - pruefeAnfrageHerkunft (lib/status-server.ts): Cross-Site-POST → 403, ohne JSON-Content-Type
+//   → 415, vor jedem Abruf.
+// - R24: Die statischen Auftragstexte der fünf Stufen nennen bei Objekt-Läufen (Steinadel-
+//   Content) keinen Projektnamen: Pflicht- und Stilregel sind ohne Namen formuliert, die
+//   Kategorie "ghost_protocol" heißt dort wie in der Oberfläche "Behind the Scenes"
+//   (Nachbesserung: vorher "Ghost Protocol NICHT erwähnen" und "Ghost Protocol
+//   Behind-the-Scenes"). Läufe ohne Objekt (eigener Content) behalten Stilregel und Kategorie.
+//   Nicht davon erfasst (Gesamtprüfung 06.11.2026): (a) Jeder Systemprompt der fünf Agenten
+//   beginnt mit COMPANY_CONTEXT (lib/agent-prompts.ts) und nennt "Ghost Protocol"; activate
+//   sendet ihn bei jedem Aufruf mit. (b) COUNSELs Regelpaket nennt die Namen weiter, und das
+//   COUNSEL-Review geht an PUBLISHER nur mit maskiertem GESCHÜTZTEM Namen — andere Projekt- und
+//   Markennamen (etwa "Ghost Protocol") gehen unmaskiert durch. Ob auch sie maskiert werden,
+//   entscheidet der Inhaber (R24). Ein Freigabetext mit geschütztem Namen geht nicht auf
+//   "zur_freigabe" (Namensschutz).
+// - Die Mindestlänge des Freigabetexts kommt aus lib/freigabe-regeln.ts — eine Regel für
+//   Pipeline, Freigeben (api/content/status) und Freigabe-Stapel (api/freigaben).
+// - body bleibt die PUBLISHER-Fassung (R2): Welcher Text freigegeben wird, entscheidet der
+//   Inhaber; metadata.freigabe_hinweis hält fest, ob sie dem geprüften SCRIBE-Text gleicht.
+
+// Stufe 1 (05.11.2026): "krypto_trading" entfernt — Ghost Protocol hat mit Trading
+// nichts zu tun. Unbekannte Kategorien werden abgewiesen statt still umgedeutet.
+type Kategorie = "ki_automation" | "business_automation" | "ghost_protocol";
+
+const KATEGORIE_LABEL: Record<Kategorie, string> = {
+  ki_automation: "KI & Automation",
+  business_automation: "Business-Automation",
+  ghost_protocol: "Ghost Protocol Behind-the-Scenes",
+};
+
+// R24 (Nachbesserung 06.11.2026): Objekt-Läufe (Steinadel-Content) bekommen keinen
+// Projektnamen in den Prompt; "ghost_protocol" heißt dort wie in der Oberfläche
+// (app/content/page.tsx, CATEGORIES) "Behind the Scenes". Ob die Kategorie für
+// Steinadel-Objekte zulässig sein soll, ist eine Produktentscheidung und bleibt offen.
+const KATEGORIE_LABEL_OBJEKT: Record<Kategorie, string> = {
+  ...KATEGORIE_LABEL,
+  ghost_protocol: "Behind the Scenes",
+};
+
+function istKategorie(wert: unknown): wert is Kategorie {
+  return typeof wert === "string" && Object.prototype.hasOwnProperty.call(KATEGORIE_LABEL, wert);
+}
+
+// Gesamtprüfung 06.11.2026: zulässige Plattformen und Formate (auch für GET). Jede hat
+// Anweisungen in platformInstructions und Beschriftungen in platformLabel/formatLabel.
+const FORMATE_JE_PLATTFORM: Readonly<Record<string, readonly string[]>> = {
+  youtube: ["longform", "short", "deep_dive"],
+  twitter: ["thread"],
+  x: ["thread"],
+  newsletter: ["newsletter_issue"],
+  tiktok: ["tiktok_short"],
+  instagram: ["carousel", "reel", "story"],
+};
+
+function istPlattform(wert: unknown): wert is string {
+  return typeof wert === "string" && Object.prototype.hasOwnProperty.call(FORMATE_JE_PLATTFORM, wert);
+}
+
+/** Eingabewert für eine Meldung: kurz und maskiert (er kommt aus der Anfrage). */
+function eingabeText(wert: unknown): string {
+  return maskiereGeschuetzteNamen(String(wert)).slice(0, 40);
+}
+
+type Stufe = "researcher" | "scribe" | "counsel" | "publisher" | "amplifier";
 
 interface PipelineRequest {
   topic?: string;
   platform: "youtube" | "twitter" | "x" | "newsletter" | "tiktok" | "instagram";
   format: "longform" | "short" | "thread" | "deep_dive" | "newsletter_issue" | "tiktok_short" | "reel" | "carousel" | "story";
-  category?: "ki_automation" | "krypto_trading" | "business_automation" | "ghost_protocol";
+  category?: Kategorie;
   repurpose_from?: string; // Original-Content für Repurposing
   objekt_slug?: string; // Steinadel-Objekt (optional) — bindet Objektdaten in RESEARCHER/SCRIBE ein
+  lauf_id?: string; // Idempotenzschlüssel (optional, Fixrunde 06.11.2026, R10)
 }
 
 interface PipelineStep {
-  agent: string;
+  agent: Stufe;
   status: "pending" | "running" | "done" | "error";
   output?: string;
-  cost?: number;
+  /** Stufe 1 (05.11.2026): Fehlergrund getrennt vom Output (früher stand die Meldung in output). */
+  fehler?: string;
+  /** Geschätzte Kosten laut activate (usage.cost_usd); null = nicht gemeldet, nie 0 als Ersatz. */
+  cost?: number | null;
   duration_ms?: number;
+  model?: string | null;
+  stop_reason?: string | null;
+  /** true = abgeschnitten, false = vollständig, null = vom activate-Vertrag nicht gemeldet. */
+  abgeschnitten?: boolean | null;
+  /** Von activate gemeldete Protokollfehler (bereinigt); fehlt, wenn keine gemeldet sind. */
+  protokoll_fehler?: string[];
 }
 
-// Steinadel-Objekt, wie von /api/objekte geliefert (Export-API, read-only)
+// Fehler- und Warnvermerk mit Stufe und Grund (Stufe 1, 05.11.2026). Steht als
+// metadata.fehler (ein Vermerk) bzw. metadata.warnungen (Liste) in der content-Zeile.
+interface Vermerk {
+  stufe: Stufe | "objekt" | "pipeline";
+  grund: string;
+  detail?: string;
+  am: string;
+}
+
+// Grund und Detail landen in metadata (per Anon-Key lesbar) und in der Antwort: deshalb
+// immer bereinigt (R17). Für feste Texte ändert fehlerText nichts.
+function vermerk(stufe: Vermerk["stufe"], grund: string, detail?: string): Vermerk {
+  const am = new Date().toISOString();
+  return detail ? { stufe, grund: fehlerText(grund), detail: fehlerText(detail), am } : { stufe, grund: fehlerText(grund), am };
+}
+
+// Fehlertext für Speicher und Antwort (Fixrunde 06.11.2026, R17): bereinigeFehler
+// (lib/status-server.ts) entfernt Schlüsselwerte, Tokens und URLs und kürzt; dazu wird der
+// geschützte Name maskiert. Abbruch und Zeitüberschreitung meldet bereinigeFehler mit dem
+// Zeitlimit der Status-Abfragen (8 s); hier gelten andere Limits, deshalb eigener Text mit
+// dem tatsächlichen Limit bzw. ohne Zahl.
+const ABBRUCH = /TimeoutError|AbortError|aborted|timed out/i;
+
+function fehlerText(e: unknown, zeitlimitMs?: number): string {
+  const roh =
+    e instanceof Error
+      ? `${e.name}: ${e.message}`
+      : typeof e === "string"
+        ? e
+        : istObjekt(e) && typeof e.message === "string"
+          ? e.message
+          : "";
+  if (ABBRUCH.test(roh)) {
+    return zeitlimitMs !== undefined
+      ? `Zeitüberschreitung oder Abbruch (Zeitlimit ${zeitlimitMs / 1000} s)`
+      : "Abbruch oder Zeitüberschreitung";
+  }
+  return maskiereGeschuetzteNamen(bereinigeFehler(e));
+}
+
+// Antwort ohne Pipeline-Ergebnis (4xx/5xx): Fehler heißen "fehler" (Stufe-1-Vertrag).
+function fehlerAntwort(status: number, text: string, extra: Record<string, unknown> = {}) {
+  return NextResponse.json({ ...extra, fehler: text }, { status });
+}
+
+// Steinadel-Objekt, wie von /api/objekte geliefert (Export-API, read-only).
+// Fixrunde 06.11.2026 (R21): Das Objekt wird zur Laufzeit geprüft (pruefeExportObjekt) und
+// nur aus geprüften Feldern gebaut. Optionale Felder sind null, wenn der Export sie nicht
+// liefert — im Prompt steht dann "nicht im Export".
 interface Kennzahl {
   label: string;
-  wert: string;
+  wert: string | number;
 }
 interface Kampagne {
   kampagne: string;
   lpUrl: string;
-  lpVariant: string;
+  lpVariant: string | null;
 }
-interface Urls {
-  objektSeite: string;
-  expose: string;
-  ogBild: string;
-  cover: string;
-}
-interface ObjektApi {
+const NICHT_IM_EXPORT = "nicht im Export";
+const OPTIONALE_FELDER = ["untertitel", "tagline", "ort", "baujahr", "kurzbeschreibung", "statusBadge"] as const;
+type OptionalesFeld = (typeof OPTIONALE_FELDER)[number];
+
+interface ObjektApi extends Record<OptionalesFeld, string | number | null> {
   slug: string;
   name: string;
-  untertitel: string;
-  tagline: string;
-  ort: string;
-  baujahr: number;
   preis: string;
-  kurzbeschreibung: string;
-  statusBadge: string;
   afaProzent: number;
   istDenkmal: boolean;
   kennzahlen: Kennzahl[];
-  urls: Urls;
   kampagnen: Kampagne[];
 }
 
-// Activate an agent via internal API call
-async function activateAgent(
-  agentId: string,
-  task: string,
-  cookie: string
-): Promise<{ response: string; cost: number; duration_ms: number }> {
-  const start = Date.now();
+type ExportPruefung = { ok: true; objekt: ObjektApi } | { ok: false; feld: string };
+
+function istText(wert: unknown): wert is string {
+  return typeof wert === "string" && wert.trim() !== "";
+}
+
+function istZahl(wert: unknown): wert is number {
+  return typeof wert === "number" && Number.isFinite(wert);
+}
+
+function istHttpUrl(wert: string): boolean {
+  try {
+    const url = new URL(wert);
+    return url.protocol === "http:" || url.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Pflichtfelder des Export-Objekts prüfen (R21), bevor Snapshot, Prompt oder Insert sie
+ * benutzen. Pflicht: name, preis (Text, wird wörtlich übernommen), afaProzent (Zahl),
+ * istDenkmal (Boolean), kennzahlen und kampagnen (Listen; je Kennzahl label und wert, je
+ * Kampagne kampagne und eine http(s)-lpUrl). Liefert das erste fehlende oder unbrauchbare Feld.
+ */
+function pruefeExportObjekt(o: Record<string, unknown>, slug: string): ExportPruefung {
+  const luecke = (feld: string): ExportPruefung => ({ ok: false, feld });
+  if (!istText(o.name)) return luecke("name");
+  if (!istText(o.preis)) return luecke("preis");
+  if (!istZahl(o.afaProzent)) return luecke("afaProzent");
+  if (typeof o.istDenkmal !== "boolean") return luecke("istDenkmal");
+  if (!Array.isArray(o.kennzahlen)) return luecke("kennzahlen");
+  if (!Array.isArray(o.kampagnen)) return luecke("kampagnen");
+
+  const kennzahlen: Kennzahl[] = [];
+  for (const [i, k] of o.kennzahlen.entries()) {
+    if (!istObjekt(k) || !istText(k.label)) return luecke(`kennzahlen[${i}].label`);
+    if (!istText(k.wert) && !istZahl(k.wert)) return luecke(`kennzahlen[${i}].wert`);
+    kennzahlen.push({ label: k.label, wert: k.wert });
+  }
+
+  const kampagnen: Kampagne[] = [];
+  for (const [i, k] of o.kampagnen.entries()) {
+    if (!istObjekt(k) || !istText(k.kampagne)) return luecke(`kampagnen[${i}].kampagne`);
+    if (!istText(k.lpUrl) || !istHttpUrl(k.lpUrl)) return luecke(`kampagnen[${i}].lpUrl`);
+    if (k.lpVariant !== undefined && k.lpVariant !== null && typeof k.lpVariant !== "string") {
+      return luecke(`kampagnen[${i}].lpVariant`);
+    }
+    kampagnen.push({ kampagne: k.kampagne, lpUrl: k.lpUrl, lpVariant: istText(k.lpVariant) ? k.lpVariant : null });
+  }
+
+  // Optionale Felder: fehlt der Wert (undefined, null, leerer Text) → null; Text oder Zahl
+  // wird übernommen; alles andere (Objekt, Liste, Boolean) ist unbrauchbar.
+  const optional = {} as Record<OptionalesFeld, string | number | null>;
+  for (const feld of OPTIONALE_FELDER) {
+    const wert = o[feld];
+    if (wert === undefined || wert === null || (typeof wert === "string" && wert.trim() === "")) {
+      optional[feld] = null;
+    } else if (typeof wert === "string" || istZahl(wert)) {
+      optional[feld] = wert;
+    } else {
+      return luecke(feld);
+    }
+  }
+
+  return {
+    ok: true,
+    objekt: {
+      ...optional,
+      slug,
+      name: o.name,
+      preis: o.preis,
+      afaProzent: o.afaProzent,
+      istDenkmal: o.istDenkmal,
+      kennzahlen,
+      kampagnen,
+    },
+  };
+}
+
+/** Optionales Objektfeld für den Prompt: fehlt es, steht "nicht im Export" statt "undefined". */
+function anzeige(wert: string | number | null): string {
+  return wert === null ? NICHT_IM_EXPORT : String(wert);
+}
+
+// Kopf-Felder der Export-Antwort (wie expose/page.tsx sie liest); null = nicht geliefert.
+interface ExportKopf {
+  version: string | null;
+  quelle: string | null;
+  generiert_am: string | null;
+}
+
+// Beleg-Snapshot (Stufe 1, 05.11.2026): genau die Felder, die buildObjektBlock in die
+// Prompts schreibt. Wer buildObjektBlock ein Feld hinzufügt, muss es hier ergänzen —
+// sonst belegt der Snapshot nicht mehr, was die Agenten gesehen haben.
+const SNAPSHOT_FELDER = [
+  "name",
+  "untertitel",
+  "tagline",
+  "ort",
+  "baujahr",
+  "preis",
+  "kurzbeschreibung",
+  "statusBadge",
+  "afaProzent",
+  "istDenkmal",
+  "kennzahlen",
+  "kampagnen",
+] as const satisfies readonly (keyof ObjektApi)[];
+
+interface ObjektSnapshot {
+  abgerufen_am: string;
+  export: ExportKopf;
+  objekt: Record<(typeof SNAPSHOT_FELDER)[number], unknown>;
+}
+
+function baueSnapshot(o: ObjektApi, kopf: ExportKopf, abgerufenAm: string): ObjektSnapshot {
+  const objekt = {} as ObjektSnapshot["objekt"];
+  for (const feld of SNAPSHOT_FELDER) {
+    // Fehlt ein Feld im Export, steht null im Beleg — kein Ersatzwert.
+    objekt[feld] = o[feld] ?? null;
+  }
+  return { abgerufen_am: abgerufenAm, export: kopf, objekt };
+}
+
+// Regelpaket-Version aus der Kopfzeile lesen, z. B. "— v1.1 (Stand 29.07.2026)".
+// Die Datei selbst bleibt unverändert (wortgetreue Übernahme). Stufe 1 (05.11.2026).
+const REGELPAKET_KOPF = /—\s*(v\d+(?:\.\d+)*)\s*\(Stand\s+(\d{1,2}\.\d{1,2}\.\d{4})\)/;
+
+function leseRegelpaketKopf(): { version: string | null; stand: string | null } {
+  const kopfzeile = STEINADEL_REGELPAKET.split("\n", 1)[0] ?? "";
+  const treffer = REGELPAKET_KOPF.exec(kopfzeile);
+  return treffer ? { version: treffer[1], stand: treffer[2] } : { version: null, stand: null };
+}
+
+// Dasselbe Regelpaket steckt im COUNSEL-Systemprompt (lib/agent-prompts.ts) — die
+// gespeicherte Version ist also die, gegen die COUNSEL in diesem Build geprüft hat.
+const REGELPAKET = leseRegelpaketKopf();
+
+// RESEARCHER hat kein Recherche-Werkzeug; seine "Quellen" sind Modellangaben.
+const RESEARCHER_QUELLEN_HINWEIS = "Modellangabe, ungeprüft (kein Recherche-Werkzeug)";
+
+const KOSTEN_HINWEIS =
+  "geschätzt (Tokens × feste Preistabelle der activate-Route); Stufen ohne Kostenangabe fehlen in der Summe";
+
+// Stufe 1 (05.11.2026): Ohne Zeitlimit hing ein hängender Export die ganze Pipeline auf.
+const OBJEKT_TIMEOUT_MS = 20_000;
+
+// Text unter MIN_FREIGABE_ZEICHEN (lib/freigabe-regeln.ts, nach Trimmen) gilt vor
+// "zur_freigabe" als leer.
+
+// Lauf-ID (R10): vom Browser erzeugt (crypto.randomUUID()), Vertrag mit der Content-Seite.
+const LAUF_ID_MUSTER = /^[A-Za-z0-9:_-]{8,80}$/;
+
+// Namensschutz (R24): Grund, mit dem ein Freigabetext mit geschütztem Namen endet.
+const NAMENSSCHUTZ_GRUND = "Namensschutz: Freigabetext enthält einen geschützten Namen";
+
+// Vollständig ist eine Antwort nur mit diesen stop_reason-Werten (activate-Vertrag,
+// Fixrunde 06.11.2026); jeder andere gemeldete Wert heißt abgeschnitten.
+const STOP_VOLLSTAENDIG: ReadonlySet<string> = new Set(["end_turn", "stop_sequence"]);
+
+function istObjekt(wert: unknown): wert is Record<string, unknown> {
+  return typeof wert === "object" && wert !== null && !Array.isArray(wert);
+}
+
+function textOderNull(wert: unknown): string | null {
+  if (typeof wert === "number" && Number.isFinite(wert)) return String(wert);
+  return typeof wert === "string" && wert.trim() !== "" ? wert : null;
+}
+
+interface Aktivierung {
+  response: string;
+  cost: number | null;
+  model: string | null;
+  stop_reason: string | null;
+  abgeschnitten: boolean | null;
+  protokoll_fehler: string[];
+}
+
+/**
+ * Fehlerantwort der activate-Route; trägt deren Protokollfehler weiter (Nachbesserung) und die
+ * gemeldeten Kosten eines bezahlten Fehllaufs (Gesamtprüfung 06.11.2026; null = nicht gemeldet).
+ */
+class AktivierungsFehler extends Error {
+  readonly protokollFehler: string[];
+  readonly kosten: number | null;
+  readonly modell: string | null;
+  readonly stopReason: string | null;
+  constructor(
+    meldung: string,
+    protokollFehler: string[],
+    kosten: number | null = null,
+    modell: string | null = null,
+    stopReason: string | null = null
+  ) {
+    super(meldung);
+    this.protokollFehler = protokollFehler;
+    this.kosten = kosten;
+    this.modell = modell;
+    this.stopReason = stopReason;
+  }
+}
+
+const PROTOKOLL_UNLESBAR = "protokoll_fehler nicht lesbar (activate-Vertrag)";
+
+/**
+ * Protokollfehler der activate-Antwort lesen (Gesamtprüfung 06.11.2026): vorrangig die Liste
+ * protokoll_fehler_liste, sonst der Text protokoll_fehler, am Trenner "; " geteilt
+ * (leseProtokollEintraege). Jede andere Form ist ein Vertragsbruch und wird als Protokollfehler
+ * vermerkt statt still verworfen (fail-closed). Die Einträge sind Fehlertexte (Supabase) und
+ * werden in steps gespeichert: deshalb je Eintrag bereinigt (höchstens 160 Zeichen je Eintrag).
+ */
+function leseProtokollFehler(liste: unknown, text: unknown): string[] {
+  const gelesen = leseProtokollEintraege(liste, text);
+  const texte = gelesen.eintraege.map((e) => fehlerText(e));
+  return gelesen.unlesbar ? [...texte, PROTOKOLL_UNLESBAR] : texte;
+}
+
+/** usage.cost_usd einer activate-Antwort (Erfolg oder Fehllauf); null = nicht gemeldet. */
+function leseKosten(obj: Record<string, unknown>): number | null {
+  const usage: Record<string, unknown> = istObjekt(obj.usage) ? obj.usage : {};
+  return typeof usage.cost_usd === "number" && Number.isFinite(usage.cost_usd) && usage.cost_usd >= 0 ? usage.cost_usd : null;
+}
+
+// Agent über die interne activate-Route aufrufen. Vertrag (Fixrunde 06.11.2026): 200
+// { agent_id, model, response, usage{…cost_usd…}, stop_reason: string|null,
+// abgeschnitten: boolean|null, protokoll_fehler?: string|null, protokoll_fehler_liste?: string[] };
+// leere Antwort → 502 { fehler: "leere Antwort", agent_id, model, stop_reason, usage,
+// protokoll_fehler, protokoll_fehler_liste }. Fehler werfen (AktivierungsFehler mit den
+// Protokollfehlern und den gemeldeten Kosten der Fehlerantwort).
+async function activateAgent(agentId: Stufe, task: string, cookie: string): Promise<Aktivierung> {
   const res = await fetch(`${BASE_URL}/api/agents/activate`, {
     method: "POST",
     headers: {
@@ -73,47 +461,230 @@ async function activateAgent(
     body: JSON.stringify({ agent_id: agentId, task }),
   });
 
+  const daten: unknown = await res.json().catch(() => null);
+  const obj: Record<string, unknown> = istObjekt(daten) ? daten : {};
+  const stopReason = textOderNull(obj.stop_reason);
+  const protokollFehler = leseProtokollFehler(obj.protokoll_fehler_liste, obj.protokoll_fehler);
+  // Auch ein Fehllauf (502) meldet seine Kosten: Die Tokens sind bezahlt.
+  const kosten = leseKosten(obj);
+
   if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error(`Agent ${agentId} failed: ${JSON.stringify(err)}`);
+    // R17: Der Fehlertext der activate-Route kann Schlüsselwerte enthalten — nur bereinigt
+    // weitergeben (er landet in steps[].fehler und in der Antwort). Der eigene Präfix
+    // "HTTP <status>" bleibt dabei erhalten.
+    const roh = textOderNull(obj.fehler) ?? textOderNull(obj.error);
+    const meldung = roh === null ? "ohne Fehlertext" : fehlerText(roh);
+    throw new AktivierungsFehler(
+      `HTTP ${res.status}: ${meldung}${stopReason ? ` (stop_reason: ${stopReason})` : ""}`,
+      protokollFehler,
+      kosten,
+      textOderNull(obj.model),
+      stopReason
+    );
+  }
+  if (!istObjekt(daten)) {
+    throw new Error(`HTTP ${res.status}: Antwort ist kein JSON-Objekt`);
   }
 
-  const data = await res.json();
+  // Fail-closed und deckungsgleich mit dem activate-Vertrag: abgeschnitten, sobald das Feld es
+  // sagt oder ein gemeldeter stop_reason weder end_turn noch stop_sequence ist; vollständig
+  // nur, wenn das Feld false sagt UND stop_reason end_turn/stop_sequence ist; sonst null.
+  const abgeschnitten =
+    obj.abgeschnitten === true || (stopReason !== null && !STOP_VOLLSTAENDIG.has(stopReason))
+      ? true
+      : obj.abgeschnitten === false && stopReason !== null
+        ? false
+        : null;
+
   return {
-    response: data.response ?? "",
-    cost: data.usage?.cost_usd ?? 0,
-    duration_ms: Date.now() - start,
+    response: typeof obj.response === "string" ? obj.response : "",
+    cost: kosten,
+    model: textOderNull(obj.model),
+    stop_reason: stopReason,
+    abgeschnitten,
+    protokoll_fehler: protokollFehler,
   };
 }
 
-// Objektdaten per Slug aus der Steinadel-Export-API laden (Cookie-Weiterreichung
-// wie bei activateAgent, da /api/objekte hinter der Auth-Middleware liegt)
-async function fetchObjekt(slug: string, cookie: string): Promise<ObjektApi | null> {
-  const res = await fetch(`${BASE_URL}/api/objekte`, {
-    headers: { Cookie: cookie },
-    cache: "no-store",
+// Gemeldete Protokollfehler an der Stufe und als Warnung festhalten (Erfolgs- und Fehlerweg).
+// Gesamtprüfung 06.11.2026: je Eintrag eine eigene Warnung — ein zusammengefügtes Detail würde
+// wieder auf 160 Zeichen gekürzt, und spätere Einträge fielen weg.
+function vermerkeProtokoll(step: PipelineStep, protokollFehler: string[], warnungen: Vermerk[]): void {
+  if (protokollFehler.length === 0) return;
+  step.protokoll_fehler = protokollFehler;
+  protokollFehler.forEach((eintrag, i) => {
+    warnungen.push(
+      vermerk(step.agent, `Protokoll der Aktivierung unvollständig (${i + 1}/${protokollFehler.length})`, eintrag)
+    );
   });
-  if (!res.ok) return null;
-  const data = await res.json().catch(() => ({}));
-  const objekte: ObjektApi[] = data.objekte ?? [];
-  return objekte.find((o) => o.slug === slug) ?? null;
+}
+
+// Eine Stufe ausführen und ihr Ergebnis in step eintragen. gateStufe = SCRIBE, COUNSEL,
+// PUBLISHER: dort sind abgeschnitten, ungemeldeter Abschneide-Status und leere Antwort
+// Fehler; bei RESEARCHER/AMPLIFIER nur Warnungen. Stufe 1 (05.11.2026).
+async function fuehreStufeAus(
+  step: PipelineStep,
+  task: string,
+  cookie: string,
+  gateStufe: boolean,
+  warnungen: Vermerk[]
+): Promise<void> {
+  step.status = "running";
+  const start = Date.now();
+  try {
+    const r = await activateAgent(step.agent, task, cookie);
+    step.output = r.response;
+    step.cost = r.cost;
+    step.model = r.model;
+    step.stop_reason = r.stop_reason;
+    step.abgeschnitten = r.abgeschnitten;
+    vermerkeProtokoll(step, r.protokoll_fehler, warnungen);
+
+    let problem: string | null = null;
+    if (r.abgeschnitten === true) problem = "Antwort abgeschnitten";
+    else if (r.abgeschnitten === null) problem = "Abschneide-Status nicht gemeldet (activate-Vertrag)";
+    else if (!r.response.trim()) problem = "leere Antwort";
+
+    if (problem && gateStufe) {
+      step.status = "error";
+      step.fehler = problem;
+    } else {
+      if (problem) warnungen.push(vermerk(step.agent, problem));
+      step.status = "done";
+    }
+  } catch (err) {
+    step.status = "error";
+    // R17: bereinigt, bevor er in metadata.steps gespeichert und zurückgegeben wird.
+    step.fehler = fehlerText(err);
+    // Kosten: die von activate gemeldeten eines bezahlten Fehllaufs; sonst unbekannt (null) —
+    // ein fehlgeschlagener Aufruf kann trotzdem Tokens verbraucht haben.
+    step.cost = err instanceof AktivierungsFehler ? err.kosten : null;
+    if (err instanceof AktivierungsFehler) {
+      if (err.modell !== null) step.model = err.modell;
+      if (err.stopReason !== null) step.stop_reason = err.stopReason;
+      // Auch eine Fehlerantwort kann Protokollfehler melden (z. B. Fehllauf-Zeile nicht geschrieben).
+      vermerkeProtokoll(step, err.protokollFehler, warnungen);
+    }
+  } finally {
+    step.duration_ms = Date.now() - start;
+  }
+}
+
+// Gegencheck 06.11.2026: Meldet keine gelaufene Stufe Kosten, ist die Summe null ("nicht
+// gemeldet"), nicht 0 — auto-produce gab die 0 sonst als geschätzte Kosten weiter. Gleiche
+// Regel wie fasseLaeufeZusammen (lib/status-server.ts) und fleet/activate.
+function kostenZusammenfassung(steps: PipelineStep[]) {
+  let summe = 0;
+  let mitKosten = 0;
+  let unvollstaendig = false;
+  for (const s of steps) {
+    if (s.status === "pending") continue; // nicht gelaufen → keine Kosten
+    if (typeof s.cost === "number") {
+      summe += s.cost;
+      mitKosten += 1;
+    } else unvollstaendig = true;
+  }
+  return {
+    total_cost_usd: mitKosten > 0 ? Math.round(summe * 100000) / 100000 : null,
+    kosten_unvollstaendig: unvollstaendig,
+    kosten_hinweis: KOSTEN_HINWEIS,
+  };
+}
+
+function zusammenfassung(steps: PipelineStep[]) {
+  return {
+    ...kostenZusammenfassung(steps),
+    total_duration_ms: steps.reduce((sum, s) => sum + (s.duration_ms ?? 0), 0),
+    completed: `${steps.filter((s) => s.status === "done").length}/5`,
+  };
+}
+
+type ObjektAbruf =
+  | { art: "ok"; objekt: ObjektApi; kopf: ExportKopf; abgerufen_am: string }
+  | { art: "nicht_gefunden" }
+  | { art: "unvollstaendig"; feld: string }
+  | { art: "export_fehler"; meldung: string };
+
+// Meldung des Export-Proxys (/api/objekte) für Antwort und Speicher.
+// Nachprüfung 06.11.2026: Der Proxy unterscheidet seither Fehlerantwort ("quelle_http_<Status>")
+// und unlesbares JSON ("quelle_antwort_unlesbar") von "nicht erreichbar"; ein fehlendes Token
+// meldet er im Klartext ("Export-Token (Server-Umgebung) nicht gesetzt").
+// Gegencheck 06.11.2026: Der Zweig für die Altform mit Variablennamen (vor R23) ist entfernt —
+// der Proxy im selben Build nennt ihn nicht mehr. Ein geschützter Name in einem künftigen Text
+// wird weiterhin von fehlerText maskiert.
+function exportMeldung(roh: string | null, status: number): string {
+  if (roh === null) return `HTTP ${status}`;
+  if (roh === "quelle_nicht_erreichbar") return `Quelle nicht erreichbar (HTTP ${status})`;
+  const quelleStatus = /^quelle_http_(\d{3})$/.exec(roh);
+  if (quelleStatus) return `Quelle antwortete mit HTTP ${quelleStatus[1]} (HTTP ${status})`;
+  if (roh === "quelle_antwort_unlesbar") return `Antwort der Quelle nicht lesbar (HTTP ${status})`;
+  return `${fehlerText(roh)} (HTTP ${status})`;
+}
+
+// Objektdaten per Slug aus der Steinadel-Export-API laden (Cookie-Weiterreichung
+// wie bei activateAgent, da /api/objekte hinter der Auth-Middleware liegt).
+// Stufe 1 (05.11.2026): liefert auch die Kopf-Felder für den Beleg-Snapshot und
+// unterscheidet "Export nicht lesbar" von "Objekt nicht gefunden".
+// Fixrunde 06.11.2026 (R21): "unvollständig" = Objekt gefunden, aber Pflichtfeld fehlt.
+async function fetchObjekt(slug: string, cookie: string): Promise<ObjektAbruf> {
+  let res: Response;
+  try {
+    res = await fetch(`${BASE_URL}/api/objekte`, {
+      headers: { Cookie: cookie },
+      cache: "no-store",
+      signal: AbortSignal.timeout(OBJEKT_TIMEOUT_MS),
+    });
+  } catch (err) {
+    return { art: "export_fehler", meldung: fehlerText(err, OBJEKT_TIMEOUT_MS) };
+  }
+  const abgerufenAm = new Date().toISOString();
+  const daten: unknown = await res.json().catch(() => null);
+  if (!res.ok || !istObjekt(daten)) {
+    return { art: "export_fehler", meldung: exportMeldung(istObjekt(daten) ? textOderNull(daten.fehler) : null, res.status) };
+  }
+  if (!Array.isArray(daten.objekte)) {
+    return { art: "export_fehler", meldung: "Antwort ohne Objektliste" };
+  }
+  const roh = (daten.objekte as unknown[]).find(
+    (o): o is Record<string, unknown> => istObjekt(o) && o.slug === slug
+  );
+  if (!roh) return { art: "nicht_gefunden" };
+  const pruefung = pruefeExportObjekt(roh, slug);
+  if (!pruefung.ok) return { art: "unvollstaendig", feld: pruefung.feld };
+  return {
+    art: "ok",
+    objekt: pruefung.objekt,
+    kopf: {
+      version: textOderNull(daten.version),
+      quelle: textOderNull(daten.quelle),
+      generiert_am: textOderNull(daten.generiert_am),
+    },
+    abgerufen_am: abgerufenAm,
+  };
 }
 
 // OBJEKTDATEN-Block für RESEARCHER/SCRIBE/COUNSEL — inkl. Zahlen-Regel
 function buildObjektBlock(o: ObjektApi): string {
-  const kennzahlenText = o.kennzahlen.map((k) => `- ${k.label}: ${k.wert}`).join("\n");
+  // Fixrunde 06.11.2026 (R21): Felder sind geprüft (pruefeExportObjekt); fehlende optionale
+  // stehen als "nicht im Export" da, nie als "undefined".
+  const kennzahlenText = o.kennzahlen.length
+    ? o.kennzahlen.map((k) => `- ${k.label}: ${k.wert}`).join("\n")
+    : "- (keine Kennzahlen im Export)";
   const kampagnenText = o.kampagnen.length
-    ? o.kampagnen.map((k) => `- ${k.kampagne} (${k.lpVariant}): ${k.lpUrl}`).join("\n")
+    ? o.kampagnen.map((k) => `- ${k.kampagne}${k.lpVariant ? ` (${k.lpVariant})` : ""}: ${k.lpUrl}`).join("\n")
     : "- (keine Kampagne hinterlegt)";
+  // Stufe 1 (05.11.2026): Der interne Codename wird hier nicht mehr ausgeschrieben —
+  // ein Verbot, das das Wort nennt, bringt es SCRIBE erst bei. Die Prüfung auf den
+  // Codenamen leistet COUNSEL mit dem Regelpaket (Block 6).
   return `OBJEKTDATEN (Steinadel-Export, read-only):
 Name: ${o.name}
-Untertitel: ${o.untertitel}
-Tagline: ${o.tagline}
-Ort: ${o.ort}
-Baujahr: ${o.baujahr}
+Untertitel: ${anzeige(o.untertitel)}
+Tagline: ${anzeige(o.tagline)}
+Ort: ${anzeige(o.ort)}
+Baujahr: ${anzeige(o.baujahr)}
 Preis: ${o.preis}
-Kurzbeschreibung: ${o.kurzbeschreibung}
-Status: ${o.statusBadge}
+Kurzbeschreibung: ${anzeige(o.kurzbeschreibung)}
+Status: ${anzeige(o.statusBadge)}
 AfA-Satz: ${o.afaProzent} %
 Denkmalobjekt: ${o.istDenkmal ? "ja" : "nein"}
 Kennzahlen:
@@ -123,9 +694,9 @@ ${kampagnenText}
 
 REGEL: JEDE Zahl im Content muss aus diesen Objektdaten stammen — keine erfundenen
 oder aus dem Gedächtnis ergänzten Zahlen. "${o.preis}" (preis) ist ein String und
-wird WÖRTLICH übernommen, nicht gerundet oder umgerechnet. Das Wort "ImmoNexus"
-darf NIEMALS im Content vorkommen (interner Codename, öffentliche Marke ist
-ausschließlich "Steinadel").
+wird WÖRTLICH übernommen, nicht gerundet oder umgerechnet. Interne Codenamen von
+Systemen oder Projekten dürfen NIEMALS im Content vorkommen — öffentliche Marke ist
+ausschließlich "Steinadel".
 
 PFLICHT-ELEMENTE (COUNSEL lehnt ohne diese ab — plattform-unabhängig, sie standen
 früher nur in der X-Anweisung, weshalb Instagram-/Newsletter-Läufe systematisch
@@ -155,7 +726,7 @@ scheiterten):
    Der CTA verweist auf die oben genannte Kampagnen-/Objekt-URL, nicht auf ein Profil.
 4. KEINE GESCHÄFTS-/ERFOLGSZAHLEN: kein Umsatz, MRR, Kunden-, Abonnenten- oder
    Followerzahlen, kein "ausgebucht"/"Warteliste" — auch nicht aus anderen
-   Projekten (Ghost Protocol/WHITEPULSE-Interna gehören NIE in Steinadel-Content).
+   Projekten (Interna anderer Projekte und Marken gehören NIE in Steinadel-Content).
 5. KEINE POSTING-BEHAUPTUNGEN: Der Content wird NICHT automatisch veröffentlicht.
    Schreibe nichts, was ein Posting, Scheduling oder eine erledigte Freigabe
    behauptet.`;
@@ -166,34 +737,183 @@ function sanitizeUtm(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/-+/g, "-");
 }
 
+type Dienst = ReturnType<typeof createServiceClient>;
+
+interface LaufZeile {
+  id: number;
+  status: string;
+}
+
+type LaufLesung = { art: "ok"; zeilen: LaufZeile[] } | { art: "fehler"; meldung: string };
+
+// Zeilen mit dieser Lauf-ID, nach id aufsteigend, höchstens `hoechstens` (R10). Eine
+// unlesbare Zeile macht die ganze Lesung unbrauchbar (fail-closed).
+async function zeilenZuLauf(supabase: Dienst, laufId: string, hoechstens: number): Promise<LaufLesung> {
+  const { data, error } = await supabase
+    .from("content")
+    .select("id, status")
+    .eq("metadata->>lauf_id", laufId)
+    .order("id", { ascending: true })
+    .limit(hoechstens);
+  if (error) return { art: "fehler", meldung: fehlerText(error) };
+  if (!Array.isArray(data)) return { art: "fehler", meldung: "Antwort ohne Zeilenliste" };
+  const zeilen: LaufZeile[] = [];
+  for (const zeile of data as unknown[]) {
+    if (!istObjekt(zeile)) return { art: "fehler", meldung: "unerwartete Zeilenform" };
+    const id = typeof zeile.id === "number" || typeof zeile.id === "string" ? Number(zeile.id) : Number.NaN;
+    if (!Number.isSafeInteger(id) || id <= 0) return { art: "fehler", meldung: "Zeile ohne lesbare id" };
+    zeilen.push({ id, status: typeof zeile.status === "string" ? zeile.status : "unbekannt" });
+  }
+  return { art: "ok", zeilen };
+}
+
 // POST — Run full content pipeline for a topic (optional: an ein Steinadel-Objekt gebunden)
 export async function POST(request: NextRequest) {
-  const supabase = createServiceClient();
+  let supabase: Dienst | null = null;
   let contentId: number | null = null;
+  // Stufe 1 (05.11.2026): Schreibfehler der content-Zeile sammeln statt verschlucken.
+  const speicherfehler: string[] = [];
+  const warnungen: Vermerk[] = [];
+  let basisMetadata: Record<string, unknown> = {};
+
+  const steps: PipelineStep[] = [
+    { agent: "researcher", status: "pending" },
+    { agent: "scribe", status: "pending" },
+    { agent: "counsel", status: "pending" },
+    { agent: "publisher", status: "pending" },
+    { agent: "amplifier", status: "pending" },
+  ];
+
+  // Gesamtprüfung 06.11.2026: fremde Herkunft oder kein JSON → abgelehnt, vor jedem Abruf.
+  const sperre = pruefeAnfrageHerkunft(request.headers);
+  if (sperre) return fehlerAntwort(sperre.status, sperre.fehler);
+
+  // Felder der content-Zeile schreiben; jeder Fehler landet bereinigt in console.error und
+  // speicherfehler. true nur, wenn genau die eigene Zeile geschrieben wurde (Fixrunde
+  // 06.11.2026: der Aufrufer bricht bei false ab, wo ein Weiterlaufen ein Gate umginge).
+  // updated_at wird mitgeschrieben: scripts/setup_supabase_v2.sql:339-342 pflegt es per
+  // Trigger, scripts/setup_supabase.sql:221-236 nicht; welche Fassung live gilt, ist nicht
+  // gemessen. Ein vorhandener Trigger überschreibt den Wert.
+  async function speichere(felder: Record<string, unknown>, anlass: string): Promise<boolean> {
+    if (!supabase || contentId === null) return false;
+    const { data, error } = await supabase
+      .from("content")
+      .update({ ...felder, updated_at: new Date().toISOString() })
+      .eq("id", contentId)
+      .select("id");
+    let meldung: string | null = null;
+    if (error) meldung = `${anlass}: ${fehlerText(error)}`;
+    else if (!Array.isArray(data) || data.length !== 1) meldung = `${anlass}: Zeile ${contentId} nicht gefunden`;
+    if (meldung === null) return true;
+    console.error(`[content/pipeline] Speichern fehlgeschlagen (content ${contentId}) — ${meldung}`);
+    speicherfehler.push(meldung);
+    return false;
+  }
+
+  const letzterSpeicherfehler = (): string | undefined => speicherfehler[speicherfehler.length - 1];
+
+  function metadataMit(extra: Record<string, unknown> = {}): Record<string, unknown> {
+    return { ...basisMetadata, steps, warnungen, ...extra };
+  }
+
+  // Prüflauf 06.11.2026: Eine Fehlerantwort NACH dem Insert trägt die Schritte und die
+  // Kostenzusammenfassung. Vorher fehlten sie (Ausnahme, Doppellauf-Prüfung): /content zeigte
+  // dann alle Stufen wie "kein Lauf", obwohl Stufen gelaufen und bezahlt sein konnten.
+  function fehlerNachInsert(status: number, text: string) {
+    return fehlerAntwort(status, text, {
+      pipeline: "content-first",
+      contentId,
+      status: "fehler",
+      steps,
+      summary: zusammenfassung(steps),
+      speicherfehler,
+    });
+  }
 
   try {
-    const body: PipelineRequest = await request.json();
+    supabase = createServiceClient();
+
+    let roh: unknown;
+    try {
+      roh = await request.json();
+    } catch {
+      return fehlerAntwort(400, "Anfrage ist kein gültiges JSON");
+    }
+    if (!istObjekt(roh)) {
+      return fehlerAntwort(400, "Anfrage muss ein JSON-Objekt sein");
+    }
+    const body = roh as unknown as PipelineRequest;
     const { topic, platform, format, category, objekt_slug } = body;
+    const laufId: unknown = roh.lauf_id;
 
     if (!platform || !format || (!topic && !objekt_slug)) {
-      return NextResponse.json(
-        { error: "platform, format und (topic oder objekt_slug) sind erforderlich" },
-        { status: 400 }
+      return fehlerAntwort(400, "platform, format und (topic oder objekt_slug) sind erforderlich");
+    }
+    if ((topic !== undefined && typeof topic !== "string") || (objekt_slug !== undefined && typeof objekt_slug !== "string")) {
+      return fehlerAntwort(400, "topic und objekt_slug müssen Text sein");
+    }
+    // Gesamtprüfung 06.11.2026: nur bekannte Plattformen und deren Formate (vor jedem Aufruf).
+    if (!istPlattform(platform)) {
+      return fehlerAntwort(
+        400,
+        `Plattform "${eingabeText(platform)}" nicht unterstützt — erlaubt: ${Object.keys(FORMATE_JE_PLATTFORM).join(", ")}`
       );
+    }
+    if (typeof format !== "string" || !FORMATE_JE_PLATTFORM[platform].includes(format)) {
+      return fehlerAntwort(
+        400,
+        `Format "${eingabeText(format)}" für ${platform} nicht unterstützt — erlaubt: ${FORMATE_JE_PLATTFORM[platform].join(", ")}`
+      );
+    }
+    if (category !== undefined && !istKategorie(category)) {
+      return fehlerAntwort(
+        400,
+        `Unbekannte Kategorie "${maskiereGeschuetzteNamen(String(category))}" — erlaubt: ${Object.keys(KATEGORIE_LABEL).join(", ")}`
+      );
+    }
+    // R10: Lauf-ID ist optional; wenn gesetzt, dann nach Vertrag, sonst 400.
+    if (laufId !== undefined && (typeof laufId !== "string" || !LAUF_ID_MUSTER.test(laufId))) {
+      return fehlerAntwort(400, "lauf_id ungültig (8 bis 80 Zeichen: Buchstaben, Ziffern, Doppelpunkt, _ oder -)");
+    }
+
+    // ═══ R10: Lauf-ID schon vergeben? Dann kein neuer Lauf (vor jedem weiteren Abruf) ═══
+    if (laufId !== undefined) {
+      const vorher = await zeilenZuLauf(supabase, laufId, 1);
+      if (vorher.art === "fehler") {
+        return fehlerAntwort(500, `Lauf-ID nicht prüfbar: ${vorher.meldung} — Lauf nicht gestartet`);
+      }
+      const erste = vorher.zeilen[0];
+      if (erste) {
+        return fehlerAntwort(
+          409,
+          `Lauf-ID schon vergeben (#${erste.id}, Status ${erste.status}) — kein neuer Lauf gestartet`,
+          { content_id: erste.id, status: erste.status }
+        );
+      }
     }
 
     const cookie = request.headers.get("cookie") ?? "";
 
     // ═══ Objektdaten laden (falls objekt_slug gesetzt) ═══
     let objekt: ObjektApi | null = null;
+    let objektSnapshot: ObjektSnapshot | null = null;
     if (objekt_slug) {
-      objekt = await fetchObjekt(objekt_slug, cookie);
-      if (!objekt) {
-        return NextResponse.json(
-          { error: `Objekt "${objekt_slug}" nicht in der Steinadel-Export-API gefunden` },
-          { status: 404 }
+      const abruf = await fetchObjekt(objekt_slug, cookie);
+      if (abruf.art === "export_fehler") {
+        return fehlerAntwort(502, `Steinadel-Export nicht lesbar: ${abruf.meldung}`);
+      }
+      if (abruf.art === "nicht_gefunden") {
+        return fehlerAntwort(
+          404,
+          `Objekt "${maskiereGeschuetzteNamen(objekt_slug)}" nicht in der Steinadel-Export-API gefunden`
         );
       }
+      // R21: vor Snapshot, Prompt und Insert.
+      if (abruf.art === "unvollstaendig") {
+        return fehlerAntwort(502, `Export-Objekt unvollständig: ${abruf.feld}`);
+      }
+      objekt = abruf.objekt;
+      objektSnapshot = baueSnapshot(abruf.objekt, abruf.kopf, abruf.abgerufen_am);
     }
 
     const thema = objekt ? objekt.name : (topic as string);
@@ -203,8 +923,20 @@ export async function POST(request: NextRequest) {
     // belegte Marktdaten mit Quelle, keine Reel-Ästhetik.
     const platformLabel: Record<string, string> = { youtube: "YouTube-Video", twitter: "X/Twitter-Thread", x: "X/Twitter-Thread", newsletter: "Newsletter-Ausgabe", tiktok: "TikTok-Video", instagram: "Instagram-Post", linkedin: "LinkedIn-Post (Fachton, keine Reel-Ästhetik)" };
     const formatLabel: Record<string, string> = { longform: "Longform (8-12 Min)", short: "Short (60 Sek)", thread: "Thread (5-8 Posts)", deep_dive: "Deep Dive (15+ Min)", newsletter_issue: "Newsletter-Ausgabe", tiktok_short: "TikTok Short (30-60 Sek)", reel: "Reel (30-90 Sek)", carousel: "Carousel (5-10 Slides)", story: "Story (15 Sek Clips)" };
-    const categoryLabel: Record<string, string> = { ki_automation: "KI & Automation", krypto_trading: "Krypto-Trading & DeFi", business_automation: "Business-Automation", ghost_protocol: "Ghost Protocol Behind-the-Scenes" };
-    const categoryKey = category ?? "ghost_protocol";
+    const categoryKey: Kategorie = category ?? "ghost_protocol";
+    // R24: Objekt-Läufe ohne Projektnamen in der Kategorie (KATEGORIE_LABEL_OBJEKT).
+    const kategorieLabel = (objekt ? KATEGORIE_LABEL_OBJEKT : KATEGORIE_LABEL)[categoryKey];
+
+    // Belege, die ab dem ersten Schreiben in jeder Fassung der Zeile stehen (Stufe 1).
+    // lauf_id nur, wenn mitgeschickt (auto-produce schickt keine; dessen Zeilen bleiben gleich).
+    basisMetadata = {
+      thema,
+      objekt_slug: objekt_slug ?? null,
+      ...(laufId !== undefined ? { lauf_id: laufId } : {}),
+      ...(objektSnapshot ? { objekt_snapshot: objektSnapshot } : {}),
+      regelpaket: REGELPAKET,
+      researcher_quellen: RESEARCHER_QUELLEN_HINWEIS,
+    };
 
     // ═══ Content-Zeile anlegen (Persistenz ab Start des Laufs) ═══
     const { data: inserted, error: insertErr } = await supabase
@@ -216,17 +948,55 @@ export async function POST(request: NextRequest) {
         platform,
         language: "de",
         created_by: "scribe",
+        metadata: basisMetadata,
       })
       .select("id")
       .single();
 
     if (insertErr || !inserted) {
-      return NextResponse.json(
-        { error: `Content-Eintrag konnte nicht angelegt werden: ${insertErr?.message ?? "unbekannt"}` },
-        { status: 500 }
+      return fehlerAntwort(
+        500,
+        `Content-Eintrag konnte nicht angelegt werden: ${insertErr ? fehlerText(insertErr) : "keine Zeile zurück"}`
       );
     }
-    contentId = inserted.id as number;
+    const neueId = Number(inserted.id);
+    if (!Number.isSafeInteger(neueId) || neueId <= 0) {
+      return fehlerAntwort(500, "Content-Eintrag ohne lesbare id angelegt — Lauf nicht gestartet");
+    }
+    contentId = neueId;
+
+    // ═══ R10: Doppellauf-Prüfung direkt nach dem Insert, vor dem ersten bezahlten Aufruf ═══
+    // Zwei gleichzeitige Anfragen mit derselben Lauf-ID bestehen beide die Prüfung oben und
+    // legen beide eine Zeile an. Weiter läuft nur, wer die eigene Zeile als EINZIGE mit dieser
+    // Lauf-ID sieht (zwei Zeilen genügen dafür). Das hält unabhängig von der Reihenfolge, in
+    // der die Zeilen sichtbar werden: Liefen A und B, hätte keine die andere gesehen, also
+    // Commit B nach Lesung A und Commit A nach Lesung B; mit Commit vor eigener Lesung ergäbe
+    // das den Kreis Commit B > Lesung A > Commit A > Lesung B > Commit B. Das setzt voraus, dass
+    // PostgREST einen Insert erst nach dem Commit bestätigt (Annahme, nicht gemessen). Sehen
+    // sich beide, brechen beide ohne bezahlten Aufruf ab (fail-closed).
+    if (laufId !== undefined) {
+      const nachher = await zeilenZuLauf(supabase, laufId, 2);
+      const fremd = nachher.art === "ok" ? nachher.zeilen.find((z) => z.id !== contentId) : undefined;
+      if (fremd) {
+        const grund = `Doppellauf: Lauf-ID schon vergeben (#${fremd.id})`;
+        await speichere({ status: "fehler", metadata: metadataMit({ fehler: vermerk("pipeline", grund) }) }, "Status fehler (Doppellauf)");
+        return fehlerAntwort(409, `${grund} — kein zweiter Lauf gestartet`, {
+          content_id: fremd.id,
+          status: fremd.status,
+          verworfen_content_id: contentId,
+          speicherfehler,
+        });
+      }
+      if (nachher.art === "fehler" || !nachher.zeilen.some((z) => z.id === contentId)) {
+        // Fail-closed: ohne Gewissheit, der einzige Lauf zu sein, kein bezahlter Aufruf.
+        const detail = nachher.art === "fehler" ? nachher.meldung : "eigene Zeile nicht gefunden";
+        await speichere(
+          { status: "fehler", metadata: metadataMit({ fehler: vermerk("pipeline", "Doppellauf-Prüfung fehlgeschlagen", detail) }) },
+          "Status fehler (Doppellauf-Prüfung)"
+        );
+        return fehlerNachInsert(500, `Doppellauf-Prüfung fehlgeschlagen: ${detail} — Lauf nicht gestartet`);
+      }
+    }
 
     // ═══ UTM-Registry (nur bei Objekt + vorhandener Kampagne) ═══
     let utmContent: string | null = null;
@@ -241,23 +1011,41 @@ export async function POST(request: NextRequest) {
         `&utm_content=${utmContent}`;
       kampagneSlug = kampagne.kampagne;
     }
+    // Gesamtprüfung 06.11.2026: Ein CTA-Link mit geschütztem Namen geht weder in den
+    // SCRIBE-Auftrag (dort "EXAKT diesen Link") noch in metadata.cta_link (Kopieren-Knopf).
+    if (ctaLink !== null && enthaeltGeschuetztenNamen(ctaLink)) {
+      ctaLink = null;
+      warnungen.push(vermerk("objekt", "CTA-Link enthält einen geschützten Namen — nicht verwendet und nicht gespeichert"));
+    }
+    basisMetadata = { ...basisMetadata, utm_content: utmContent, kampagne: kampagneSlug, cta_link: ctaLink };
 
-    const steps: PipelineStep[] = [
-      { agent: "researcher", status: "pending" },
-      { agent: "scribe", status: "pending" },
-      { agent: "counsel", status: "pending" },
-      { agent: "publisher", status: "pending" },
-      { agent: "amplifier", status: "pending" },
-    ];
-
-    let totalCost = 0;
+    // Abbruch mit status "fehler": Vermerk speichern und einheitlich antworten. Liegt schon
+    // ein COUNSEL-Urteil vor (basisMetadata.counsel), bleibt es in metadata und Antwort.
+    const brichAb = async (fehler: Vermerk, extraFelder: Record<string, unknown> = {}) => {
+      await speichere(
+        { status: "fehler", ...extraFelder, metadata: metadataMit({ fehler }) },
+        `Status fehler (${fehler.stufe})`
+      );
+      return NextResponse.json({
+        pipeline: "content-first",
+        contentId,
+        thema,
+        platform,
+        format,
+        status: "fehler",
+        fehler,
+        ...(basisMetadata.counsel ? { counsel: basisMetadata.counsel } : {}),
+        warnungen,
+        steps,
+        summary: zusammenfassung(steps),
+        speicherfehler,
+      });
+    };
 
     // ═══ STEP 1: RESEARCHER — Recherche & Fakten ═══
-    steps[0].status = "running";
-    try {
-      const research = await activateAgent(
-        "researcher",
-        `RESEARCH-AUFTRAG: Recherchiere das Thema "${thema}" für ein ${platformLabel[platform]} im Format ${formatLabel[format]}, Kategorie: ${categoryLabel[categoryKey]}.
+    await fuehreStufeAus(
+      steps[0],
+      `RESEARCH-AUFTRAG: Recherchiere das Thema "${thema}" für ein ${platformLabel[platform]} im Format ${formatLabel[format]}, Kategorie: ${kategorieLabel}.
 
 Liefere:
 1. 5 Kernfakten mit Quellen (Studien, Statistiken, Experten-Zitate)
@@ -267,23 +1055,17 @@ Liefere:
 5. SEO-Keywords (5 Stück) für ${platform}
 
 Format: Strukturierte Bullet-Points, deutsch. Keine Floskeln, nur Fakten.${objektBlock ? `\n\n${objektBlock}` : ""}`,
-        cookie
-      );
-      steps[0].status = "done";
-      steps[0].output = research.response;
-      steps[0].cost = research.cost;
-      steps[0].duration_ms = research.duration_ms;
-      totalCost += research.cost;
-    } catch (err) {
-      steps[0].status = "error";
-      steps[0].output = err instanceof Error ? err.message : "Unknown error";
+      cookie,
+      false,
+      warnungen
+    );
+    if (steps[0].status !== "done") {
+      return brichAb(vermerk("researcher", steps[0].fehler ?? "unbekannter Fehler"));
     }
 
     // ═══ STEP 2: SCRIBE — Content schreiben ═══
-    if (steps[0].status === "done") {
-      steps[1].status = "running";
-      const platformInstructions: Record<string, string> = {
-        youtube: `Schreibe ein YouTube-Skript (${formatLabel[format]}):
+    const platformInstructions: Record<string, string> = {
+      youtube: `Schreibe ein YouTube-Skript (${formatLabel[format]}):
 - Hook (erste 5 Sekunden, pattern interrupt)
 - Intro (Problem + Versprechen, 30 Sek)
 - 3-5 Hauptpunkte mit Übergängen
@@ -291,14 +1073,14 @@ Format: Strukturierte Bullet-Points, deutsch. Keine Floskeln, nur Fakten.${objek
 - Outro mit Teaser für nächstes Video
 - [B-ROLL] und [GRAFIK] Markierungen für Schnitt
 - Thumbnail-Titel-Vorschlag (max 60 Zeichen, neugierig machend)`,
-        twitter: `Schreibe einen X/Twitter-Thread (${formatLabel[format]}):
+      twitter: `Schreibe einen X/Twitter-Thread (${formatLabel[format]}):
 - Tweet 1: Hook mit Zahl oder provokanter These (max 280 Zeichen)
 - Tweet 2-6: Hauptpunkte, jeder Tweet eigenständig lesbar
 - Vorletzter Tweet: Zusammenfassung + Key Takeaway
 - Letzter Tweet: CTA (Follow + Retweet-Bitte)
 - Jeder Tweet: Max 280 Zeichen, Emoji sparsam (max 1 pro Tweet)
 - Verwende Thread-Nummering: 1/ 2/ 3/ etc.`,
-        x: `Schreibe einen X-Thread im Steinadel-Ton (premium, editorial, ruhig, max 1 Emoji):
+      x: `Schreibe einen X-Thread im Steinadel-Ton (premium, editorial, ruhig, max 1 Emoji):
 - 6-7 Tweets, je maximal 270 Zeichen
 - Nummerierung im Stil "1/7", "2/7", ...
 - Tweet 1: Hook (Zahl, Frage oder These aus den Objektdaten — NICHT erfunden)
@@ -308,7 +1090,7 @@ Format: Strukturierte Bullet-Points, deutsch. Keine Floskeln, nur Fakten.${objek
   Situation und Behördenbescheinigung; keine Steuerberatung.")
 - Letzter Tweet: CTA mit EXAKT diesem Link${ctaLink ? `: ${ctaLink}` : " (kein Kampagnen-Link hinterlegt — allgemeiner CTA)"}
 - Keine Superlativ-Ketten, keine Caps-Lock-Dringlichkeit`,
-        newsletter: `Schreibe eine Newsletter-Ausgabe (${formatLabel[format]}):
+      newsletter: `Schreibe eine Newsletter-Ausgabe (${formatLabel[format]}):
 - Betreffzeile (max 50 Zeichen, Öffnungsrate-optimiert)
 - Preview-Text (max 90 Zeichen)
 - Begrüßung (persönlich, kurz)
@@ -317,7 +1099,7 @@ Format: Strukturierte Bullet-Points, deutsch. Keine Floskeln, nur Fakten.${objek
 - 1 Tool/Ressource der Woche
 - CTA (Antworten, Weiterleiten, Upgrade)
 - P.S. mit persönlicher Note`,
-        tiktok: `Schreibe ein TikTok-Skript (${formatLabel[format]}):
+      tiktok: `Schreibe ein TikTok-Skript (${formatLabel[format]}):
 - Hook (erste 1-2 Sekunden, provokant oder überraschend — "Das hat mir niemand gesagt über...")
 - Problem/Trigger (3-5 Sek, relateable Pain Point)
 - 3 Quick-Punkte (je 5-8 Sek, schnell geschnitten)
@@ -329,7 +1111,7 @@ Format: Strukturierte Bullet-Points, deutsch. Keine Floskeln, nur Fakten.${objek
 - Hashtags: 3-5 Stück (#KI #Automation #TechTok #LernenMitTikTok)
 - Max 60 Sekunden Gesamtlänge, schnelles Pacing
 - Tonalität: Energisch, direkt, Gen-Z-kompatibel aber nicht cringe`,
-        instagram: `Schreibe einen Instagram-Post (${formatLabel[format]}):
+      instagram: `Schreibe einen Instagram-Post (${formatLabel[format]}):
 ${format === "carousel" ? `CAROUSEL (5-10 Slides):
 - Slide 1: Hook-Titel (max 8 Wörter, groß, bold — macht neugierig)
 - Slide 2: Problem/Kontext (1 Satz + Icon/Grafik-Anweisung)
@@ -352,15 +1134,14 @@ format === "reel" ? `REEL (30-90 Sek):
 - Jede Story: [STICKER] Anweisungen (Poll, Quiz, Emoji Slider)`}
 - Caption: Storytelling-Einstieg (2-3 Sätze) + Micro-CTA + Hashtags (20-30)
 - Tonalität: Professionell-inspirierend, visual-first`,
-      };
+    };
 
-      try {
-        const content = await activateAgent(
-          "scribe",
-          `CONTENT-PRODUKTION: Schreibe Content zum Thema "${thema}".
+    await fuehreStufeAus(
+      steps[1],
+      `CONTENT-PRODUKTION: Schreibe Content zum Thema "${thema}".
 
 PLATTFORM: ${platformLabel[platform]}
-KATEGORIE: ${categoryLabel[categoryKey]}
+KATEGORIE: ${kategorieLabel}
 
 RECHERCHE-ERGEBNISSE (von RESEARCHER):
 ${steps[0].output}
@@ -372,96 +1153,90 @@ STILREGELN:
 - Tonalität: ${objekt ? "Steinadel — premium, editorial, ruhig" : "Professionell aber zugänglich, keine Corporate-Sprache"}
 - Zielgruppe: ${objekt ? "Vermögende Kapitalanleger, Spitzensteuersatz, DACH-Raum" : "Tech-affine Professionals, 25-45 Jahre, DACH-Raum"}
 - Sprache: Deutsch, Anglizismen erlaubt bei Fachbegriffen
-- Ghost Protocol NICHT erwähnen (Agenten sind unsichtbar)
+- ${objekt ? "Interne System-, Projekt- und Agentennamen NICHT erwähnen" : "Ghost Protocol NICHT erwähnen"} (Agenten sind unsichtbar)
 ${objekt ? "" : `- Brandname für extern: "AI Insider" (Arbeitstitel)`}
 
 Liefere den fertigen Content, sofort publishbar.${objektBlock ? `\n\n${objektBlock}` : ""}`,
-          cookie
-        );
-        steps[1].status = "done";
-        steps[1].output = content.response;
-        steps[1].cost = content.cost;
-        steps[1].duration_ms = content.duration_ms;
-        totalCost += content.cost;
-      } catch (err) {
-        steps[1].status = "error";
-        steps[1].output = err instanceof Error ? err.message : "Unknown error";
-      }
-    }
-
-    // Technischer Fehler in RESEARCHER/SCRIBE → Pipeline abbrechen, kein COUNSEL
-    if (steps[0].status !== "done" || steps[1].status !== "done") {
-      const failedStep = steps[0].status !== "done" ? steps[0] : steps[1];
-      await supabase
-        .from("content")
-        .update({
-          status: "fehler",
-          metadata: { steps, fehler: `${failedStep.agent} fehlgeschlagen: ${failedStep.output}` },
-        })
-        .eq("id", contentId);
-
-      return NextResponse.json({
-        pipeline: "content-first",
-        contentId,
-        status: "fehler",
-        steps,
-        summary: { total_cost_usd: Math.round(totalCost * 100000) / 100000 },
-      });
+      cookie,
+      true,
+      warnungen
+    );
+    // Technischer Fehler oder abgeschnittener Text in SCRIBE → Abbruch, kein COUNSEL
+    if (steps[1].status !== "done") {
+      return brichAb(vermerk("scribe", steps[1].fehler ?? "unbekannter Fehler"));
     }
 
     // ═══ STEP 3: COUNSEL — Pflicht-Review, fail-closed ═══
-    steps[2].status = "running";
-    try {
-      const review = await activateAgent(
-        "counsel",
-        `Pruefe den folgenden Content STRIKT gegen dein STEINADEL-REGELPAKET (fail-closed). Zahlen NUR gegen die mitgelieferten Objektdaten abgleichen. Zitiere Verstoesse. HALTE das Review KOMPAKT (max. ~300 Woerter — nur Befunde, keine langen Tabellen) und schliesse ZWINGEND mit der URTEIL:-Zeile ab ('URTEIL: FREIGABE-EMPFEHLUNG' oder 'URTEIL: ABLEHNUNG').
+    await fuehreStufeAus(
+      steps[2],
+      `Pruefe den folgenden Content STRIKT gegen dein STEINADEL-REGELPAKET (fail-closed). Zahlen NUR gegen die mitgelieferten Objektdaten abgleichen. Zitiere Verstoesse. HALTE das Review KOMPAKT (max. ~300 Woerter — nur Befunde, keine langen Tabellen) und schliesse ZWINGEND mit der URTEIL:-Zeile ab ('URTEIL: FREIGABE-EMPFEHLUNG' oder 'URTEIL: ABLEHNUNG').
 
 CONTENT:
 ${steps[1].output}
 
 ${objektBlock ?? "OBJEKTDATEN: keine (Freitext-Content ohne Steinadel-Objektbezug)"}`,
-        cookie
+      cookie,
+      true,
+      warnungen
+    );
+
+    // Technischer Fehler ist KEINE fachliche Ablehnung — 'fehler' statt 'abgelehnt',
+    // damit die Freigabe-Ansicht nicht faelschlich "COUNSEL lehnt ab" anzeigt.
+    if (steps[2].status !== "done") {
+      // Abgeschnittener Text ist COUNSELs echte (unvollständige) Antwort und wird als
+      // review_notes gespeichert; eine HTTP-Fehlermeldung gehört nicht dorthin (Stufe 1).
+      const teilReview = steps[2].output;
+      return brichAb(
+        vermerk("counsel", steps[2].fehler ?? "unbekannter Fehler"),
+        teilReview ? { reviewed_by: "counsel", review_notes: teilReview } : {}
       );
-      steps[2].status = "done";
-      steps[2].output = review.response;
-      steps[2].cost = review.cost;
-      steps[2].duration_ms = review.duration_ms;
-      totalCost += review.cost;
-    } catch (err) {
-      steps[2].status = "error";
-      steps[2].output = err instanceof Error ? err.message : "Unknown error";
     }
 
     const counselOutput = steps[2].output ?? "";
-    // Technischer Fehler ist KEINE fachliche Ablehnung — 'fehler' statt 'abgelehnt',
-    // damit die Freigabe-Ansicht nicht faelschlich "COUNSEL lehnt ab" anzeigt.
-    const counselTechnischGescheitert = steps[2].status !== "done";
-    // Fail-closed heisst: NUR ein explizites "URTEIL: FREIGABE…" laesst die Pipeline
-    // weiter. Der fruehere Negativ-Match auf "URTEIL: ABLEHNUNG" war formatierungs-
-    // abhaengig fail-open: COUNSEL schrieb "URTEIL: **ABLEHNUNG**" (Markdown-fett),
-    // und Lauf #4 (28.07.) lief trotz Ablehnung bis PUBLISHER/AMPLIFIER durch.
-    const urteilNormalisiert = counselOutput.replace(/[*_#`]/g, "");
-    const rejected =
-      counselTechnischGescheitert || !/URTEIL:\s*FREIGABE/.test(urteilNormalisiert);
+    // Fail-closed (Stufe 1, 05.11.2026): NUR FREIGABE laesst die Pipeline weiter;
+    // ABLEHNUNG und UNKLAR stoppen sie. Regeln in lib/counsel-urteil.ts.
+    const auswertung = werteCounselAus(counselOutput);
+    const counsel = {
+      urteil: auswertung.urteil,
+      // Anzeige-Feld: URTEIL-Zeile mit maskiertem geschütztem Namen (R24). Der volle Text
+      // bleibt unverändert als review_notes gespeichert (Beleg).
+      zeile: auswertung.zeile === null ? null : maskiereGeschuetzteNamen(auswertung.zeile),
+      grund: auswertung.grund,
+      geprueft: "SCRIBE-Text (steps[1])",
+      am: new Date().toISOString(),
+    };
+    const rejected = auswertung.urteil !== "FREIGABE";
+    // Ab hier steht das Urteil in jeder Fassung der Zeile, auch wenn ein späterer Schritt
+    // abbricht (vorher überschrieb brichAb metadata ohne counsel).
+    basisMetadata = { ...basisMetadata, counsel };
 
     // COUNSEL-Ergebnis immer persistieren (auch bei Ablehnung) — inkl. steps,
     // sonst zeigt die Freigabe-Ansicht abgelehnte Laeufe ohne Kontext.
-    await supabase
-      .from("content")
-      .update({
+    const counselGespeichert = await speichere(
+      {
         reviewed_by: "counsel",
         review_notes: counselOutput,
-        status: counselTechnischGescheitert ? "fehler" : rejected ? "abgelehnt" : "counsel_geprueft",
-        metadata: {
-          steps: steps.map((s) => ({ agent: s.agent, output: s.output, cost: s.cost, duration_ms: s.duration_ms })),
-          thema,
-          objekt_slug: objekt_slug ?? null,
-          utm_content: utmContent,
-          kampagne: kampagneSlug,
-          cta_link: ctaLink,
-        },
-      })
-      .eq("id", contentId);
+        status: rejected ? "abgelehnt" : "counsel_geprueft",
+        metadata: metadataMit(),
+      },
+      rejected ? "Status abgelehnt" : "Status counsel_geprueft"
+    );
+
+    // R6: Ohne gespeichertes COUNSEL-Ergebnis endet der Lauf mit status "fehler". Der Abbruch
+    // versucht, Review und Urteil (metadata.counsel) doch noch zu speichern; die Antwort trägt
+    // das Urteil weiter. Bei FREIGABE laufen PUBLISHER und AMPLIFIER nicht (sonst entstünde eine
+    // Zeile ohne review_notes); bei ABLEHNUNG/UNKLAR bliebe die Zeile sonst als "entwurf" ohne
+    // Review hängen, und das Urteil stünde nur in der Antwort (Nachbesserung).
+    if (!counselGespeichert) {
+      return brichAb(
+        vermerk(
+          "pipeline",
+          rejected ? "COUNSEL-Ergebnis nicht gespeichert" : "COUNSEL-Ergebnis nicht gespeichert — PUBLISHER nicht gestartet",
+          letzterSpeicherfehler()
+        ),
+        { reviewed_by: "counsel", review_notes: counselOutput }
+      );
+    }
 
     if (rejected) {
       return NextResponse.json({
@@ -471,21 +1246,18 @@ ${objektBlock ?? "OBJEKTDATEN: keine (Freitext-Content ohne Steinadel-Objektbezu
         platform,
         format,
         status: "abgelehnt",
+        counsel,
+        warnungen,
         steps,
-        summary: {
-          total_cost_usd: Math.round(totalCost * 100000) / 100000,
-          total_duration_ms: steps.reduce((sum, s) => sum + (s.duration_ms ?? 0), 0),
-          completed: `${steps.filter((s) => s.status === "done").length}/5`,
-        },
+        summary: zusammenfassung(steps),
+        speicherfehler,
       });
     }
 
     // ═══ STEP 4: PUBLISHER — Formatierung & Scheduling ═══
-    steps[3].status = "running";
-    try {
-      const published = await activateAgent(
-        "publisher",
-        `PUBLISHING-AUFTRAG: Bereite diesen Content für die Veröffentlichung vor.
+    await fuehreStufeAus(
+      steps[3],
+      `PUBLISHING-AUFTRAG: Bereite diesen Content für die Veröffentlichung vor.
 
 PLATTFORM: ${platform}
 FORMAT: ${format}
@@ -494,7 +1266,7 @@ CONTENT (von SCRIBE, COUNSEL-geprüft):
 ${steps[1].output}
 
 COUNSEL-REVIEW:
-${counselOutput}
+${maskiereGeschuetzteNamen(counselOutput)}
 
 AUFGABEN:
 1. Qualitätsprüfung: Fakten-Check, Ton, Länge
@@ -508,25 +1280,44 @@ Liefere:
 - Metadaten (Title, Description, Tags, Hashtags)
 - Publishing-Zeitpunkt (Tag + Uhrzeit, DACH-optimiert)
 - Cross-Promotion-Posts (1 Tweet, 1 Newsletter-Teaser)`,
-        cookie
-      );
-      steps[3].status = "done";
-      steps[3].output = published.response;
-      steps[3].cost = published.cost;
-      steps[3].duration_ms = published.duration_ms;
-      totalCost += published.cost;
-    } catch (err) {
+      cookie,
+      true,
+      warnungen
+    );
+    if (steps[3].status !== "done") {
+      return brichAb(vermerk("publisher", steps[3].fehler ?? "unbekannter Fehler"));
+    }
+
+    // Vor "zur_freigabe" (Stufe 1, 05.11.2026): Ein leerer oder fast leerer Text darf nicht
+    // in den Freigabe-Stapel. Geprüft direkt nach PUBLISHER, damit AMPLIFIER nicht auf
+    // einem leeren Text läuft.
+    const freigabeText = steps[3].output ?? "";
+    const freigabeZeichen = freigabeText.trim().length;
+    if (freigabeZeichen < MIN_FREIGABE_ZEICHEN) {
       steps[3].status = "error";
-      steps[3].output = err instanceof Error ? err.message : "Unknown error";
+      steps[3].fehler = "Text zur Freigabe leer";
+      return brichAb(
+        vermerk(
+          "publisher",
+          "Text zur Freigabe leer",
+          `${freigabeZeichen} Zeichen nach Trimmen (Mindestlänge ${MIN_FREIGABE_ZEICHEN})`
+        )
+      );
+    }
+
+    // R24 Namensschutz: Ein Freigabetext mit geschütztem Namen geht nie auf "zur_freigabe".
+    // Geprüft vor AMPLIFIER, damit dafür kein weiterer bezahlter Aufruf läuft; der Text
+    // bleibt nur als steps[3].output (Beleg) gespeichert, nicht als body.
+    if (enthaeltGeschuetztenNamen(freigabeText)) {
+      steps[3].status = "error";
+      steps[3].fehler = NAMENSSCHUTZ_GRUND;
+      return brichAb(vermerk("publisher", NAMENSSCHUTZ_GRUND));
     }
 
     // ═══ STEP 5: AMPLIFIER — Distribution-Plan ═══
-    if (steps[3].status === "done") {
-      steps[4].status = "running";
-      try {
-        const amplified = await activateAgent(
-          "amplifier",
-          `AMPLIFICATION-AUFTRAG: Erstelle den Distribution- und Repurposing-Plan für diesen Content.
+    await fuehreStufeAus(
+      steps[4],
+      `AMPLIFICATION-AUFTRAG: Erstelle den Distribution- und Repurposing-Plan für diesen Content.
 
 ORIGINAL-PLATTFORM: ${platform}
 THEMA: ${thema}
@@ -544,68 +1335,69 @@ AUFGABEN:
 5. KPI-Ziele pro Plattform (Views, Engagement-Rate, Follower-Growth, 7-Tage-Ziel)
 
 Liefere einen konkreten Aktionsplan mit fertigen Repurpose-Entwürfen.`,
-          cookie
-        );
-        steps[4].status = "done";
-        steps[4].output = amplified.response;
-        steps[4].cost = amplified.cost;
-        steps[4].duration_ms = amplified.duration_ms;
-        totalCost += amplified.cost;
-      } catch (err) {
-        steps[4].status = "error";
-        steps[4].output = err instanceof Error ? err.message : "Unknown error";
-      }
-    }
-
-    const totalDuration = steps.reduce((sum, s) => sum + (s.duration_ms ?? 0), 0);
-    const completedSteps = steps.filter((s) => s.status === "done").length;
-
-    // Technischer Fehler in PUBLISHER/AMPLIFIER → status 'fehler'
-    if (steps[3].status !== "done" || steps[4].status !== "done") {
-      const failedStep = steps[3].status !== "done" ? steps[3] : steps[4];
-      await supabase
-        .from("content")
-        .update({
-          status: "fehler",
-          metadata: {
-            steps,
-            fehler: `${failedStep.agent} fehlgeschlagen: ${failedStep.output}`,
-            thema,
-            objekt_slug: objekt_slug ?? null,
-            utm_content: utmContent,
-            kampagne: kampagneSlug,
-            cta_link: ctaLink,
-          },
-        })
-        .eq("id", contentId);
-
-      return NextResponse.json({
-        pipeline: "content-first",
-        contentId,
-        status: "fehler",
-        steps,
-        summary: { total_cost_usd: Math.round(totalCost * 100000) / 100000, total_duration_ms: totalDuration, completed: `${completedSteps}/5` },
-      });
+      cookie,
+      false,
+      warnungen
+    );
+    // Technischer Fehler in AMPLIFIER → status 'fehler' (wie bisher)
+    if (steps[4].status !== "done") {
+      return brichAb(vermerk("amplifier", steps[4].fehler ?? "unbekannter Fehler"));
     }
 
     // ═══ Erfolgreicher Durchlauf: zur menschlichen Freigabe ═══
-    await supabase
-      .from("content")
-      .update({
-        body: steps[3].output,
-        status: "zur_freigabe",
-        metadata: {
-          steps: steps.map((s) => ({ agent: s.agent, output: s.output, cost: s.cost, duration_ms: s.duration_ms })),
-          thema,
-          objekt_slug: objekt_slug ?? null,
-          utm_content: utmContent,
-          kampagne: kampagneSlug,
-          cta_link: ctaLink,
-          amplifier_empfehlung: steps[4].output,
-        },
-      })
-      .eq("id", contentId);
+    // body bleibt die PUBLISHER-Fassung (Entscheidung des Inhabers steht aus). Geprüft hat
+    // COUNSEL aber den SCRIBE-Text; der Hinweis hält fest, ob beide gleich sind (Stufe 1).
+    const freigabeHinweis = {
+      geprueft: "SCRIBE-Text (steps[1])",
+      zur_freigabe: "PUBLISHER-Text (body)",
+      identisch: (steps[1].output ?? "").trim() === freigabeText.trim(),
+    };
 
+    const zurFreigabeGespeichert = await speichere(
+      {
+        body: freigabeText,
+        // R6: Review und Urteil stehen auch in dieser Fassung — eine zur_freigabe-Zeile
+        // ohne review_notes kann es so nicht geben.
+        reviewed_by: "counsel",
+        review_notes: counselOutput,
+        status: "zur_freigabe",
+        metadata: metadataMit({
+          freigabe_hinweis: freigabeHinweis,
+          amplifier_empfehlung: steps[4].output,
+        }),
+      },
+      "Status zur_freigabe"
+    );
+
+    // R6: Nicht gespeichert heißt nicht "complete". Die Zeile wird (wenn möglich) auf
+    // "fehler" gesetzt, damit sie nicht als hängender Zwischenstand liegen bleibt.
+    if (!zurFreigabeGespeichert) {
+      const fehler = vermerk("pipeline", "Status zur_freigabe nicht gespeichert", letzterSpeicherfehler());
+      await speichere(
+        {
+          status: "fehler",
+          metadata: metadataMit({ freigabe_hinweis: freigabeHinweis, amplifier_empfehlung: steps[4].output, fehler }),
+        },
+        "Status fehler (zur_freigabe nicht gespeichert)"
+      );
+      return fehlerAntwort(500, `Status zur_freigabe nicht gespeichert (Content #${contentId}) — Eintrag prüfen`, {
+        pipeline: "content-first",
+        contentId,
+        thema,
+        platform,
+        format,
+        status: "fehler",
+        fehler_vermerk: fehler,
+        counsel,
+        freigabe_hinweis: freigabeHinweis,
+        warnungen,
+        steps,
+        summary: zusammenfassung(steps),
+        speicherfehler,
+      });
+    }
+
+    const completedSteps = steps.filter((s) => s.status === "done").length;
     return NextResponse.json({
       pipeline: "content-first",
       contentId,
@@ -614,22 +1406,25 @@ Liefere einen konkreten Aktionsplan mit fertigen Repurpose-Entwürfen.`,
       format,
       category: categoryKey,
       status: completedSteps === 5 ? "complete" : "partial",
+      counsel,
+      freigabe_hinweis: freigabeHinweis,
+      warnungen,
       steps,
-      summary: {
-        total_cost_usd: Math.round(totalCost * 100000) / 100000,
-        total_duration_ms: totalDuration,
-        completed: `${completedSteps}/5`,
-      },
+      summary: zusammenfassung(steps),
+      speicherfehler,
     });
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Unknown error";
+    // R17: bereinigt, bevor der Text gespeichert oder zurückgegeben wird.
+    const meldung = fehlerText(err);
     if (contentId !== null) {
-      await supabase
-        .from("content")
-        .update({ status: "fehler", metadata: { fehler: message } })
-        .eq("id", contentId);
+      // Stufe 1: Belege und Schritte behalten statt metadata mit { fehler } zu überschreiben.
+      await speichere(
+        { status: "fehler", metadata: metadataMit({ fehler: vermerk("pipeline", meldung) }) },
+        "Status fehler (Ausnahme)"
+      );
     }
-    return NextResponse.json({ error: message }, { status: 500 });
+    if (contentId !== null) return fehlerNachInsert(500, meldung);
+    return fehlerAntwort(500, meldung, { contentId: null, status: null, speicherfehler });
   }
 }
 
@@ -638,26 +1433,15 @@ export async function GET() {
   return NextResponse.json({
     pipeline: "content-first",
     description: "RESEARCHER → SCRIBE → COUNSEL → PUBLISHER → AMPLIFIER (5 Plattformen, COUNSEL fail-closed, optional an Steinadel-Objekt gebunden)",
-    platforms: ["youtube", "twitter", "x", "newsletter", "tiktok", "instagram"],
-    formats: {
-      youtube: ["longform", "short", "deep_dive"],
-      twitter: ["thread"],
-      x: ["thread"],
-      newsletter: ["newsletter_issue"],
-      tiktok: ["tiktok_short"],
-      instagram: ["carousel", "reel", "story"],
-    },
-    categories: ["ki_automation", "krypto_trading", "business_automation", "ghost_protocol"],
-    estimated_cost_per_piece: {
-      youtube_longform: "$0.04-0.08 (5 Sonnet/Haiku calls)",
-      x_thread: "$0.03-0.05 (2 Sonnet + Haiku COUNSEL + 2 Sonnet)",
-      newsletter: "$0.03-0.06 (5 mixed calls)",
-      tiktok_short: "$0.02-0.04 (5 Haiku/Sonnet calls)",
-      instagram_carousel: "$0.03-0.06 (5 mixed calls)",
-      instagram_reel: "$0.02-0.04 (5 mixed calls)",
-    },
+    platforms: Object.keys(FORMATE_JE_PLATTFORM),
+    formats: FORMATE_JE_PLATTFORM,
+    categories: Object.keys(KATEGORIE_LABEL),
+    // Stufe 1 (05.11.2026): Die festen Kostenangaben je Piece ("$0.04-0.08" …) sind
+    // entfernt — sie waren nie gemessen. Die geschätzten Kosten eines Laufs stehen in
+    // dessen Antwort (summary.total_cost_usd, summary.kosten_hinweis).
     repurposing_strategy: {
       description: "1→6: Jedes Anchor-Piece (YouTube) wird zu 6+ Derivaten auf allen Plattformen",
+      hinweis: "Ziel, nicht gemessen",
       weekly_output: {
         anchor: "2 YouTube Videos/Woche",
         derivatives: "4 X-Threads + 4 Instagram Carousels + 2 Instagram Reels + 10 TikTok Shorts + 1 Newsletter = 21 Pieces",
@@ -682,13 +1466,11 @@ function getLaunchCalendar() {
       thursday: { platform: "instagram", format: "carousel", topic: "Die 3 größten Fehler beim Einsatz von KI im Business" },
       friday: { platform: "newsletter", format: "newsletter_issue", topic: "AI Insider #1 — Warum KI-Agenten die nächste Revolution sind" },
     },
+    // Stufe 1 (05.11.2026): Woche 2 ("Krypto & Trading") gestrichen — Ghost Protocol hat
+    // mit Trading nichts zu tun. Bewusst kein Ersatzthema: Die Woche bleibt leer, und
+    // auto-produce meldet an ihren Tagen "kein Kalendereintrag".
     week2: {
-      theme: "Krypto & Trading",
-      monday: { platform: "tiktok", format: "tiktok_short", topic: "In 60 Sekunden: Was ist Elliott Wave Trading?" },
-      tuesday: { platform: "youtube", format: "longform", topic: "Auto-Trading mit KI: So baut man ein profitables System" },
-      wednesday: { platform: "twitter", format: "thread", topic: "Wie KI den Krypto-Markt verändert — Daten statt Bauchgefühl" },
-      thursday: { platform: "instagram", format: "carousel", topic: "Fear & Greed Index: Warum die Masse immer falsch liegt — 7 Charts" },
-      friday: { platform: "newsletter", format: "newsletter_issue", topic: "AI Insider #2 — Algorithmic Trading: Mythos vs Realität" },
+      theme: null,
     },
     week3: {
       theme: "Business Automation",
@@ -701,7 +1483,7 @@ function getLaunchCalendar() {
     week4: {
       theme: "Deep Dives & Community",
       monday: { platform: "tiktok", format: "tiktok_short", topic: "3 KI-Automatisierungen die du HEUTE starten kannst" },
-      tuesday: { platform: "youtube", format: "deep_dive", topic: "Deep Dive: Wie Reinforcement Learning Trading-Strategien optimiert" },
+      // Stufe 1 (05.11.2026): Dienstag (Trading-Deep-Dive) gestrichen, kein Ersatzthema.
       wednesday: { platform: "twitter", format: "thread", topic: "Open Source KI: Die besten Self-Hosted Alternativen 2026" },
       thursday: { platform: "instagram", format: "carousel", topic: "Was ich in 4 Wochen KI-Content gelernt habe — Zahlen & Learnings" },
       friday: { platform: "newsletter", format: "newsletter_issue", topic: "AI Insider #4 — Premium Launch: Was kommt als Nächstes" },

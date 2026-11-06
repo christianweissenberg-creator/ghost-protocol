@@ -88,7 +88,13 @@ class AgentMessage:
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
-        """Serialize to dict for Supabase storage."""
+        """Serialize to dict for Supabase storage.
+
+        content und metadata gehen als Objekte in die JSONB-Spalten (Gegencheck 06.11.2026).
+        Vorher als json.dumps-Text: In der Datenbank standen dann JSON-Strings, und das
+        Dashboard (/messages) zerlegte metadata in Chips aus einzelnen Zeichen. from_dict liest
+        beide Formen.
+        """
         return {
             "id": self.id,
             "timestamp": self.timestamp,
@@ -98,11 +104,11 @@ class AgentMessage:
             "to_agents": self.to_agents,
             "message_type": self.message_type.value,
             "priority": self.priority.value,
-            "content": json.dumps(self.content),
+            "content": self.content,
             "requires_legal_review": self.requires_legal_review,
             "confidence": self.confidence,
             "parent_message_id": self.parent_message_id,
-            "metadata": json.dumps(self.metadata),
+            "metadata": self.metadata,
         }
 
     @classmethod

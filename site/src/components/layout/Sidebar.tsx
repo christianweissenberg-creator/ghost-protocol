@@ -149,9 +149,11 @@ export function Sidebar({ open = false, onClose }: { open?: boolean; onClose?: (
         ))}
       </div>
 
+      {/* Stufe 1 (05.11.2026): feste Versionsangabe entfernt — sie widersprach package.json
+          (0.1.0), eine Version wird hier nicht erfunden. Der Designname bleibt. */}
       <div className="px-5 py-3" style={{ borderTop: "1px solid var(--gp-hairline)" }}>
         <p className="font-[family-name:var(--font-jbmono)] text-[9px] tracking-[0.18em]" style={{ color: "var(--gp-ink-3)" }}>
-          V0.2.0 — NEURAL NOIR
+          NEURAL NOIR
         </p>
       </div>
     </aside>

@@ -1,14 +1,23 @@
 "use client";
 
+// Command Panel — Stufe 1 (06.11.2026, Befund R13).
+// Absender und Empfänger nur aus der übergebenen Liste (useAgents liefert nur sichtbare
+// Agenten). Steht die Auswahl nicht in der Liste — etwa der Vorgabewert, wenn das Register
+// nicht lesbar ist —, ist Senden gesperrt, statt still an eine nicht angezeigte ID zu gehen.
+// Fehler liest das Panel aus "fehler" (neu) oder "error" (alt).
+
 import { useState } from "react";
 import type { Agent } from "@/lib/types";
+import { anzeigeFehler } from "@/lib/hooks";
 
 interface CommandPanelProps {
   agents: Agent[];
+  /** Lesefehler des Agenten-Registers (useAgents); gesetzt heißt: "keine Agenten" ist nicht belegt. */
+  agentsFehler?: string | null;
   onSend?: () => void;
 }
 
-export function CommandPanel({ agents, onSend }: CommandPanelProps) {
+export function CommandPanel({ agents, agentsFehler = null, onSend }: CommandPanelProps) {
   const [from, setFrom] = useState("donna");
   const [to, setTo] = useState("oracle");
   const [content, setContent] = useState("");
@@ -16,8 +25,12 @@ export function CommandPanel({ agents, onSend }: CommandPanelProps) {
   const [sending, setSending] = useState(false);
   const [lastResult, setLastResult] = useState<string | null>(null);
 
+  const fromGueltig = agents.some((a) => a.id === from);
+  const toGueltig = agents.some((a) => a.id === to);
+  const auswahlGueltig = fromGueltig && toGueltig;
+
   async function handleSend() {
-    if (!content.trim()) return;
+    if (!content.trim() || !auswahlGueltig || sending) return;
     setSending(true);
     setLastResult(null);
 
@@ -40,11 +53,18 @@ export function CommandPanel({ agents, onSend }: CommandPanelProps) {
         setContent("");
         onSend?.();
       } else {
-        const err = await res.json();
-        setLastResult(`Fehler: ${err.error}`);
+        const err: unknown = await res.json().catch(() => null);
+        const d = err !== null && typeof err === "object" ? (err as Record<string, unknown>) : {};
+        const grund =
+          typeof d.fehler === "string" && d.fehler.trim()
+            ? d.fehler
+            : typeof d.error === "string" && d.error.trim()
+              ? d.error
+              : `HTTP ${res.status}`;
+        setLastResult(`Fehler: ${anzeigeFehler(grund)}`);
       }
     } catch (err) {
-      setLastResult(`Fehler: ${err instanceof Error ? err.message : "Unbekannt"}`);
+      setLastResult(`Fehler: ${anzeigeFehler(err)}`);
     } finally {
       setSending(false);
     }
@@ -61,10 +81,11 @@ export function CommandPanel({ agents, onSend }: CommandPanelProps) {
         <div className="flex-1">
           <label className="text-[10px] text-text-muted mb-1 block">Von</label>
           <select
-            value={from}
+            value={fromGueltig ? from : ""}
             onChange={(e) => setFrom(e.target.value)}
             className="w-full bg-surface-elevated border border-border-subtle rounded-lg px-2 py-1.5 text-xs text-foreground focus:outline-none focus:border-accent-violet"
           >
+            {!fromGueltig && <option value="">— Absender wählen —</option>}
             {agents.map((a) => (
               <option key={a.id} value={a.id}>
                 {a.name} ({a.id})
@@ -76,10 +97,11 @@ export function CommandPanel({ agents, onSend }: CommandPanelProps) {
         <div className="flex-1">
           <label className="text-[10px] text-text-muted mb-1 block">An</label>
           <select
-            value={to}
+            value={toGueltig ? to : ""}
             onChange={(e) => setTo(e.target.value)}
             className="w-full bg-surface-elevated border border-border-subtle rounded-lg px-2 py-1.5 text-xs text-foreground focus:outline-none focus:border-accent-violet"
           >
+            {!toGueltig && <option value="">— Empfänger wählen —</option>}
             {agents.map((a) => (
               <option key={a.id} value={a.id}>
                 {a.name} ({a.id})
@@ -99,7 +121,7 @@ export function CommandPanel({ agents, onSend }: CommandPanelProps) {
               : "bg-surface-elevated text-text-muted hover:text-text-secondary"
           }`}
         >
-          Task
+          Aufgabe
         </button>
         <button
           onClick={() => setType("broadcast")}
@@ -126,11 +148,20 @@ export function CommandPanel({ agents, onSend }: CommandPanelProps) {
       />
 
       {/* Send */}
-      <div className="flex items-center justify-between">
-        <span className="text-[9px] text-text-muted">⌘+Enter zum Senden</span>
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-[9px] text-text-muted">
+          {auswahlGueltig
+            ? "⌘+Enter zum Senden"
+            : agentsFehler
+              ? // Gegencheck 06.11.2026: vorher hieß ein Lesefehler wie ein leeres Register.
+                `Agenten-Register nicht lesbar: ${anzeigeFehler(agentsFehler)} — Senden gesperrt`
+              : agents.length === 0
+                ? "Keine Agenten geladen — Senden gesperrt"
+                : "Absender oder Empfänger wählen — Senden gesperrt"}
+        </span>
         <button
           onClick={handleSend}
-          disabled={sending || !content.trim()}
+          disabled={sending || !content.trim() || !auswahlGueltig}
           className="px-4 py-1.5 rounded-lg text-xs font-medium bg-accent-violet text-white hover:bg-accent-violet/80 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
         >
           {sending ? "Sende..." : "Senden"}
