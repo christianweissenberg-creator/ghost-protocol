@@ -18,6 +18,8 @@
 // Gesamtprüfung 06.11.2026: Nach einem Abruffehler zeigt der Kostenblock nichts mehr aus der
 // alten Messung (Statuspunkt, Hinweis, Messzeit) — wie Command Center und TopBar. Untergrenzen
 // ("≥") werden abgerundet (formatiereUsdUntergrenze), nie über der gemessenen Summe.
+// Stufe 2 (07.11.2026, Totmann): Die Zeile „Crons" zeigt den Plan aus lib/totmann.ts gegen
+// lauf_nachweis (Text: cronsAnzeige in lib/types.ts), Textfarbe = Farbe des schlechtesten Jobs.
 
 import Link from "next/link";
 import { useObjekte } from "@/lib/hooks";
@@ -38,6 +40,8 @@ import {
 } from "@/lib/hooks-status";
 import type { CounselUrteil, FreigabeEintrag, Messwert, SystemStatus } from "@/lib/status-types";
 import {
+  cronsAnzeige,
+  cronsFeld,
   datumZeit,
   formatiereUsd,
   formatiereUsdUntergrenze,
@@ -299,6 +303,8 @@ interface Zustandszeile {
   /** Ersatz für "nicht gemessen", wenn das Feld grundsätzlich nicht messbar ist. */
   leer?: string;
   zusatz?: string;
+  /** Farbe des Wert-Texts, wenn sie dem Status folgen soll (Crons); sonst Gold für Werte. */
+  textFarbe?: string;
 }
 
 function anzahlText(n: number, eins: string, mehr: string): string {
@@ -315,6 +321,11 @@ function zustandszeilen(s: SystemStatus): Zustandszeile[] {
   // Gegencheck 06.11.2026 (B20): /api/status misst hängende und gescheiterte Läufe seit Stufe 1,
   // gezeigt wurde das nirgends. Wartende stehen im Panel "Wartet auf dich" und nur im Titel.
   const freigabe = messfeld(s.freigabe, "freigabe");
+  // Totmann (Stufe 2, §2.4): Text aus vorZeit/datumZeit (cronsAnzeige in lib/types.ts), Farbe des
+  // schlechtesten Jobs; der title nennt je Job Plan-Fundstelle, letzten Lauf und Teilergebnisse.
+  // Alte Antworten (wert null) zeigen weiter "nicht gemessen".
+  const crons = cronsFeld(s.crons);
+  const cronsZeile = cronsAnzeige(crons, s.erzeugt_am);
   return [
     {
       key: "supabase",
@@ -367,7 +378,14 @@ function zustandszeilen(s: SystemStatus): Zustandszeile[] {
         ? `Wartend auf Freigabe: ${formatiereZahl(freigabe.wert.wartend)} · hängend = Entwurf oder COUNSEL-geprüft, seit mehr als 2 h ohne Änderung · Fehler = Status fehler, angelegt in den letzten 7 Tagen`
         : undefined,
     },
-    { key: "crons", label: "Crons", m: messfeld(s.crons, "crons"), text: null },
+    {
+      key: "crons",
+      label: "Crons",
+      m: crons,
+      text: cronsZeile.text === null ? null : maskiereGeschuetzteNamen(cronsZeile.text),
+      zusatz: cronsZeile.zusatz,
+      textFarbe: cronsZeile.text === null || crons.status === "ok" ? undefined : statusFarbe(crons.status),
+    },
     { key: "posting_riegel", label: "Posting-Riegel", m: messfeld(s.posting_riegel, "posting_riegel"), text: null, leer: "nicht messbar" },
     { key: "telegram", label: "Telegram", m: messfeld(s.telegram, "telegram"), text: null },
   ];
@@ -375,7 +393,7 @@ function zustandszeilen(s: SystemStatus): Zustandszeile[] {
 
 function ZustandsZeile({ z }: { z: Zustandszeile }) {
   const hatWert = z.text !== null;
-  const farbeText = hatWert ? "var(--gp-gold-hi)" : z.m.status === "fehler" ? "var(--gp-rose)" : "var(--gp-ink-3)";
+  const farbeText = z.textFarbe ?? (hatWert ? "var(--gp-gold-hi)" : z.m.status === "fehler" ? "var(--gp-rose)" : "var(--gp-ink-3)");
   return (
     <div className="flex items-center gap-2.5" title={maskiereGeschuetzteNamen(messTitel(z.m, z.zusatz))}>
       <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: statusFarbe(z.m.status) }} />

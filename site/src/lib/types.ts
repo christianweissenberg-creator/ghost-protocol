@@ -1,7 +1,16 @@
 // Ghost Protocol Agent Types — matches Supabase schema
 
 import type { PreisJeMillion } from "./kosten";
-import type { MessStatus, Messwert, SystemStatus } from "./status-types";
+import type {
+  CronJobStand,
+  CronLage,
+  CronsWert,
+  LaufErgebnis,
+  LaufNachweisLesung,
+  MessStatus,
+  Messwert,
+  SystemStatus,
+} from "./status-types";
 
 export type AgentTier = 0 | 1 | 2 | 3;
 export type AgentStatus = "online" | "offline" | "error" | "maintenance" | "working";
@@ -253,7 +262,9 @@ const STATUS_FARBE: Record<MessStatus, string> = {
 };
 
 export function statusFarbe(status: MessStatus): string {
-  return STATUS_FARBE[status] ?? "var(--gp-ink-3)";
+  // Prüfbefund anzeige-5 (zweite Prüfung): Object.hasOwn statt Index — ein Status wie "toString"
+  // aus einer fremden Antwort ergab sonst die geerbte Funktion als Farbe.
+  return Object.hasOwn(STATUS_FARBE, status) ? STATUS_FARBE[status] : "var(--gp-ink-3)";
 }
 
 /** Klartext für ein Messfeld ohne Wert. */
@@ -274,6 +285,366 @@ export function messTitel(m: Messwert<unknown>, zusatz?: string): string {
   ]
     .filter(Boolean)
     .join("\n");
+}
+
+// ── Totmann: Zeile „Crons" im Systemzustand (Objekt-Studio Stufe 2, §2.4) ──
+// Der Server bewertet (bewerteTotmann in lib/status-server.ts), hier entsteht nur der Text — mit
+// vorZeit, Bezug ist der Messzeitpunkt erzeugt_am. Nie „kein Lauf seit 30.07.": Die GitHub-Läufe
+// bis 28.09.2026 haben nie einen Nachweis geschrieben (Spezifikation §2.4).
+// Abweichung von §2.4 (datumZeit), Prüfbefund anzeige-4: Zeitpunkte im Tooltip stehen in
+// Europe/Berlin (berlinDatumZeit) mit Zonenangabe, wie die Texte des Servers in der Zeile. Mit
+// datumZeit (Zeitzone des Browsers) nannten Zeile und Tooltip für denselben Lauf verschiedene
+// Uhrzeiten, sobald der Browser nicht auf Europe/Berlin stand.
+
+let berlinZeitFormat: Intl.DateTimeFormat | null = null;
+
+/** "09.11.2026 08:03:05" in Europe/Berlin; null, wenn der Zeitpunkt fehlt oder unlesbar ist. */
+function berlinDatumZeit(iso: string | null | undefined): string | null {
+  if (!iso) return null;
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return null;
+  berlinZeitFormat ??= new Intl.DateTimeFormat("de-DE", {
+    timeZone: "Europe/Berlin",
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23",
+  });
+  const teil: Partial<Record<Intl.DateTimeFormatPartTypes, string>> = {};
+  for (const p of berlinZeitFormat.formatToParts(new Date(t))) teil[p.type] = p.value;
+  return `${teil.day}.${teil.month}.${teil.year} ${teil.hour}:${teil.minute}:${teil.second}`;
+}
+
+/** Zeitpunkt für den Tooltip: "09.11.2026 08:03:05 (Europe/Berlin)"; unlesbar → der Rohwert. */
+function berlinZeitText(iso: string | null | undefined): string {
+  const t = berlinDatumZeit(iso);
+  return t === null ? (iso ?? "unbekannt") : `${t} (Europe/Berlin)`;
+}
+
+/**
+ * Dieselbe Folge wie STATUS_RANG in lib/status-server.ts (Server-Datei, hier nicht importierbar).
+ * Exportiert, damit tests/t-totmann.test.mjs die Gleichheit beider prüft (Prüfbefund B5).
+ */
+export const CRON_STATUS_RANG: Readonly<Record<MessStatus, number>> = { ok: 0, nicht_gemessen: 1, warnung: 2, fehler: 3 };
+
+/**
+ * Vorrang im Zeilentext bei gleicher Farbe (Prüfbefunde Z7, B3): zuerst Lagen mit Laufergebnis oder
+ * Lauf-Mangel, dann "nicht lesbar" und "erster Sollzeitpunkt steht aus", zuletzt das gewollte "aus".
+ * Vorher nannte die Zeile den ersten Job in Plan-Reihenfolge — ein abgeschalteter Job (bernstein)
+ * verdrängte so den Teilausfall eines aktiven Jobs (ebenfalls bernstein) in den Tooltip.
+ */
+const LAGE_VORRANG: Readonly<Record<CronLage, number>> = {
+  fehlgeschlagen: 0,
+  ueberfaellig: 0,
+  laeuft_obwohl_aus: 0,
+  zeit_unplausibel: 0,
+  teilweise: 0,
+  ok: 0,
+  nicht_lesbar: 1,
+  erster_sollzeitpunkt_steht_aus: 1,
+  aus: 2,
+};
+
+const ERGEBNIS_TEXT: Record<LaufErgebnis, string> = {
+  ok: "ok",
+  teilweise: "teilweise",
+  fehler: "fehler",
+  uebersprungen: "übersprungen",
+};
+
+// Prüfbefund anzeige-5 (zweite Prüfung): Object.hasOwn statt "in" bzw. Index. Vorher griffen die
+// Rückfallregeln nicht für Namen aus Object.prototype: Ein Status "toString" ergab "0 von 3 Jobs:
+// undefined", ein Ergebnis "constructor" im Tooltip den Quelltext einer Funktion.
+function cronRang(status: unknown): number {
+  return typeof status === "string" && Object.hasOwn(CRON_STATUS_RANG, status) ? CRON_STATUS_RANG[status as MessStatus] : CRON_STATUS_RANG.fehler;
+}
+
+function lageVorrang(lage: unknown): number {
+  return typeof lage === "string" && Object.hasOwn(LAGE_VORRANG, lage) ? LAGE_VORRANG[lage as CronLage] : 0;
+}
+
+/** Ergebnis in Worten; ein unbekannter Wert erscheint, wie er ist. */
+function ergebnisText(ergebnis: string): string {
+  return Object.hasOwn(ERGEBNIS_TEXT, ergebnis) ? ERGEBNIS_TEXT[ergebnis as LaufErgebnis] : ergebnis;
+}
+
+function istSatz(x: unknown): x is Record<string, unknown> {
+  return typeof x === "object" && x !== null && !Array.isArray(x);
+}
+
+/** Text oder leer (null, fehlend) — ein Objekt im Text ergäbe "[object Object]". */
+function istTextOderLeer(x: unknown): boolean {
+  return x === null || x === undefined || typeof x === "string";
+}
+
+/**
+ * Eine Zeile aus lauf_nachweis, wie die Anzeige sie liest. Prüfbefund B8: Auch die Teilergebnisse
+ * werden geprüft — ein null-Element ließ cronsAnzeige vorher mitten im Rendern werfen.
+ */
+function istLaufLesung(x: unknown): boolean {
+  if (!istSatz(x)) return false;
+  return (
+    typeof x.begonnen_am === "string" &&
+    typeof x.ergebnis === "string" &&
+    istTextOderLeer(x.hinweis) &&
+    istTextOderLeer(x.eingetragen_am) &&
+    (x.http_status === null || x.http_status === undefined || typeof x.http_status === "number") &&
+    Array.isArray(x.teilergebnisse) &&
+    x.teilergebnisse.every((t) => istSatz(t) && typeof t.agent === "string" && typeof t.ergebnis === "string" && istTextOderLeer(t.fehler))
+  );
+}
+
+const CRON_TEXTFELDER = [
+  "plan",
+  "fundstelle",
+  "aktiv_seit",
+  "aus_seit",
+  "grund",
+  "sollzeitpunkt",
+  "sollzeitpunkt_berlin",
+  "erster_sollzeitpunkt_berlin",
+  "urteil_ab_berlin",
+  "ueberfaellig_seit_berlin",
+  "stolperdraht_am_berlin",
+  "stolperdraht_spalte",
+  "stolperdraht_quittiert_bis_berlin",
+  "hinweis",
+] as const;
+
+function istCronJob(x: unknown): x is CronJobStand {
+  if (!istSatz(x)) return false;
+  return (
+    typeof x.job === "string" &&
+    typeof x.bezeichnung === "string" &&
+    typeof x.lage === "string" &&
+    typeof x.status === "string" &&
+    typeof x.aktiv === "boolean" &&
+    (x.letzter_lauf === null || istLaufLesung(x.letzter_lauf)) &&
+    (x.bewerteter_lauf === null || x.bewerteter_lauf === undefined || istLaufLesung(x.bewerteter_lauf)) &&
+    CRON_TEXTFELDER.every((k) => istTextOderLeer(x[k]))
+  );
+}
+
+/**
+ * Feld crons aus /api/status. Alte Antworten (vor dem Totmann: wert null, "nicht_gemessen") gehen
+ * unverändert durch; eine unlesbare Job-Liste wird wert null mit Grund — der Status (die Farbe)
+ * des Servers bleibt.
+ */
+export function cronsFeld(m: Messwert<CronsWert> | null | undefined): Messwert<CronsWert> {
+  const f = messfeld(m, "crons");
+  if (f.wert === null) return f;
+  const w: unknown = f.wert;
+  const jobs = typeof w === "object" && w !== null ? (w as Record<string, unknown>).jobs : undefined;
+  if (Array.isArray(jobs) && jobs.length > 0 && jobs.every(istCronJob)) return f;
+  return {
+    ...f,
+    wert: null,
+    hinweis: [f.hinweis, "Job-Liste der Antwort unlesbar"].filter(Boolean).join(" · "),
+  };
+}
+
+/** "2026-07-30" → "30.07.2026"; anderes bleibt, wie es ist. */
+function tagAnzeige(datum: string | null): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(datum ?? "");
+  return m ? `${m[3]}.${m[2]}.${m[1]}` : (datum ?? "unbekannt");
+}
+
+/** Die Zeile, aus der die Lage folgt; ohne bewerteter_lauf (ältere Antwort) die jüngste. */
+function bewerteterLauf(j: CronJobStand): LaufNachweisLesung | null {
+  return j.bewerteter_lauf ?? j.letzter_lauf;
+}
+
+function teilAnzeige(j: CronJobStand): string {
+  const lauf = bewerteterLauf(j);
+  const teile = lauf?.teilergebnisse ?? [];
+  const gelaufen = teile.filter((t) => t.ergebnis !== "uebersprungen");
+  const gescheitert = gelaufen.filter((t) => t.ergebnis === "fehler").length;
+  const unvollstaendig = gelaufen.filter((t) => t.ergebnis === "teilweise").length;
+  if (gescheitert > 0) {
+    return `${gescheitert} von ${gelaufen.length} Agenten gescheitert${unvollstaendig > 0 ? ` · ${unvollstaendig} unvollständig` : ""}`;
+  }
+  if (unvollstaendig > 0) return `${unvollstaendig} von ${gelaufen.length} Agenten unvollständig`;
+  return lauf?.hinweis ? `teilweise · ${lauf.hinweis}` : "teilweise";
+}
+
+/** Kurztext eines Jobs ohne Bezeichnung, z. B. "überfällig seit Mo 09.11. 08:03 · letzter Lauf nie". */
+export function cronJobText(j: CronJobStand, bezugIso: string): string {
+  const letzter = j.letzter_lauf ? vorZeit(j.letzter_lauf.begonnen_am, bezugIso) : "nie";
+  switch (j.lage) {
+    case "ok":
+      return `${bewerteterLauf(j)?.ergebnis === "uebersprungen" ? "übersprungen" : "ok"} · letzter Lauf ${letzter}`;
+    case "teilweise":
+      return teilAnzeige(j);
+    case "fehlgeschlagen":
+      return "fehlgeschlagen";
+    case "ueberfaellig":
+      // Prüfbefund Z3: der erste verpasste Sollzeitpunkt; eine ältere Antwort kennt nur den jüngsten.
+      return `überfällig seit ${j.ueberfaellig_seit_berlin ?? j.sollzeitpunkt_berlin ?? "unbekannt"} · letzter Lauf ${letzter}`;
+    case "erster_sollzeitpunkt_steht_aus":
+      return "erster Sollzeitpunkt steht aus";
+    case "aus":
+      return `aus seit ${tagAnzeige(j.aus_seit)}`;
+    case "laeuft_obwohl_aus": {
+      // Prüfbefund Z6: mit Datum statt im Präsens — ein einziger Lauf hielt die Zeile sonst monatelang
+      // rot mit "läuft". Eine ältere Antwort ohne das Datum behält den alten Text.
+      const kern = j.stolperdraht_am_berlin
+        ? `lief zuletzt am ${j.stolperdraht_am_berlin}, obwohl als aus geführt`
+        : "läuft, obwohl als aus geführt";
+      return j.hinweis ? `${kern} · ${j.hinweis}` : kern;
+    }
+    case "zeit_unplausibel":
+      return `Zeitpunkt des Laufs unplausibel${j.hinweis ? `: ${j.hinweis}` : ""}`;
+    case "nicht_lesbar":
+      return j.aktiv ? "Nachweis nicht lesbar" : `aus seit ${tagAnzeige(j.aus_seit)} · Nachweis nicht lesbar`;
+    default:
+      return "Lage unbekannt";
+  }
+}
+
+/** Tooltip-Zeile eines gelesenen Laufs: Zeitpunkte (Europe/Berlin), Ergebnis, HTTP-Status, Hinweis. */
+function laufZeile(titel: string, lauf: LaufNachweisLesung): string[] {
+  const beginn = berlinDatumZeit(lauf.begonnen_am);
+  const teile = [
+    beginn === null ? "Zeitpunkt unlesbar" : `${beginn} (Europe/Berlin)`,
+    ergebnisText(lauf.ergebnis),
+    lauf.http_status !== null && lauf.http_status !== undefined ? `HTTP ${lauf.http_status}` : "ohne HTTP-Status",
+    lauf.hinweis,
+    lauf.eingetragen_am ? `eingetragen ${berlinDatumZeit(lauf.eingetragen_am) ?? "unlesbar"} (Europe/Berlin, DB-Uhr)` : null,
+  ];
+  const zeilen = [`  ${titel}: ${teile.filter(Boolean).join(" · ")}`];
+  if (lauf.teilergebnisse.length > 0) {
+    const agenten = lauf.teilergebnisse.map((t) => `${t.agent} ${ergebnisText(t.ergebnis)}${t.fehler ? ` (${t.fehler})` : ""}`);
+    zeilen.push(`  Agenten: ${agenten.join(" · ")}`);
+  }
+  return zeilen;
+}
+
+/** Liegt der gemeldete Sollzeitpunkt vor aktiv_seit? Dann zählt er nicht (Prüfbefund anzeige-2). */
+function sollVorAktivierung(j: CronJobStand): boolean {
+  if (!j.aktiv || !j.aktiv_seit || !j.sollzeitpunkt) return false;
+  const s = Date.parse(j.sollzeitpunkt);
+  const seit = Date.parse(j.aktiv_seit);
+  return Number.isFinite(s) && Number.isFinite(seit) && s < seit;
+}
+
+/** "Mo 16.11. 10:03" → "10:03", wenn der Tag derselbe ist wie in bezug ("Mo 16.11. 08:03"). */
+function ohneGleichenTag(text: string, bezug: string): string {
+  const tag = (t: string) => t.split(" ").slice(0, 2).join(" ");
+  return tag(text) === tag(bezug) ? text.split(" ").slice(2).join(" ") : text;
+}
+
+/**
+ * title-Zeilen eines Jobs: Plan-Setzung, Lage (wie die Zeile), Plan mit Fundstelle, Sollzeitpunkte,
+ * Stolperdraht und Quittung, letzter Lauf mit Ergebnis, Teilergebnisse je Agent. Zweite Prüfung:
+ * - anzeige-1: Der Stolperdraht nennt seinen Lauf immer; stammt er aus einer teilweise unlesbaren
+ *   Zeile, heißt es nicht mehr "keine Zeile in lauf_nachweis" (das widersprach der roten Zeile).
+ * - anzeige-2: Je Job die Lage; bei "erster Sollzeitpunkt steht aus" der erste zählende Sollzeitpunkt
+ *   mit dem Urteilszeitpunkt statt eines S vor aktiv_seit; aktiv_seit heißt "laut Plan" (Setzung des
+ *   Aktivierungs-PR, kein gemessener Zustand des VPS).
+ * - anzeige-3: Die Quittung des Stolperdrahts ist sichtbar.
+ * - anzeige-4: Zeitpunkte in Europe/Berlin mit Zonenangabe (Abweichung von §2.4, siehe oben).
+ */
+function cronJobTitel(j: CronJobStand, w: CronsWert, bezugIso: string): string[] {
+  const planAktiv = j.aktiv_seit ? `laut Plan aktiv seit ${berlinZeitText(j.aktiv_seit)}` : "laut Plan aktiv";
+  const lage = cronJobText(j, bezugIso);
+  const zeilen = [
+    `${j.bezeichnung} (${j.job}): ${j.aktiv ? planAktiv : `aus seit ${tagAnzeige(j.aus_seit)}${j.grund ? ` — ${j.grund}` : ""}`}`,
+    `  Lage: ${lage}`,
+    `  Plan: ${j.plan} · Fundstelle: ${j.fundstelle}`,
+  ];
+  if (j.sollzeitpunkt_berlin && !sollVorAktivierung(j)) zeilen.push(`  Sollzeitpunkt: ${j.sollzeitpunkt_berlin} (Europe/Berlin)`);
+  if (j.erster_sollzeitpunkt_berlin) {
+    const urteil = j.urteil_ab_berlin ? `, Urteil ab ${ohneGleichenTag(j.urteil_ab_berlin, j.erster_sollzeitpunkt_berlin)}` : "";
+    zeilen.push(`  Erster zählender Sollzeitpunkt: ${j.erster_sollzeitpunkt_berlin} (Europe/Berlin)${urteil}`);
+  }
+  if (j.ueberfaellig_seit_berlin) zeilen.push(`  Überfällig seit: ${j.ueberfaellig_seit_berlin} (Europe/Berlin, erster verpasster Sollzeitpunkt)`);
+  if (j.lage === "laeuft_obwohl_aus" && j.stolperdraht_am_berlin) {
+    zeilen.push(
+      j.stolperdraht_spalte === "eingetragen_am"
+        ? `  Stolperdraht: Lauf eingetragen ${j.stolperdraht_am_berlin} (Europe/Berlin, DB-Uhr — Zeitstempel des Laufs unplausibel)`
+        : `  Stolperdraht: Lauf begonnen ${j.stolperdraht_am_berlin} (Europe/Berlin)`,
+    );
+  }
+  if (j.stolperdraht_quittiert_bis_berlin) {
+    zeilen.push(`  Stolperdraht quittiert bis ${j.stolperdraht_quittiert_bis_berlin} (Europe/Berlin, Plan lib/totmann.ts) — Läufe davor lösen nicht aus`);
+  }
+  // Steht der Hinweis schon in der Lage (Stolperdraht, unplausible Zeit), nicht zweimal.
+  if (j.hinweis && !lage.includes(j.hinweis)) zeilen.push(`  Hinweis: ${j.hinweis}`);
+  const lauf = j.letzter_lauf;
+  const bewertet = j.bewerteter_lauf ?? null;
+  if (lauf) {
+    zeilen.push(...laufZeile("Letzter Lauf", lauf));
+    if (bewertet && (bewertet.begonnen_am !== lauf.begonnen_am || bewertet.ergebnis !== lauf.ergebnis)) {
+      zeilen.push(...laufZeile("Bewertet (ein übersprungener Lauf überdeckt kein früheres Ergebnis)", bewertet));
+    }
+  } else if (j.lage === "laeuft_obwohl_aus") {
+    // Prüfbefund anzeige-1: Der Stolperdraht kam aus einer Zeile, die nur teilweise lesbar ist.
+    const wann = j.stolperdraht_am_berlin
+      ? ` (${j.stolperdraht_spalte === "eingetragen_am" ? "eingetragen" : "begonnen"} ${j.stolperdraht_am_berlin}, Europe/Berlin)`
+      : "";
+    zeilen.push(`  Letzter Lauf: Zeile teilweise unlesbar${wann}`);
+  } else if (j.lage === "nicht_lesbar" || w.lesefehler !== null) {
+    zeilen.push("  Letzter Lauf: Nachweis nicht lesbar");
+  } else if (!j.aktiv) {
+    // Ehrlicher Text bei "aus" (§2.4). Prüfbefund B1: ein "seit" nur, wenn NACHWEIS_SEIT festgehalten
+    // ist — vorher stand hier der Tag, an dem der Code entstand, ohne Tabelle und ohne Schreiber.
+    zeilen.push(
+      w.nachweis_seit
+        ? `  Letzter Lauf: Nachweis-Tabelle seit ${tagAnzeige(w.nachweis_seit)}: kein Lauf · VPS-Crontab selbst nicht gemessen`
+        : "  Letzter Lauf: keine Zeile in lauf_nachweis · seit wann die Tabelle besteht, ist nicht festgehalten · VPS-Crontab selbst nicht gemessen",
+    );
+  } else {
+    const seit = berlinDatumZeit(j.aktiv_seit);
+    const wann = j.aktiv_seit ? ` (laut Plan aktiv seit ${seit === null ? j.aktiv_seit : `${seit}, Europe/Berlin`})` : "";
+    zeilen.push(`  Letzter Lauf: keiner in lauf_nachweis${wann}`);
+  }
+  return zeilen;
+}
+
+export interface CronsAnzeige {
+  /** Text der Zeile; null ohne lesbare Job-Liste (dann zeigt die Zeile den Status in Worten). */
+  text: string | null;
+  /** Zusatz für den title: je Job Plan-Fundstelle, letzter Lauf mit Ergebnis, Teilergebnisse. */
+  zusatz: string | undefined;
+}
+
+/**
+ * Text der Zeile „Crons": beschreibt den schlechtesten Job (dessen Farbe die Zeile trägt).
+ * Alle ok: "3 Jobs ok · letzter Lauf vor 2 h". Ein schlechtester Job: "<Bezeichnung>: <Lage>".
+ * Mehrere mit derselben Lage: "aus seit 30.07.2026" (alle Jobs) bzw. "2 von 3 Jobs: …". Bei
+ * gleicher Farbe zuerst Lagen mit Laufergebnis, dann "nicht lesbar", zuletzt "aus" (LAGE_VORRANG).
+ */
+export function cronsAnzeige(m: Messwert<CronsWert>, bezugIso: string): CronsAnzeige {
+  const w = m.wert;
+  if (!w || !Array.isArray(w.jobs) || w.jobs.length === 0) return { text: null, zusatz: undefined };
+  const jobs = w.jobs;
+  const schlechtesterRang = Math.max(...jobs.map((j) => cronRang(j.status)));
+  let text: string;
+  if (schlechtesterRang === CRON_STATUS_RANG.ok) {
+    const juengster = jobs
+      .map((j) => j.letzter_lauf?.begonnen_am)
+      .filter((t): t is string => typeof t === "string" && Number.isFinite(Date.parse(t)))
+      .sort((a, b) => Date.parse(b) - Date.parse(a))[0];
+    text = `${jobs.length} ${jobs.length === 1 ? "Job" : "Jobs"} ok${juengster ? ` · letzter Lauf ${vorZeit(juengster, bezugIso)}` : ""}`;
+  } else {
+    // Array.prototype.sort ist stabil: bei gleichem Vorrang bleibt die Plan-Reihenfolge.
+    const schlecht = jobs
+      .filter((j) => cronRang(j.status) === schlechtesterRang)
+      .sort((a, b) => lageVorrang(a.lage) - lageVorrang(b.lage));
+    const texte = schlecht.map((j) => cronJobText(j, bezugIso));
+    if (schlecht.length === 1) {
+      text = `${schlecht[0].bezeichnung}: ${texte[0]}`;
+    } else if (texte.every((t) => t === texte[0])) {
+      text = schlecht.length === jobs.length ? texte[0] : `${schlecht.length} von ${jobs.length} Jobs: ${texte[0]}`;
+    } else {
+      text = `${schlecht[0].bezeichnung}: ${texte[0]} · +${schlecht.length - 1} weitere`;
+    }
+  }
+  const zusatz = jobs.flatMap((j) => cronJobTitel(j, w, bezugIso)).join("\n");
+  return { text, zusatz };
 }
 
 // ── Kosten, Modelle und Metriken — Stufe 1 (06.11.2026, Befunde R11, R14, R15) ──

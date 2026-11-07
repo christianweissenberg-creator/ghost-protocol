@@ -1,7 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
 import { timingSafeEqual } from "crypto";
 import { SESSION_COOKIE, getSessionSecret, signSession } from "@/lib/auth";
-import { abschneideStatus, bereinigeFehler, istObjekt, leseProtokollEintraege } from "@/lib/status-server";
+import { schreibeLaufNachweis } from "@/lib/lauf-nachweis";
+import {
+  abschneideStatus,
+  ausnahmeNachweis,
+  bereinigeFehler,
+  briefingNachweis,
+  briefingTeilergebnisse,
+  istObjekt,
+  leseProtokollEintraege,
+  starteLaufUhr,
+} from "@/lib/status-server";
+import { JOB_BRIEFING_ABEND, JOB_BRIEFING_MORGEN } from "@/lib/totmann";
 
 const BASE_URL = process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000";
 // Kein schwacher Default mehr — ohne gesetztes CRON_SECRET ist der Endpunkt
@@ -99,6 +110,9 @@ function secretPasst(geliefert: string, erwartet: string): boolean {
 // Called by external cron (Coolify/systemd timer) or manual trigger.
 // Stufe 1 (05.11.2026): Secret nur noch im Header. Ein Secret in der URL landet in
 // Server-, Proxy- und Shell-Logs; ein secret-Query-Parameter wird deshalb abgewiesen.
+// Stufe 2 (07.11.2026, Totmann): Jeder Lauf nach der Secret-Prüfung hängt genau eine Zeile an
+// lauf_nachweis an (Job briefing-morgen bzw. briefing-abend; lib/lauf-nachweis.ts). Ergebnis:
+// alle Agenten vollständig → ok, einige → teilweise, keiner → fehler (briefingNachweis).
 export async function GET(request: NextRequest) {
   if (request.nextUrl.searchParams.has("secret")) {
     return NextResponse.json({ fehler: "Secret nur im Header x-cron-secret" }, { status: 400 });
@@ -109,55 +123,78 @@ export async function GET(request: NextRequest) {
   }
 
   const type = request.nextUrl.searchParams.get("type") ?? "morning";
-  const results: Record<string, BriefingErgebnis> = {};
+  // Totmann (Stufe 2, §2.2): Ein unbekannter type gehört zu keinem Job des Plans und schreibt wie
+  // 400 und 401 keinen Nachweis. Dieselbe 400 wie vorher, nur vor dem Lauf statt am Ende der
+  // Verzweigung (auch vorher startete sie keinen Agenten).
+  const job = type === "morning" ? JOB_BRIEFING_MORGEN : type === "evening" ? JOB_BRIEFING_ABEND : null;
+  if (job === null) {
+    return NextResponse.json({ error: "type must be 'morning' or 'evening'" }, { status: 400 });
+  }
 
-  if (type === "morning") {
-    // ═══ MORNING BRIEFING (08:00 CET, Mo-Fr) ═══
-    // Stufe 1 (05.11.2026): Krypto-Entwicklungen und Marktsentiment gestrichen.
-    results.oracle = await activateAgent(
-      "oracle",
-      `MORNING BRIEFING ${new Date().toLocaleDateString("de-DE")}:
+  const uhr = starteLaufUhr();
+  const results: Record<string, BriefingErgebnis> = {};
+  let antwort: Record<string, unknown> | null = null;
+  let ausnahme: unknown = null;
+  let nachweisFehler: string | null = null;
+  // Totmann: nach bestandener Secret-Prüfung genau eine Zeile in lauf_nachweis — im finally, also
+  // auch wenn der Lauf wirft (dann "fehler" mit den Teilergebnissen bis dahin). Scheitert der
+  // Insert, kommt nur der Vermerk nachweis_fehler in die Antwort.
+  try {
+    if (type === "morning") {
+      // ═══ MORNING BRIEFING (08:00 CET, Mo-Fr) ═══
+      // Stufe 1 (05.11.2026): Krypto-Entwicklungen und Marktsentiment gestrichen.
+      results.oracle = await activateAgent(
+        "oracle",
+        `MORNING BRIEFING ${new Date().toLocaleDateString("de-DE")}:
 Scanne die wichtigsten KI-Entwicklungen.
 Liefere in maximal 200 Wörtern:
 1. Top-3 relevante News für Ghost Protocol (KI-Automation, Business)
 2. 2 Content-Ideen die sich aus den News ergeben (mit Plattform-Empfehlung)
 Keine Floskeln. Fakten zuerst.`
-    );
+      );
 
-    results.donna = await activateAgent(
-      "donna",
-      `MORNING BRIEFING ${new Date().toLocaleDateString("de-DE")}:
+      results.donna = await activateAgent(
+        "donna",
+        `MORNING BRIEFING ${new Date().toLocaleDateString("de-DE")}:
 Tagesplanung für Ghost Protocol. Erstelle eine priorisierte Liste:
 1. Welcher Content ist heute laut Redaktionsplan fällig? (Wochentag beachten)
 2. Welche Agents müssen dafür aktiviert werden?
 3. Gibt es offene Tasks oder Blocker?
 Maximal 5 Punkte, sortiert nach Priorität. Jeder Punkt mit klarer Aktion.`
-    );
-  } else if (type === "evening") {
-    // ═══ EVENING SUMMARY (18:00 CET, Mo-Fr) ═══
-    // Stufe 1 (05.11.2026): Fragen gestrichen, die Zahlen ohne mitgelieferte Daten
-    // verlangten (API-Kosten, produzierte Pieces, Break-Even, €10k MRR, Wochenziel in
-    // Prozent). Der TREASURER-Auftrag bestand nur aus solchen Fragen und entfällt.
-    results.strategist = await activateAgent(
-      "strategist",
-      `EVENING SUMMARY ${new Date().toLocaleDateString("de-DE")}:
+      );
+    } else {
+      // ═══ EVENING SUMMARY (18:00 CET, Mo-Fr) ═══
+      // Stufe 1 (05.11.2026): Fragen gestrichen, die Zahlen ohne mitgelieferte Daten
+      // verlangten (API-Kosten, produzierte Pieces, Break-Even, €10k MRR, Wochenziel in
+      // Prozent). Der TREASURER-Auftrag bestand nur aus solchen Fragen und entfällt.
+      results.strategist = await activateAgent(
+        "strategist",
+        `EVENING SUMMARY ${new Date().toLocaleDateString("de-DE")}:
 Strategischer Tagesabschluss:
 1. Was wurde heute erreicht? (Content, Growth, Infrastruktur)
 2. Eine strategische Entscheidung für morgen
 Nenne nur Zahlen, die dir als Daten vorliegen; sonst schreibe 'nicht gemessen'.
 Maximal 100 Wörter. Entscheidung statt Analyse.`
-    );
-  } else {
-    return NextResponse.json({ error: "type must be 'morning' or 'evening'" }, { status: 400 });
-  }
+      );
+    }
 
-  const ergebnisse = Object.values(results);
-  return NextResponse.json({
-    type,
-    timestamp: new Date().toISOString(),
-    agents: Object.keys(results),
-    // Vollständig nur Läufe ohne Fehler mit abgeschnitten === false (activate-Vertrag).
-    vollstaendig: ergebnisse.filter((r) => r.fehler === null && r.abgeschnitten === false).length,
-    results,
-  });
+    const ergebnisse = Object.values(results);
+    antwort = {
+      type,
+      timestamp: new Date().toISOString(),
+      agents: Object.keys(results),
+      // Vollständig nur Läufe ohne Fehler mit abgeschnitten === false (activate-Vertrag).
+      vollstaendig: ergebnisse.filter((r) => r.fehler === null && r.abgeschnitten === false).length,
+      results,
+    };
+  } catch (e) {
+    ausnahme = e;
+    throw e;
+  } finally {
+    const fertig = antwort !== null;
+    nachweisFehler = await schreibeLaufNachweis(job, uhr.begonnen, uhr.beendet(), () =>
+      fertig ? briefingNachweis(200, results) : ausnahmeNachweis(ausnahme, briefingTeilergebnisse(results))
+    );
+  }
+  return NextResponse.json(nachweisFehler === null ? antwort : { ...antwort, nachweis_fehler: nachweisFehler });
 }

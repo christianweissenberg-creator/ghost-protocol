@@ -2,7 +2,8 @@ import { NextResponse } from "next/server";
 import { createServiceClient, istKonfigurationsFehler } from "@/lib/supabase";
 import { PREIS_STAND_AB } from "@/lib/kosten";
 import { AUSGEBLENDETE_AGENTEN } from "@/lib/types";
-import type { Messwert, SystemStatus } from "@/lib/status-types";
+import type { CronsWert, Messwert, SystemStatus } from "@/lib/status-types";
+import { NACHWEIS_SEIT, NACHWEIS_TABELLE, TOTMANN_PLAN } from "@/lib/totmann";
 import {
   ABFRAGE_TIMEOUT_MS,
   ANTHROPIC_SCHLUESSEL,
@@ -15,8 +16,10 @@ import {
   STATUS_HAENGEND,
   STATUS_WARTEND,
   STUNDE_MS,
+  ZEILEN_JE_AKTIVEM_JOB,
   bereinigeFehler,
   berlinAnzeige,
+  bewerteTotmann,
   fehlgeschlagen,
   haengendOderFilter,
   isoOderNull,
@@ -73,7 +76,9 @@ const Q = {
   kosten: "Supabase · messages (source activation-api, delegate-plan, fehllauf; metadata.cost_usd, metadata.preis_stand)",
   steinadel: "steinadel.de · /api/objekte/export (Server-Abruf)",
   anthropic: "Server-Umgebung · Anthropic-Schlüssel",
-  crons: "kein Lauf-Protokoll",
+  // Stufe 2 (07.11.2026, Totmann): vorher fest "kein Lauf-Protokoll" (nicht gemessen).
+  // Nachmessung 07.11.2026: gelesen wird je Job nach eingetragen_am und id, nicht nach begonnen_am.
+  crons: "Plan site/src/lib/totmann.ts · Supabase · lauf_nachweis (je Job zuletzt eingetragen; begonnen_am, eingetragen_am, ergebnis)",
   riegel: "Agenten-Container · GP_EXTERNAL_POSTING",
   telegram: "kein Zustell-Protokoll",
 } as const;
@@ -306,6 +311,76 @@ async function messeKosten(sb: () => ServiceClient, jetzt: Date) {
   return messwert(auswertung.wert, auswertung.status, Q.kosten, verbinde(KOSTEN_HINWEIS, ...auswertung.hinweise));
 }
 
+// ── Totmann: Crons und Agenten (Objekt-Studio Stufe 2, §2.2–2.4) ──────────────
+
+// eingetragen_am (DB-Uhr) für den Uhrenabgleich der Zeile (Prüfbefunde Z2, SR-5); id für die
+// Reihenfolge bei gleicher DB-Uhr, wie hier geordnet (Prüfbefund r3-logik-1, bewerteJob).
+const NACHWEIS_SPALTEN = "id, job, begonnen_am, beendet_am, eingetragen_am, ergebnis, http_status, teilergebnisse, hinweis";
+
+// Je Plan-Job die zuletzt eingetragene Zeile (order eingetragen_am desc, id desc, limit 1; Index
+// idx_lauf_nachweis_job_eingetragen in scripts/lauf_nachweis.sql) und — nur für aktive Jobs — die
+// zuletzt eingetragene mit einem Ergebnis außer uebersprungen.
+// - Prüfbefunde r3-logik-1, P3A-1 (dritte Prüfung): Für aktive Jobs liest die erste Abfrage die
+//   zuletzt eingetragenen ZEILEN_JE_AKTIVEM_JOB statt nur einer. Mit nur der jüngsten verdrängte ein
+//   übersprungener Lauf an einem Tag ohne Sollzeitpunkt (Samstag, "Wochenende") den übersprungenen
+//   Freitagslauf, der S deckt: rot "überfällig seit Fr", obwohl der Freitag lief.
+// - Prüfbefund D1 (zweite Prüfung): geordnet nach der DB-Uhr (eingetragen_am), bei Gleichstand nach
+//   id, nicht mehr nach begonnen_am (App-Uhr). Eine Zeile aus einer vorgelaufenen App-Uhr blieb sonst
+//   bis zu ihrem Datum "die jüngste", und neuere plausible Läufe wurden nie gelesen: bei einem aktiven
+//   Job rot "unplausibel" bis zu diesem Datum, bei einem abgeschalteten ein Stolperdraht, der sich nur
+//   mit einer Quittung in die Zukunft beenden ließ und danach blind war. Abweichung von §2.2 Punkt 4
+//   (order begonnen_am) und vom Index in §5.5 (b).
+// - Prüfbefund Z5: Mit nur der jüngsten machte ein späterer übersprungener Lauf ein früheres
+//   Ergebnis zum selben Sollzeitpunkt unsichtbar — daher die zweite Abfrage.
+// - Prüfbefund betrieb-1: Die zweite Abfrage braucht nur ein aktiver Job (Urteil über das Ergebnis);
+//   bei einem abgeschalteten entscheidet allein, ob nach aus_seit etwas lief (Stolperdraht), und das
+//   zeigt die zuletzt eingetragene Zeile — lief danach etwas, ist sie von danach (bis auf Läufe, die
+//   sich am Stichtag überlappen). Gewollt in Kauf genommen: Eine ältere unlesbare Zeile eines
+//   abgeschalteten Jobs wird nicht mehr gelesen, die Lage heißt dann "aus" statt "nicht lesbar"
+//   (beides bernstein); ein Laufergebnis, das sie verfälschen könnte, hat ein abgeschalteter Job
+//   nicht. Beim heutigen Plan (alle aus) sind es 3 statt 6 Abfragen je Abruf.
+// Alle Abfragen mit demselben Zeitlimit wie die übrigen Messungen. Probe-Zeilen
+// (content-auto-produce-probe) stehen in keinem Plan und werden gar nicht gelesen. Ein Lesefehler —
+// auch eine fehlende Tabelle, solange das SQL nicht ausgeführt ist, oder ein fehlender
+// Service-Schlüssel — geht als lesefehler an bewerteTotmann: Sind alle Jobs aus, bleibt die Zeile
+// bernstein mit Hinweis; ist einer aktiv, wird sie rot.
+async function messeCrons(sb: () => ServiceClient, jetzt: Date): Promise<Messwert<CronsWert>> {
+  const zeilen: unknown[] = [];
+  let lesefehler: string | null = null;
+  let abgefragt = true;
+  try {
+    const client = sb();
+    const signal = zeitlimit();
+    const zuletztEingetragen = (job: string, ohneUebersprungen: boolean, anzahl: number) => {
+      const abfrage = client.from(NACHWEIS_TABELLE).select(NACHWEIS_SPALTEN).eq("job", job);
+      return (ohneUebersprungen ? abfrage.neq("ergebnis", "uebersprungen") : abfrage)
+        .order("eingetragen_am", { ascending: false })
+        .order("id", { ascending: false })
+        .limit(anzahl)
+        .abortSignal(signal);
+    };
+    const antworten = await Promise.all(
+      TOTMANN_PLAN.flatMap((j) =>
+        j.aktiv
+          ? [zuletztEingetragen(j.job, false, ZEILEN_JE_AKTIVEM_JOB), zuletztEingetragen(j.job, true, 1)]
+          : [zuletztEingetragen(j.job, false, 1)]
+      )
+    );
+    for (const res of antworten) {
+      pruefeAntwort(res);
+      if (!Array.isArray(res.data)) throw new Error("Antwort ohne Zeilenliste");
+      zeilen.push(...res.data);
+    }
+  } catch (e) {
+    abgefragt = !istKonfigurationsFehler(e);
+    lesefehler = abgefragt ? bereinigeFehler(e) : `${bereinigeFehler(e)} — nicht abgefragt`;
+  }
+  const b = bewerteTotmann(TOTMANN_PLAN, zeilen, jetzt, lesefehler, NACHWEIS_SEIT);
+  // Prüfbefunde SR-6, B9: Ohne Service-Schlüssel wurde die Datenbank nicht abgefragt — dann kein
+  // Messzeitpunkt (wie messe() für die übrigen Felder). Die Farbe bleibt nach §2.3 bernstein bzw. rot.
+  return messwert(b.wert, b.status, Q.crons, b.hinweis, abgefragt ? new Date().toISOString() : null);
+}
+
 // ── Steinadel-Export (5 min zwischengespeichert) ──────────────────────────────
 
 const STEINADEL_EXPORT_URL = "https://steinadel.de/api/objekte/export";
@@ -403,7 +478,7 @@ export async function GET() {
     const jetzt = new Date();
     const sb = clientFabrik();
 
-    const [supabase, agenten, bus, letzte, aktive, contentHeute, freigabe, kosten, steinadel] = await Promise.all([
+    const [supabase, agenten, bus, letzte, aktive, contentHeute, freigabe, kosten, steinadel, crons] = await Promise.all([
       messe(Q.supabase, () => messeSupabase(sb)),
       messe(Q.agenten, () => messeAgenten(sb)),
       messe(Q.bus, () => messeBus(sb)),
@@ -413,6 +488,8 @@ export async function GET() {
       messe(Q.freigabe, () => messeFreigabe(sb, jetzt)),
       messe(Q.kosten, () => messeKosten(sb, jetzt)),
       messe(Q.steinadel, () => messeSteinadelExport()),
+      // Lesefehler fängt messeCrons selbst (Totmann-Regel); messe fängt nur einen kaputten Plan.
+      messe(Q.crons, () => messeCrons(sb, jetzt)),
     ]);
 
     const antwort: SystemStatus = {
@@ -427,7 +504,7 @@ export async function GET() {
       kosten,
       steinadel_export: steinadel,
       anthropic: messeAnthropic(),
-      crons: nichtGemessen(Q.crons, "Kein Cron schreibt einen Lauf-Nachweis, den das Dashboard lesen kann."),
+      crons,
       // Stufe 1 (05.11.2026): "veröffentlicht" statt "sendet" — das Dashboard schickt
       // Prompts an api.anthropic.com, postet aber nirgends (grep über src/ am 06.11.2026:
       // kein Aufruf an Social-, Telegram- oder Newsletter-Schnittstellen).
