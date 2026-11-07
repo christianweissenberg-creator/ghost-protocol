@@ -20,6 +20,8 @@
 // gespeicherten Summe: Juli-Läufe waren mit der alten Tabelle (Sonnet 3/15) geschätzt, und die
 // Spalte rundet je Lauf auf 4 Stellen (F3, F4; kostenUntergrenzeAnzeige in lib/types.ts).
 // "Modell letzter Lauf" zählt auch Planungen und Fehlläufe, mit Art (F7, letzterLaufAnzeige).
+// Nachprüfung 07.11.2026 (ehrlichkeit-2): Die Kosten nehmen je geladenem Lauf dessen Modell; "≥"
+// nur, wenn die geladenen Läufe die Token-Summen genau ergeben, sonst "≈" mit Begründung.
 
 import { useState } from "react";
 import { useParams } from "next/navigation";
@@ -59,7 +61,7 @@ function tokenSummeText(wert: unknown): string {
 
 const VERBRAUCH_TITEL = [
   "Token-Summen in agents, fortgeschrieben von /api/agents/activate (Tokens laut Claude-Antwort).",
-  `Kosten: diese Tokens × Listenpreis des Dashboard-Modells laut lib/kosten.ts (${PREIS_QUELLE}) — auch für Läufe, die vor der Tabelle vom ${PREIS_STAND_AB.split("-").reverse().join(".")} mit der alten geschätzt wurden.`,
+  `Kosten: diese Tokens × Listenpreis laut lib/kosten.ts (${PREIS_QUELLE}), je geladenem Lauf mit seinem Modell (metadata.model), sonst mit dem Dashboard-Modell — auch für Läufe, die vor der Tabelle vom ${PREIS_STAND_AB.split("-").reverse().join(".")} mit der alten geschätzt wurden. „≥“ nur, wenn die geladenen Läufe die Summen genau ergeben, sonst „≈“.`,
   "Untergrenze: Es fehlen Fehlläufe (HTTP 502: bezahlt, aber ohne verwertbare Antwort), Läufe ohne gemeldete Tokens und Läufe, deren Summen nicht fortgeschrieben wurden (gleichzeitige Änderung oder Schreibfehler).",
   "Die Monatskosten aus /api/status summieren die je Lauf gespeicherten Schätzungen und zählen Fehlläufe mit; beide Zahlen können deshalb voneinander abweichen.",
   "Maßgeblich ist die Anthropic-Rechnung.",
@@ -192,12 +194,12 @@ export default function AgentDetailPage() {
   const modell = modellAnzeige(dashboardModell, agent.llm_model);
   // Modell des letzten Laufs laut Bus-Nachricht (metadata.model): Aktivierung, Planung oder Fehllauf.
   const letzterLauf = letzterLaufAnzeige(messages, agent.id, DETAIL_NACHRICHTEN_GRENZE, messagesFehler);
-  const kosten = kostenUntergrenzeAnzeige(
-    agent,
-    dashboardModell,
-    dashboardModell === null ? null : preisJeMillion(dashboardModell),
-    PREIS_STAND_AB,
-  );
+  // Jeder geladene Lauf rechnet mit seinem Modell; "≥" nur, wenn die Läufe die Summen ergeben.
+  const kosten = kostenUntergrenzeAnzeige(agent, dashboardModell, preisJeMillion, PREIS_STAND_AB, {
+    liste: messages,
+    grenze: DETAIL_NACHRICHTEN_GRENZE,
+    fehler: messagesFehler,
+  });
 
   return (
     <div className="p-8 max-w-[1200px]">

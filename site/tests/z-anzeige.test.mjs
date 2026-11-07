@@ -109,14 +109,23 @@ test("Agent-Detail: Leertexte sagen, was die Abfrage lieferte", () => {
 // Tor-Prüfung 07.11.2026 (F3): Die Kosten kommen aus den Tokens × aktueller Tabelle des
 // Dashboard-Modells, nicht mehr aus total_cost_usd (alte Tabelle, je Lauf gerundet).
 test("Agent-Detail: Kosten-Untergrenze abgerundet, nie '≥ < $0,0001'; Titel nennt die alte Preistabelle der gespeicherten Summe", () => {
-  const html = rendereDetail({ agent: AGENT, messages: [] });
+  // Nachprüfung 07.11.2026 (ehrlichkeit-2): "≥" nur, wenn die geladenen Läufe (activation-api, mit
+  // metadata.model) die Token-Summen ergeben — hier der eine Lauf von oracle.
+  const lauf = (ein, aus) => ({
+    ...nachricht("l1", "oracle", ["donna"], "Lauf"),
+    metadata: { source: "activation-api", model: "claude-sonnet-5", input_tokens: ein, output_tokens: aus },
+  });
+  const html = rendereDetail({ agent: AGENT, messages: [lauf(1200, 300)] });
   // 1.200 × 2 + 300 × 10 USD je Mio. Tokens (claude-sonnet-5, Dashboard-Modell von oracle) = 0,0054
   assert.ok(html.includes("≥ $0,0054"), "aus Tokens × aktueller Tabelle, abgerundet");
   assert.ok(html.includes("≥ 1.200"));
   assert.match(html, /vor dem 06\.11\.2026 die alte/);
-  const klein = rendereDetail({ agent: { ...AGENT, total_input_tokens: 1, total_output_tokens: 1 }, messages: [] });
+  const klein = rendereDetail({ agent: { ...AGENT, total_input_tokens: 1, total_output_tokens: 1 }, messages: [lauf(1, 1)] });
   assert.ok(klein.includes("> $0 (gemessen unter $0,0001)"));
   assert.ok(!klein.includes("≥ <"));
+  // Ohne geladenen Lauf ist das Modell nicht geprüft: "≈", keine Untergrenze.
+  const ohneLauf = rendereDetail({ agent: AGENT, messages: [] });
+  assert.ok(ohneLauf.includes("≈ $0,0054") && !ohneLauf.includes("≥ $0,0054"));
   const leer = { ...AGENT, total_input_tokens: 0, total_output_tokens: 0, total_cost_usd: 0 };
   assert.ok(rendereDetail({ agent: leer, messages: [] }).includes("nicht gemessen"));
 });

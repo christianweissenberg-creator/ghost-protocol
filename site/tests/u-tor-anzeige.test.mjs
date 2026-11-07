@@ -10,6 +10,10 @@
 // - TOR-F5/F6 /messages: Zähler summieren sich zur Liste; cost_usd einheitlich, Preistabelle sichtbar.
 // - TOR-F7 /agents/[id]: "Modell letzter Lauf" zählt Planungen (delegate-plan) mit.
 // F8 (Kachel "Freigegeben") steht in tests/e-content-komponenten.test.mjs (Hook-Laufzeit der Seite).
+// Nachprüfung 07.11.2026 (Befunde der drei Prüfer): Regel-5-Wächter mit TypeScript-Parser und Riegel
+// "server-only" (sicherheit-1/-2), Kosten mit Modell je Lauf (ehrlichkeit-2), Wortlaut /metrics und
+// /messages (ehrlichkeit-1/-3), Vorjahr (K2), fremde Antwort an donna (K3); Zeitzone UTC (K1) steht
+// in tests/u-tor-zeitzone.test.mjs.
 // Die ECHTEN .tsx-Dateien werden übersetzt und mit Attrappen geladen (tests/harness/tsx.mjs).
 // Testdaten mit "gemessen" stammen aus SELECTs auf agents und messages vom 07.11.2026.
 // Kein Netz: Es gibt keinen Abruf; fetch wird nicht gebraucht.
@@ -18,13 +22,16 @@ import assert from "node:assert/strict";
 import { readFileSync, readdirSync, statSync, existsSync } from "node:fs";
 import { registerHooks } from "node:module";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
-import { React, baumLaufzeit, finde, jsxRuntime, ladeTsx, renderToStaticMarkup, text } from "./harness/tsx.mjs";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { React, baumLaufzeit, finde, jsxRuntime, ladeTsx, renderToStaticMarkup, text, ts } from "./harness/tsx.mjs";
 
 const SITE = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 registerHooks({
   resolve(specifier, context, nextResolve) {
+    // Riegel in lib/agent-prompts.ts: Next.js nimmt im Server-Bundle die leere Fassung, Node kennt
+    // das Paket nicht (es liegt nur in next/dist/compiled).
+    if (specifier === "server-only") return nextResolve(pathToFileURL(path.join(SITE, "node_modules/next/dist/compiled/server-only/empty.js")).href, context);
     if (/^\.\.?\//.test(specifier) && !/\.[cm]?[jt]sx?$/.test(specifier) && context.parentURL?.endsWith(".ts")) {
       return nextResolve(`${specifier}.ts`, context);
     }
@@ -172,6 +179,8 @@ test("TOR-F1 Bus: 'heute' ist der Kalendertag in Europe/Berlin; anderes Jahr mit
   const nachMitternacht = feedZeiten([nachricht("a", "2026-11-07T22:00:00.000Z")], "2026-11-07T23:30:00.000Z");
   assert.equal(nachMitternacht[0].text, "07.11., 23:00:00");
   assert.equal(feedZeiten([nachricht("b", "2025-12-31T22:30:00.000Z")], MESSUNG)[0].text, "31.12.2025, 23:30:00");
+  // Nachprüfung K2: derselbe Kalendertag ein Jahr früher ist nicht "heute" — mit Datum und Jahr.
+  assert.equal(feedZeiten([nachricht("v", "2025-11-07T11:00:00.000Z")], MESSUNG)[0].text, "07.11.2025, 12:00:00");
   const ohneBezug = feedZeiten([nachricht("c", "2026-11-07T11:24:39.000Z")], null);
   assert.equal(ohneBezug[0].text, "07.11.2026, 12:24:39");
   assert.match(ohneBezug[0].title, /Datum immer gezeigt/);
@@ -298,50 +307,146 @@ test("TOR-F2 Konfiguration: lib/agent-modelle.ts ist die Quelle von lib/agent-pr
   assert.equal(modelle.dashboardModellFuer("constructor"), null);
 });
 
-test("TOR-F2 Regel 5: lib/agent-modelle.ts importiert nichts; keine Client-Datei erreicht lib/agent-prompts.ts", () => {
-  const modellQuelle = readFileSync(path.join(SITE, "src/lib/agent-modelle.ts"), "utf8");
-  assert.doesNotMatch(modellQuelle, /^\s*(import|export)\s.*\sfrom\s/m, "agent-modelle.ts ohne Import");
-  assert.doesNotMatch(modellQuelle, /systemPrompt|COMPANY_CONTEXT/);
-  // Importgraph ab jeder "use client"-Datei (ohne reine Typ-Importe)
-  const SRC = path.join(SITE, "src");
+// ── Regel 5: keine System-Prompts im Browser ──
+// Nachprüfung 07.11.2026 (Befunde sicherheit-1, sicherheit-2): Der Wächter las Importe per Regex
+// und sah nur "import … from". Gemessen in einer Kopie blieben grün: import("@/lib/agent-prompts")
+// in einer Client-Komponente, ein Seiteneffekt-Import, require(…), ein Kommentar vor "use client"
+// und ein direkter Import des Regelpakets (lib/steinadel-regelpaket.ts, Teil des COUNSEL-Prompts).
+// Jetzt liest der TypeScript-Parser die Importe; Prompt-Module sind agent-prompts.ts und alles, was
+// es zur Laufzeit importiert, außer der Positivliste (lib/agent-modelle.ts: nur Agent → Modell).
+// Harter Riegel daneben: lib/agent-prompts.ts importiert "server-only" (next build bricht ab).
+
+const SRC = path.join(SITE, "src");
+const PROMPTS = path.join(SRC, "lib/agent-prompts.ts");
+/** Darf in den Browser: nur die Zuordnung Agent → Modell, ohne Import (eigener Test unten). */
+const PROMPT_IMPORT_ERLAUBT = new Set([path.join(SRC, "lib/agent-modelle.ts")]);
+
+/** Laufzeit-Importe einer Quelle laut TypeScript-Parser: import/export … from (ohne "type"),
+ *  Seiteneffekt-Importe, import x = require(…), import(…) und require(…). Nicht literale
+ *  Ziele von import()/require() stehen in unpruefbar. */
+function laufzeitImporte(quelle, name) {
+  const sf = ts.createSourceFile(name, quelle, ts.ScriptTarget.Latest, true, name.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
+  const ziele = [];
+  const unpruefbar = [];
+  const besuche = (k) => {
+    if (ts.isImportDeclaration(k)) {
+      if (!k.importClause?.isTypeOnly) ziele.push(k.moduleSpecifier.text);
+    } else if (ts.isExportDeclaration(k)) {
+      if (k.moduleSpecifier && !k.isTypeOnly) ziele.push(k.moduleSpecifier.text);
+    } else if (ts.isImportEqualsDeclaration(k)) {
+      if (!k.isTypeOnly && ts.isExternalModuleReference(k.moduleReference)) ziele.push(k.moduleReference.expression.text);
+    } else if (ts.isCallExpression(k) && (k.expression.kind === ts.SyntaxKind.ImportKeyword || (ts.isIdentifier(k.expression) && k.expression.text === "require"))) {
+      const arg = k.arguments[0];
+      if (arg && ts.isStringLiteralLike(arg)) ziele.push(arg.text);
+      else unpruefbar.push(`${name}:${sf.getLineAndCharacterOfPosition(k.getStart(sf)).line + 1}`);
+    }
+    ts.forEachChild(k, besuche);
+  };
+  besuche(sf);
+  // "use client" zählt nur im Direktiven-Prolog; Kommentare davor sind keine Anweisungen.
+  let client = false;
+  for (const s of sf.statements) {
+    if (!ts.isExpressionStatement(s) || !ts.isStringLiteral(s.expression)) break;
+    if (s.expression.text === "use client") client = true;
+  }
+  return { ziele, unpruefbar, client };
+}
+
+function srcDateien() {
   const alle = [];
   const lauf = (d) => {
     for (const n of readdirSync(d)) {
       const p = path.join(d, n);
       if (statSync(p).isDirectory()) lauf(p);
-      else if (/\.(ts|tsx)$/.test(n)) alle.push(p);
+      else if (/\.(ts|tsx|js|jsx|mjs)$/.test(n)) alle.push(p);
     }
   };
   lauf(SRC);
-  const aufloesen = (von, spez) => {
-    const basis = spez.startsWith("@/") ? path.join(SRC, spez.slice(2)) : spez.startsWith(".") ? path.resolve(path.dirname(von), spez) : null;
-    if (basis === null) return null;
-    for (const k of [basis, `${basis}.ts`, `${basis}.tsx`, path.join(basis, "index.ts"), path.join(basis, "index.tsx")]) {
-      if (existsSync(k) && statSync(k).isFile()) return k;
-    }
-    return null;
-  };
-  const importe = (datei) =>
-    [...readFileSync(datei, "utf8").matchAll(/^\s*(?:import|export)\s+(?!type\s)[^;]*?\sfrom\s+["']([^"']+)["']/gm)]
-      .map((m) => aufloesen(datei, m[1]))
-      .filter(Boolean);
-  const client = alle.filter((d) => /^\s*["']use client["']/.test(readFileSync(d, "utf8")));
-  assert.ok(client.length > 10, `Client-Dateien gefunden: ${client.length}`);
-  const prompts = path.join(SRC, "lib/agent-prompts.ts");
-  for (const start of client) {
-    const gesehen = new Set([start]);
-    const offen = [start];
-    while (offen.length) {
-      const d = offen.pop();
-      for (const ziel of importe(d)) {
-        assert.notEqual(ziel, prompts, `${path.relative(SITE, start)} erreicht lib/agent-prompts.ts über ${path.relative(SITE, d)}`);
-        if (!gesehen.has(ziel)) {
-          gesehen.add(ziel);
-          offen.push(ziel);
-        }
-      }
+  return alle;
+}
+
+function aufloesen(von, spez) {
+  const basis = spez.startsWith("@/") ? path.join(SRC, spez.slice(2)) : spez.startsWith(".") ? path.resolve(path.dirname(von), spez) : null;
+  if (basis === null) return null;
+  for (const k of [basis, ...[".ts", ".tsx", ".js", ".jsx", ".mjs"].map((e) => basis + e), ...["index.ts", "index.tsx"].map((i) => path.join(basis, i))]) {
+    if (existsSync(k) && statSync(k).isFile()) return k;
+  }
+  return null;
+}
+
+const importCache = new Map();
+function importeVon(datei) {
+  if (!importCache.has(datei)) {
+    const i = laufzeitImporte(readFileSync(datei, "utf8"), path.relative(SITE, datei));
+    importCache.set(datei, { ...i, dateien: i.ziele.map((z) => aufloesen(datei, z)).filter(Boolean) });
+  }
+  return importCache.get(datei);
+}
+
+/** Alle src-Dateien, die von start aus zur Laufzeit erreichbar sind (start eingeschlossen). */
+function erreichbar(start, ohne = new Set()) {
+  const gesehen = new Set([start]);
+  const offen = [start];
+  while (offen.length) {
+    for (const ziel of importeVon(offen.pop()).dateien) {
+      if (gesehen.has(ziel) || ohne.has(ziel)) continue;
+      gesehen.add(ziel);
+      offen.push(ziel);
     }
   }
+  return gesehen;
+}
+
+test("TOR-F2 Regel 5 (Wächter): Parser erkennt jede Importform und 'use client' hinter Kommentaren", () => {
+  const probe = [
+    "// Kommentar vor der Direktive",
+    "/* Block */ \"use client\";",
+    'import a from "./a";',
+    'import type { B } from "./b";',
+    'import "./c";',
+    'export * from "./d";',
+    'export type { E } from "./e";',
+    'import { type F, g } from "./fg";',
+    "const h = await import(\"./h\");",
+    "const i = require(\"./i\");",
+    'import j = require("./j");',
+    "const k = import(`./k`);",
+    "const l = import(variable);",
+    "// import x from \"./kommentar\"",
+    'const s = "import y from \\"./text\\"";',
+  ].join("\n");
+  const r = laufzeitImporte(probe, "probe.tsx");
+  assert.equal(r.client, true, "Direktive nach Kommentaren erkannt");
+  assert.deepEqual(r.ziele, ["./a", "./c", "./d", "./fg", "./h", "./i", "./j", "./k"]);
+  assert.deepEqual(r.unpruefbar, ["probe.tsx:13"]);
+  assert.equal(laufzeitImporte('const x = 1;\n"use client";', "spaet.ts").client, false, "Direktive nur im Prolog");
+});
+
+test("TOR-F2 Regel 5: lib/agent-modelle.ts importiert nichts; keine Client-Datei erreicht ein Prompt-Modul; agent-prompts.ts trägt den Riegel 'server-only'", () => {
+  const modellQuelle = readFileSync(path.join(SRC, "lib/agent-modelle.ts"), "utf8");
+  assert.deepEqual(laufzeitImporte(modellQuelle, "agent-modelle.ts").ziele, [], "agent-modelle.ts ohne Import");
+  assert.doesNotMatch(modellQuelle, /systemPrompt|COMPANY_CONTEXT/);
+  // Riegel: Seiteneffekt-Import "server-only" in agent-prompts.ts (next build bricht im Client-Graph ab).
+  const promptSf = ts.createSourceFile("agent-prompts.ts", readFileSync(PROMPTS, "utf8"), ts.ScriptTarget.Latest, true);
+  assert.ok(
+    promptSf.statements.some((s) => ts.isImportDeclaration(s) && !s.importClause && s.moduleSpecifier.text === "server-only"),
+    "lib/agent-prompts.ts ohne import \"server-only\"",
+  );
+  // Prompt-Module: agent-prompts.ts und seine Laufzeit-Importe außer der Positivliste.
+  const promptModule = erreichbar(PROMPTS, PROMPT_IMPORT_ERLAUBT);
+  assert.ok(promptModule.has(path.join(SRC, "lib/steinadel-regelpaket.ts")), "Regelpaket (Teil des COUNSEL-Prompts) zählt als Prompt-Modul");
+  const client = srcDateien().filter((d) => importeVon(d).client);
+  assert.ok(client.length > 10, `Client-Dateien gefunden: ${client.length}`);
+  assert.ok(client.includes(path.join(SRC, "components/agents/AgentCard.tsx")));
+  for (const start of client) {
+    const graph = erreichbar(start);
+    for (const d of graph) {
+      assert.ok(!promptModule.has(d), `${path.relative(SITE, start)} erreicht ${path.relative(SITE, d)} (Prompt-Modul)`);
+      assert.deepEqual(importeVon(d).unpruefbar, [], `${path.relative(SITE, start)}: nicht prüfbarer Import im Client-Graph`);
+    }
+  }
+  // Gegenprobe: Die Karte erreicht die Modell-Zuordnung (der Graph folgt Importen wirklich).
+  assert.ok(erreichbar(path.join(SRC, "components/agents/AgentCard.tsx")).has(path.join(SRC, "lib/agent-modelle.ts")));
 });
 
 function metricsSeite(agents) {
@@ -374,6 +479,11 @@ test("TOR-F2 /metrics: Klassen nach Dashboard-Modell (Sonnet 7 · Haiku 8 · ohn
   assert.ok(!t.includes("Modelle laut Register"));
   assert.ok(t.includes(`Register (agents.llm_model) weicht bei 3 Agenten ab: AMPLIFIER (Register ${SONNET}, Dashboard ${HAIKU}), MERCHANT (Register ${SONNET}, Dashboard ${HAIKU}), SCRIBE (Register ${SONNET}, Dashboard ${HAIKU})`), t);
   assert.ok(t.includes(`kein Dashboard-Prompt: 1 Agent`) && t.includes(`SENTINEL (Register: ${HAIKU})`));
+  // Nachprüfung ehrlichkeit-1: Der Satz nennt seinen Umfang. Der Python-Pfad (execution/agent_runner.py)
+  // ruft AMPLIFIER, MERCHANT, SCRIBE und COUNSEL mit claude-sonnet-5 auf.
+  const satz = text(finde(baum, (k) => k.props?.["data-modell"] === "abweichung")[0]).replace(/\s+/g, " ");
+  assert.ok(satz.endsWith("— Seed, Python-Pfad oder älterer Lauf; Aufrufe über das Dashboard nutzen das Dashboard-Modell."), satz);
+  assert.ok(!t.includes("aufgerufen wird das Dashboard-Modell"));
 });
 
 test("TOR-F2 /metrics: Tabelle zeigt je Agent Dashboard-Modell und dessen Preisbasis, das Register daneben", () => {
@@ -387,7 +497,7 @@ test("TOR-F2 /metrics: Tabelle zeigt je Agent Dashboard-Modell und dessen Preisb
 
 // ═══ TOR-F3/F4/F7 Agent-Detail ═══
 
-function detail(id, detailDaten) {
+function detail(id, detailDaten, modellAttrappe = modelle) {
   return ent(
     renderToStaticMarkup(
       React.createElement(
@@ -404,7 +514,7 @@ function detail(id, detailDaten) {
           },
           "@/lib/freigabe-regeln": regeln,
           "@/lib/kosten": kosten,
-          "@/lib/agent-modelle": modelle,
+          "@/lib/agent-modelle": modellAttrappe,
           "@/lib/types": types,
         }).default,
       ),
@@ -412,11 +522,14 @@ function detail(id, detailDaten) {
   );
 }
 
-/** Wert der Zeile "Kosten (geschätzt)" und das Etikett darunter. */
+/** Wert der Zeile "Kosten (geschätzt)", das Etikett darunter und der title des Blocks. */
 function kostenZeile(html) {
   const m = /<span class="text-xs text-text-secondary">Kosten \(geschätzt\)<\/span><span[^>]*>([^<]*)<\/span>/.exec(html);
   const e = /<p class="[^"]*" data-kosten-etikett="[^"]*">([^<]*)<\/p>/.exec(html);
   return { wert: m?.[1] ?? null, etikett: e?.[1] ?? null };
+}
+function kostenTitel(html) {
+  return /<div title="([^"]*)"><div class="flex items-center justify-between"><span class="text-xs text-text-secondary">Kosten \(geschätzt\)/.exec(html)?.[1] ?? null;
 }
 
 // Token- und Kostensummen in agents, gemessen per SELECT am 07.11.2026.
@@ -426,25 +539,102 @@ const VERBRAUCH = {
   counsel: { total_input_tokens: 82462, total_output_tokens: 13444, total_cost_usd: 0.1218 },
   scribe: { total_input_tokens: 47571, total_output_tokens: 17172, total_cost_usd: 0.1068 },
 };
+// Läufe (source activation-api) je Agent, neueste zuerst, [Input, Output] — gemessen per SELECT am
+// 07.11.2026. Ihre Summen sind die Spalten oben; publisher und researcher liefen auf Sonnet,
+// counsel und scribe auf Haiku (metadata.model), alle unter den neuesten 20 Nachrichten.
+const LAEUFE = {
+  publisher: [[6428, 3226], [5931, 2325], [4824, 4884], [3230, 7921], [5834, 6000]],
+  researcher: [[4175, 3451], [3957, 4908], [3788, 4173], [3782, 4094], [2996, 3787], [2990, 3001], [2996, 4244], [2990, 2811], [2990, 3244], [2990, 3321], [2667, 707]],
+  counsel: [[5202, 914], [8352, 1171], [7944, 855], [7816, 911], [8196, 861], [6984, 929], [7584, 1109], [6408, 841], [6780, 1078], [5805, 712], [6028, 2048], [5363, 2015]],
+  scribe: [[5166, 1920], [4932, 1672], [4956, 1672], [5110, 2048], [4276, 1388], [3681, 1987], [3901, 1577], [3629, 1949], [3650, 974], [4151, 1262], [2633, 590], [1486, 133]],
+};
+const LAUF_MODELL = { publisher: SONNET, researcher: SONNET, counsel: HAIKU, scribe: HAIKU };
+/** Bus-Zeilen der Läufe, wie api/agents/activate sie schreibt. */
+const laufNachrichten = (id, laeufe = LAEUFE[id], modell = LAUF_MODELL[id]) =>
+  laeufe.map(([ein, aus], i) => ({
+    id: `${id}-${i}`,
+    from_agent: id,
+    to_agents: ["donna"],
+    to_channels: [],
+    message_type: "response",
+    content: { text: `Lauf ${i}` },
+    metadata: { source: "activation-api", model: modell, input_tokens: ein, output_tokens: aus },
+    created_at: new Date(Date.parse("2026-07-29T22:00:00.000Z") - i * 60_000).toISOString(),
+  }));
 
 test("TOR-F3 /agents/[id]: Kosten aus Tokens × aktueller Tabelle — publisher ≥ $0,2960, researcher ≥ $0,4500 (nicht ≥ $0,4441 / ≥ $0,6751)", () => {
   // 26.247 × 2 + 24.356 × 10 = 296.054 → 0,296054 USD; 36.321 × 2 + 37.741 × 10 = 450.052 → 0,450052 USD
-  const pub = kostenZeile(detail("publisher", { agent: agent(REGISTER[6], VERBRAUCH.publisher) }));
-  assert.deepEqual(pub, { wert: "≥ $0,2960", etikett: `Tokens × aktuelle Preistabelle (${SONNET})` });
-  const res = kostenZeile(detail("researcher", { agent: agent(REGISTER[10], VERBRAUCH.researcher) }));
+  const pubHtml = detail("publisher", { agent: agent(REGISTER[6], VERBRAUCH.publisher), messages: laufNachrichten("publisher") });
+  assert.deepEqual(kostenZeile(pubHtml), { wert: "≥ $0,2960", etikett: `Tokens × aktuelle Preistabelle (${SONNET})` });
+  assert.match(kostenTitel(pubHtml), /Modell je Lauf geprüft: 5 Läufe \(source activation-api\) in den neuesten 20 Nachrichten, alle auf claude-sonnet-5/);
+  const res = kostenZeile(detail("researcher", { agent: agent(REGISTER[10], VERBRAUCH.researcher), messages: laufNachrichten("researcher") }));
   assert.deepEqual(res, { wert: "≥ $0,4500", etikett: `Tokens × aktuelle Preistabelle (${SONNET})` });
 });
 
 test("TOR-F3 /agents/[id]: Haiku-Agenten nach Dashboard-Modell (counsel ≥ $0,1496, scribe ≥ $0,1334 — scribe trotz Register Sonnet)", () => {
   // 82.462 × 1 + 13.444 × 5 = 149.682; 47.571 × 1 + 17.172 × 5 = 133.431 (je 1e-6 USD)
-  assert.deepEqual(kostenZeile(detail("counsel", { agent: agent(REGISTER[7], VERBRAUCH.counsel) })), {
+  assert.deepEqual(kostenZeile(detail("counsel", { agent: agent(REGISTER[7], VERBRAUCH.counsel), messages: laufNachrichten("counsel") })), {
     wert: "≥ $0,1496",
     etikett: `Tokens × aktuelle Preistabelle (${HAIKU})`,
   });
-  assert.deepEqual(kostenZeile(detail("scribe", { agent: agent(REGISTER[11], VERBRAUCH.scribe) })), {
+  assert.deepEqual(kostenZeile(detail("scribe", { agent: agent(REGISTER[11], VERBRAUCH.scribe), messages: laufNachrichten("scribe") })), {
     wert: "≥ $0,1334",
     etikett: `Tokens × aktuelle Preistabelle (${HAIKU})`,
   });
+});
+
+// Nachprüfung 07.11.2026 (ehrlichkeit-2): "≥" nur mit geprüftem Modell je Lauf. Angenommen wird ein
+// späterer Wechsel des Dashboard-Modells von scribe auf Sonnet (nur in diesem Test); die Läufe
+// bleiben, wie gemessen, auf Haiku. Vorher: "≥ $0,2668" mit Sonnet im Etikett.
+const SCRIBE_AUF_SONNET = { ...modelle, dashboardModellFuer: (id) => (id === "scribe" ? SONNET : modelle.dashboardModellFuer(id)) };
+
+test("TOR-F3 /agents/[id] (Nachprüfung ehrlichkeit-2): Läufe auf anderem Modell — je Lauf gerechnet, nie Dashboard-Preis × alle Tokens", () => {
+  const html = detail("scribe", { agent: agent(REGISTER[11], VERBRAUCH.scribe), messages: laufNachrichten("scribe") }, SCRIBE_AUF_SONNET);
+  // 12 Läufe auf Haiku, Summen = agents: 47.571 × 1 + 17.172 × 5 = 133.431 (je 1e-6 USD)
+  assert.deepEqual(kostenZeile(html), { wert: "≥ $0,1334", etikett: "Tokens je Lauf × aktuelle Preistabelle (Modell je Lauf)" });
+  assert.ok(!html.includes("≥ $0,2668"));
+  const titel = kostenTitel(html);
+  assert.ok(titel.includes(`  ${HAIKU}: 12 Läufe, 47.571 ein / 17.172 aus × Input $1,00 · Output $5,00 je Mio. Tokens`), titel);
+  assert.ok(titel.includes(`Dashboard-Modell heute: ${SONNET} — nicht jeder Lauf lief darauf.`), titel);
+  // Läufe anderer Agenten, Fehlläufe und Planungen zählen nicht: Sie schreiben die Summen nicht fort.
+  const fremd = [
+    { ...laufNachrichten("counsel")[0], id: "fremd" },
+    { ...laufNachrichten("publisher")[0], id: "fehl", from_agent: "publisher", metadata: { source: "fehllauf", art: "aktivierung", model: HAIKU, input_tokens: 10, output_tokens: 10 } },
+  ];
+  const pub = detail("publisher", { agent: agent(REGISTER[6], VERBRAUCH.publisher), messages: [...fremd, ...laufNachrichten("publisher")] });
+  assert.deepEqual(kostenZeile(pub), { wert: "≥ $0,2960", etikett: `Tokens × aktuelle Preistabelle (${SONNET})` });
+});
+
+test("TOR-F3 /agents/[id] (Nachprüfung ehrlichkeit-2): nicht jeder Lauf geladen oder lesbar — '≈' mit Begründung, kein '≥'", () => {
+  // Nur die neuesten 8 der 12 scribe-Läufe geladen (Haiku: 35.651 ein / 14.213 aus), Rest der Summen
+  // (11.920 ein / 2.959 aus) mit dem Dashboard-Modell Sonnet: 35.651 + 71.065 + 23.840 + 29.590 = 160.146 → 0,160146 USD
+  const teil = detail("scribe", { agent: agent(REGISTER[11], VERBRAUCH.scribe), messages: laufNachrichten("scribe").slice(0, 8) }, SCRIBE_AUF_SONNET);
+  assert.deepEqual(kostenZeile(teil), { wert: "≈ $0,1601", etikett: "Tokens × aktuelle Preistabelle · nicht jeder Lauf geprüft" });
+  const titel = kostenTitel(teil);
+  assert.ok(titel.startsWith("Geprüft: 8 Läufe (source activation-api) in den neuesten 20 Nachrichten mit 35.651 ein / 14.213 aus; für den Rest der Summen in agents (11.920 ein / 2.959 aus) ist kein Lauf geladen."), titel);
+  assert.match(titel, /≈ statt ≥: Liefen diese Läufe auf einem günstigeren Modell, läge der Betrag darunter\./);
+  // Keine Läufe geladen: Dashboard-Modell angenommen, "≈" (0,296054 kaufmännisch gerundet).
+  assert.deepEqual(kostenZeile(detail("publisher", { agent: agent(REGISTER[6], VERBRAUCH.publisher), messages: [] })), {
+    wert: "≈ $0,2961",
+    etikett: "Tokens × aktuelle Preistabelle · nicht jeder Lauf geprüft",
+  });
+  // Nachrichten nicht lesbar: kein Lauf geprüft, auch wenn eine alte Liste da ist.
+  const fehler = detail("publisher", { agent: agent(REGISTER[6], VERBRAUCH.publisher), messages: laufNachrichten("publisher"), messagesFehler: "HTTP 500" });
+  assert.equal(kostenZeile(fehler).wert, "≈ $0,2961");
+  assert.ok(kostenTitel(fehler).startsWith("Nachrichten nicht lesbar (HTTP 500): Modell je Lauf nicht geprüft."));
+  // Mehr Tokens in den Läufen als in agents (Summen nicht fortgeschrieben): kein "≥".
+  const mehr = detail("publisher", { agent: agent(REGISTER[6], { ...VERBRAUCH.publisher, total_input_tokens: 20000 }), messages: laufNachrichten("publisher") });
+  assert.match(kostenZeile(mehr).wert, /^≈ /);
+  assert.ok(kostenTitel(mehr).startsWith("Die geladenen Läufe (26.247 ein / 24.356 aus) passen nicht zu den Summen in agents (20.000 ein / 24.356 aus)."));
+});
+
+test("TOR-F3 /agents/[id] (Nachprüfung ehrlichkeit-2): Lauf-Modell ohne Tabellenpreis — kein Betrag aus Tokens", () => {
+  const unbekannt = laufNachrichten("publisher").map((m) => ({ ...m, metadata: { ...m.metadata, model: "__proto__" } }));
+  const html = detail("publisher", { agent: agent(REGISTER[6], VERBRAUCH.publisher), messages: unbekannt });
+  assert.deepEqual(kostenZeile(html), { wert: "≈ $0,4441", etikett: "gespeicherte Summe, Preistabelle je Lauf" });
+  assert.ok(kostenTitel(html).startsWith("Kein Tabellenpreis für __proto__ (Modell eines geladenen Laufs): nicht umrechenbar."));
+  const ohneSumme = detail("publisher", { agent: agent(REGISTER[6], { ...VERBRAUCH.publisher, total_cost_usd: 0 }), messages: unbekannt });
+  assert.deepEqual(kostenZeile(ohneSumme), { wert: "nicht schätzbar", etikett: "kein Tabellenpreis für __proto__" });
 });
 
 test("TOR-F4 /agents/[id]: gespeicherte, je Lauf gerundete Summe ist keine Untergrenze — Rückfall nur mit '≈' und Etikett", () => {
@@ -454,7 +644,7 @@ test("TOR-F4 /agents/[id]: gespeicherte, je Lauf gerundete Summe ist keine Unter
   const sentinel = kostenZeile(detail("sentinel", { agent: agent(REGISTER[15], { total_input_tokens: 1000, total_output_tokens: 100, total_cost_usd: 0.0012 }) }));
   assert.equal(sentinel.wert, "≈ $0,0012");
   // Das Etikett passt zur Zahl: nie "≥" aus der gespeicherten Summe.
-  const html = detail("counsel", { agent: agent(REGISTER[7], VERBRAUCH.counsel) });
+  const html = detail("counsel", { agent: agent(REGISTER[7], VERBRAUCH.counsel), messages: laufNachrichten("counsel") });
   assert.ok(!html.includes("≥ $0,1218"));
   assert.match(html, /Gespeicherte Summe agents\.total_cost_usd: \$0,1218 — je Lauf mit der damals gültigen Preistabelle geschätzt/);
 });
@@ -476,6 +666,22 @@ test("TOR-F7 /agents/donna: 'Modell letzter Lauf' zählt den Planungslauf (deleg
   assert.ok(html.includes(`<p class="text-sm font-medium break-words">${SONNET} · Planung</p>`), html.slice(0, 2000));
   assert.match(html, /source delegate-plan/);
   assert.ok(!html.includes("nicht in den neuesten 20 Nachrichten"));
+  // Nachprüfung K3: Die Liste auf /agents/donna besteht live überwiegend aus Antworten ANDERER Agenten
+  // an donna; die jüngste ist die von counsel (gemessen: 11:24:39 UTC, activation-api, Haiku). Sie
+  // ist kein Lauf von donna.
+  const antwortCounsel = {
+    id: "msg-counsel",
+    from_agent: "counsel",
+    to_agents: ["donna"],
+    to_channels: [],
+    message_type: "response",
+    content: { text: "Antwort" },
+    metadata: { source: "activation-api", model: HAIKU, input_tokens: 5202, output_tokens: 914 },
+    created_at: "2026-11-07T11:24:39.821Z",
+  };
+  const live = detail("donna", { agent: agent(REGISTER[1]), messages: [antwortCounsel, lauf, plan] });
+  assert.ok(live.includes(`<p class="text-sm font-medium break-words">${SONNET} · Planung</p>`), live.slice(0, 2000));
+  assert.ok(!live.includes(`${HAIKU} · Aktivierung`));
   // Ohne Lauf: ehrlich "kein Lauf …"; Fehllauf mit Art.
   assert.ok(detail("donna", { agent: agent(REGISTER[1]), messages: [lauf] }).includes("kein Lauf in den neuesten 20 Nachrichten"));
   const fehl = { ...plan, id: "f", metadata: { source: "fehllauf", art: "planung", model: SONNET } };
@@ -553,6 +759,11 @@ test("TOR-F5 /messages: Fehllauf und unbekannter Typ haben eigene Zähler, die S
   assert.equal(Object.values(z).reduce((a, b) => a + b, 0), 4);
   const andere = finde(baum, (k) => k.type === "button" && text(k).startsWith("Andere Typen"))[0];
   assert.match(String(andere.props.title), /Typen: heartbeat/);
+  // Nachprüfung ehrlichkeit-3: Die Hinweiszeile sagt, wo die Fehlläufe zählen — der Fehllauf der
+  // Planung (message_type plan) wäre ohne die Regel ein Plan, keine Antwort.
+  const t = text(baum);
+  assert.ok(t.includes("· 2 Fehlläufe (bezahlt, ohne verwertbare Antwort) im Zähler Fehllauf, nicht als Antwort oder Plan gezählt"), t.slice(0, 900));
+  assert.ok(!t.includes("nicht als Antwort gezählt"));
 });
 
 /** Metadaten-Chips (break-all) einer Seite. */

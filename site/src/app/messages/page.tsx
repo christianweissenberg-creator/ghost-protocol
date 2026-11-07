@@ -12,6 +12,8 @@
 // Tor-Prüfung 07.11.2026: Jede Nachricht zählt in genau einem Zähler (busZaehlerVon) — vorher
 // fehlten plan und plan_run, die Zähler ergaben 46 neben "48 Nachrichten" (F5). cost_usd
 // einheitlich formatiert, mit der Preistabelle, wenn es nicht die aktuelle ist (F6).
+// Nachprüfung 07.11.2026 (ehrlichkeit-3): Die Hinweiszeile sagt, wo ein Fehllauf zählt — auch ein
+// Fehllauf der Planung (message_type plan) steht im Zähler Fehllauf, nicht unter Plan.
 
 import { useMessages, useAgents } from "@/lib/hooks";
 import { useSystemStatus } from "@/lib/hooks-status";
@@ -219,7 +221,7 @@ export default function MessagesPage() {
           ? ` · jede Nachricht in genau einem Zähler, Summe ${formatiereZahl(sichtbar.length)}`
           : ""}
         {!loading && !error && fehllaeufe > 0
-          ? ` · ${formatiereZahl(fehllaeufe)} ${fehllaeufe === 1 ? "Fehllauf" : "Fehlläufe"} (bezahlt, ohne verwertbare Antwort) nicht als Antwort gezählt`
+          ? ` · ${formatiereZahl(fehllaeufe)} ${fehllaeufe === 1 ? "Fehllauf" : "Fehlläufe"} (bezahlt, ohne verwertbare Antwort) im Zähler Fehllauf, nicht als Antwort oder Plan gezählt`
           : ""}
       </p>
 

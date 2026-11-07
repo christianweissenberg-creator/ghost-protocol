@@ -889,72 +889,189 @@ export function modellKlassenText(u: ModellUebersicht): string {
 // (Sonnet 3/15 USD je Mio. Tokens, gemessen per SQL am 07.11.2026: publisher 0,4441 statt
 // 0,296054 nach der aktuellen Tabelle), und die Spalte rundet jeden Lauf auf 4 Stellen — die
 // "Untergrenze" lag so bis zu 0,0001 USD über der Summe der Einzelschätzungen. Jetzt: Tokens der
-// Spalten × Listenpreis des Dashboard-Modells laut aktueller Tabelle; die Zahl passt zum Etikett.
+// Spalten × Listenpreis laut aktueller Tabelle; die Zahl passt zum Etikett.
+// Nachprüfung 07.11.2026 (Befund ehrlichkeit-2): Der Preis des Dashboard-Modells galt für alle
+// Tokens, ohne Prüfung, auf welchem Modell die Läufe liefen. Nach einem Modellwechsel in
+// lib/agent-modelle.ts stand so eine zu hohe "Untergrenze" mit dem neuen Modell im Etikett (Sonde:
+// scribe-Läufe auf Haiku, Dashboard-Modell auf Sonnet gestellt → "≥ $0,2668" statt 0,1334). Jetzt
+// rechnet jeder geladene Lauf mit seinem metadata.model. "≥" steht nur, wenn die geladenen Läufe
+// die Summen in agents genau ergeben; sonst "≈" mit Begründung im title.
 
 export interface KostenUntergrenze {
-  /** "≥ $0,2960", "≈ $0,4441" (Rückfall), "nicht gemessen". */
+  /** "≥ $0,2960", "≈ $0,2960" (nicht jeder Lauf geprüft), "≈ $0,4441" (Rückfall), "nicht gemessen". */
   text: string;
   /** Sichtbares Etikett: woraus die Zahl gerechnet ist. */
   etikett: string;
   titel: string;
 }
 
+/** Die auf /agents/[id] geladenen Nachrichten von oder an den Agenten (neueste zuerst). */
+export interface KostenNachrichten {
+  liste: readonly Pick<Message, "from_agent" | "metadata">[];
+  /** Abfragegrenze (DETAIL_NACHRICHTEN_GRENZE). */
+  grenze: number;
+  /** Lesefehler der Nachrichten: dann ist kein Lauf geprüft. */
+  fehler: string | null;
+}
+
+/** Im Code schreibt nur api/agents/activate die Token-Summen in agents fort, zusammen mit einer
+ *  Bus-Nachricht dieser source (model, input_tokens, output_tokens im metadata). */
+const SUMMEN_QUELLE = "activation-api";
+
 function tokenZahl(wert: unknown): number | null {
   return typeof wert === "number" && Number.isFinite(wert) && wert >= 0 ? wert : null;
 }
 
+/** Nur ein echter Tabellenpreis: preisJeMillion("__proto__") liefert sonst Object.prototype. */
+function istPreis(p: unknown): p is PreisJeMillion {
+  if (typeof p !== "object" || p === null) return false;
+  const { input, output } = p as Record<string, unknown>;
+  return typeof input === "number" && Number.isFinite(input) && typeof output === "number" && Number.isFinite(output);
+}
+
+interface ModellTokens {
+  modell: string;
+  laeufe: number;
+  ein: number;
+  aus: number;
+}
+
+/** Läufe des Agenten (source activation-api, mit Modell und beiden Token-Zahlen) in den geladenen
+ *  Nachrichten, je Basismodell summiert, in der Folge des ersten Auftretens. */
+function summenLaeufeJeModell(liste: KostenNachrichten["liste"], agentId: string): ModellTokens[] {
+  const je = new Map<string, ModellTokens>();
+  for (const m of liste) {
+    if (m.from_agent !== agentId) continue;
+    const meta = alsJsonObjekt(m.metadata);
+    if (meta?.source !== SUMMEN_QUELLE) continue;
+    const modell = typeof meta.model === "string" ? meta.model.trim() : "";
+    const ein = tokenZahl(meta.input_tokens);
+    const aus = tokenZahl(meta.output_tokens);
+    if (!modell || ein === null || aus === null) continue;
+    const kern = modellKern(modell);
+    const e = je.get(kern) ?? { modell, laeufe: 0, ein: 0, aus: 0 };
+    e.laeufe += 1;
+    e.ein += ein;
+    e.aus += aus;
+    je.set(kern, e);
+  }
+  return [...je.values()];
+}
+
+const laeufeWort = (n: number): string => (n === 1 ? "Lauf" : "Läufe");
+
 /**
  * Kosten eines Agenten für /agents/[id]. modell = Dashboard-Modell (null = kein Dashboard-Prompt),
- * preis = preisJeMillion(modell) aus lib/kosten.ts, preisStandAb = PREIS_STAND_AB. Mit Tokens und
- * Preis: Tokens × aktuelle Tabelle, abgerundet ("≥"). Sonst Rückfall auf die gespeicherte Summe
- * mit "≈" — sie ist je Lauf gerundet und nach der damals gültigen Tabelle geschätzt.
+ * preisVon = preisJeMillion aus lib/kosten.ts, preisStandAb = PREIS_STAND_AB, nachrichten = die
+ * geladenen Nachrichten. Jeder geladene Lauf rechnet mit seinem metadata.model × aktueller Tabelle,
+ * der Rest der Summen in agents mit dem Dashboard-Modell. "≥" (abgerundet) nur, wenn die geladenen
+ * Läufe die Summen genau ergeben; sonst "≈". Ohne Tokens, Dashboard-Modell oder Tabellenpreis:
+ * Rückfall auf die gespeicherte Summe mit "≈" — sie ist je Lauf gerundet und nach der damals
+ * gültigen Tabelle geschätzt.
  */
 export function kostenUntergrenzeAnzeige(
-  agent: Pick<Agent, "total_input_tokens" | "total_output_tokens" | "total_cost_usd">,
+  agent: Pick<Agent, "id" | "total_input_tokens" | "total_output_tokens" | "total_cost_usd">,
   modell: string | null,
-  preis: PreisJeMillion | null,
+  preisVon: (modell: string) => PreisJeMillion | null,
   preisStandAb: string,
+  nachrichten: KostenNachrichten,
 ): KostenUntergrenze {
   const ein = tokenZahl(agent.total_input_tokens);
   const aus = tokenZahl(agent.total_output_tokens);
+  const tokensDa = ein !== null && aus !== null && ein + aus > 0;
   const gespeichert = typeof agent.total_cost_usd === "number" && Number.isFinite(agent.total_cost_usd) ? agent.total_cost_usd : null;
   const tabelle = tagAnzeige(preisStandAb);
   const gespeichertZeile =
     gespeichert !== null && gespeichert > 0
       ? `Gespeicherte Summe agents.total_cost_usd: ${formatiereUsd4(gespeichert)} — je Lauf mit der damals gültigen Preistabelle geschätzt (vor dem ${tabelle} die alte: Sonnet zu hoch, Haiku zu niedrig) und je Lauf auf 4 Stellen gerundet; nicht angezeigt.`
       : null;
-  if (ein !== null && aus !== null && ein + aus > 0 && modell !== null && preis !== null) {
-    const wert = (ein * preis.input + aus * preis.output) / 1_000_000;
+  const zeilen = (...z: (string | null)[]): string => z.filter(Boolean).join("\n");
+  const preisText = (p: PreisJeMillion): string => `Input ${formatiereUsd(p.input)} · Output ${formatiereUsd(p.output)} je Mio. Tokens`;
+
+  const rueckfall = (grund: string, ohneSumme: string): KostenUntergrenze => {
+    if (gespeichert !== null && gespeichert > 0) {
+      return {
+        text: `≈ ${formatiereUsd4(gespeichert)}`,
+        etikett: "gespeicherte Summe, Preistabelle je Lauf",
+        titel: zeilen(
+          grund,
+          gespeichertZeile,
+          "≈ statt ≥: Die Rundung je Lauf kann die Summe um bis zu 0,00005 USD je Lauf über die Einzelschätzungen heben.",
+        ),
+      };
+    }
+    if (tokensDa) return { text: "nicht schätzbar", etikett: ohneSumme, titel: zeilen(grund, "Keine gespeicherte Summe in agents.total_cost_usd.") };
+    return { text: "nicht gemessen", etikett: "keine Tokens und keine Kosten eingetragen", titel: "agents: Tokens und Kosten 0 oder fehlend (DB-Default), keine Messung." };
+  };
+
+  const preisDashboard = modell === null ? null : preisVon(modell);
+  if (modell === null) return rueckfall("Kein Dashboard-Modell: nicht mit der aktuellen Tabelle umrechenbar.", "kein Dashboard-Modell");
+  if (!istPreis(preisDashboard)) return rueckfall(`Kein Tabellenpreis für ${modell}: nicht umrechenbar.`, `kein Tabellenpreis für ${modell}`);
+  if (!tokensDa || ein === null || aus === null) return rueckfall("Tokens fehlen: nicht mit der aktuellen Tabelle umrechenbar.", "Tokens fehlen");
+
+  // Nicht lesbare Nachrichten: kein Lauf geprüft, auch wenn noch eine ältere Liste da ist.
+  const geladen = nachrichten.fehler === null ? summenLaeufeJeModell(nachrichten.liste, String(agent.id ?? "")) : [];
+  const preise: PreisJeMillion[] = [];
+  for (const g of geladen) {
+    const p = preisVon(g.modell);
+    if (!istPreis(p)) return rueckfall(`Kein Tabellenpreis für ${g.modell} (Modell eines geladenen Laufs): nicht umrechenbar.`, `kein Tabellenpreis für ${g.modell}`);
+    preise.push(p);
+  }
+  const geprueftEin = geladen.reduce((s, g) => s + g.ein, 0);
+  const geprueftAus = geladen.reduce((s, g) => s + g.aus, 0);
+  const laeufe = geladen.reduce((s, g) => s + g.laeufe, 0);
+  const restEin = ein - geprueftEin;
+  const restAus = aus - geprueftAus;
+  const vollstaendig = restEin === 0 && restAus === 0;
+  const wert =
+    (geladen.reduce((s, g, i) => s + g.ein * preise[i].input + g.aus * preise[i].output, 0) +
+      Math.max(0, restEin) * preisDashboard.input +
+      Math.max(0, restAus) * preisDashboard.output) /
+    1_000_000;
+  const nurDashboardModell = geladen.every((g) => modellKern(g.modell) === modellKern(modell));
+  const jeModell = geladen.map(
+    (g, i) => `  ${g.modell}: ${g.laeufe} ${laeufeWort(g.laeufe)}, ${formatiereZahl(g.ein)} ein / ${formatiereZahl(g.aus)} aus × ${preisText(preise[i])}`,
+  );
+
+  if (vollstaendig && nurDashboardModell) {
     return {
       text: formatiereUsdUntergrenze(wert, 4),
       etikett: `Tokens × aktuelle Preistabelle (${modell})`,
-      titel: [
-        `Tokens aus agents (${formatiereZahl(ein)} ein / ${formatiereZahl(aus)} aus) × Listenpreis ${modell} laut lib/kosten.ts (Tabelle ab ${tabelle}): Input ${formatiereUsd(preis.input)} · Output ${formatiereUsd(preis.output)} je Mio. Tokens.`,
-        "Gerechnet mit dem Modell, das das Dashboard aufruft; das Modell je Lauf steht in metadata.model der Bus-Nachricht.",
+      titel: zeilen(
+        `Tokens aus agents (${formatiereZahl(ein)} ein / ${formatiereZahl(aus)} aus) × Listenpreis ${modell} laut lib/kosten.ts (Tabelle ab ${tabelle}): ${preisText(preisDashboard)}.`,
+        `Modell je Lauf geprüft: ${laeufe} ${laeufeWort(laeufe)} (source activation-api) in den neuesten ${nachrichten.grenze} Nachrichten, alle auf ${modell} (metadata.model); ihre Tokens ergeben genau die Summen in agents.`,
         gespeichertZeile,
-      ]
-        .filter(Boolean)
-        .join("\n"),
+      ),
     };
   }
-  if (gespeichert !== null && gespeichert > 0) {
+  if (vollstaendig) {
     return {
-      text: `≈ ${formatiereUsd4(gespeichert)}`,
-      etikett: "gespeicherte Summe, Preistabelle je Lauf",
-      titel: [
-        modell === null
-          ? "Kein Dashboard-Modell: nicht mit der aktuellen Tabelle umrechenbar."
-          : preis === null
-            ? `Kein Tabellenpreis für ${modell}: nicht umrechenbar.`
-            : "Tokens fehlen: nicht mit der aktuellen Tabelle umrechenbar.",
+      text: formatiereUsdUntergrenze(wert, 4),
+      etikett: "Tokens je Lauf × aktuelle Preistabelle (Modell je Lauf)",
+      titel: zeilen(
+        `Tokens je Lauf × Listenpreis seines Modells (metadata.model) laut lib/kosten.ts (Tabelle ab ${tabelle}); die ${laeufe} ${laeufeWort(laeufe)} (source activation-api) in den neuesten ${nachrichten.grenze} Nachrichten ergeben genau die Summen in agents:`,
+        ...jeModell,
+        `Dashboard-Modell heute: ${modell} — nicht jeder Lauf lief darauf.`,
         gespeichertZeile,
-        "≈ statt ≥: Die Rundung je Lauf kann die Summe um bis zu 0,00005 USD je Lauf über die Einzelschätzungen heben.",
-      ]
-        .filter(Boolean)
-        .join("\n"),
+      ),
     };
   }
-  return { text: "nicht gemessen", etikett: "keine Tokens und keine Kosten eingetragen", titel: "agents: Tokens und Kosten 0 oder fehlend (DB-Default), keine Messung." };
+  const grund =
+    nachrichten.fehler !== null
+      ? `Nachrichten nicht lesbar (${nachrichten.fehler}): Modell je Lauf nicht geprüft.`
+      : restEin < 0 || restAus < 0
+        ? `Die geladenen Läufe (${formatiereZahl(geprueftEin)} ein / ${formatiereZahl(geprueftAus)} aus) passen nicht zu den Summen in agents (${formatiereZahl(ein)} ein / ${formatiereZahl(aus)} aus).`
+        : `Geprüft: ${laeufe} ${laeufeWort(laeufe)} (source activation-api) in den neuesten ${nachrichten.grenze} Nachrichten mit ${formatiereZahl(geprueftEin)} ein / ${formatiereZahl(geprueftAus)} aus; für den Rest der Summen in agents (${formatiereZahl(restEin)} ein / ${formatiereZahl(restAus)} aus) ist kein Lauf geladen.`;
+  return {
+    text: `≈ ${formatiereUsd4(wert)}`,
+    etikett: "Tokens × aktuelle Preistabelle · nicht jeder Lauf geprüft",
+    titel: zeilen(
+      grund,
+      ...jeModell,
+      `Ohne geladenen Lauf mit dem Dashboard-Modell ${modell} gerechnet (${preisText(preisDashboard)}, Tabelle ab ${tabelle}) — ≈ statt ≥: Liefen diese Läufe auf einem günstigeren Modell, läge der Betrag darunter.`,
+      gespeichertZeile,
+    ),
+  };
 }
 
 /** Zeilengrenze der Abfrage in useMetrics: Alle Zahlen gelten "in den neuesten 200 Zeilen". */

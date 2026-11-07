@@ -5,7 +5,13 @@
 // Protocol hat nichts mit Trading zu tun); COMPANY_CONTEXT ohne Umsatzziel und Agentenzahl,
 // Vorschläge statt autonomer Entscheidungen; der COUNSEL-Rahmentext nennt die Plattform
 // "Steinadel" statt ihres internen Namens. Das Regelpaket selbst bleibt unverändert.
+// Nachprüfung 07.11.2026 (Befund sicherheit-1): "server-only" ist der harte Riegel — importiert
+// eine Client-Komponente diese Datei (statisch oder per import()), bricht next build ab, statt
+// alle System-Prompts ins öffentliche JS-Bundle zu legen. Next.js löst das Paket selbst auf
+// (node_modules/next/dist/docs/01-app/01-getting-started/05-server-and-client-components.md);
+// Node-Tests bilden es auf die leere Server-Fassung ab (tests/u-tor-anzeige, tests/z-routen).
 
+import "server-only";
 import { STEINADEL_REGELPAKET } from "./steinadel-regelpaket";
 import { AGENT_MODELLE, type DashboardModell } from "./agent-modelle";
 

@@ -252,7 +252,8 @@ test("G-N1 /messages: Fehllauf zählt nicht als Antwort und trägt das Etikett '
   const knopf = finde(baum, (k) => k.type === "button" && text(k).startsWith("Antwort"))[0];
   assert.equal(text(knopf), "Antwort1", "nur die echte Antwort zählt");
   const t = text(baum);
-  assert.ok(t.includes("1 Fehllauf (bezahlt, ohne verwertbare Antwort) nicht als Antwort gezählt"), t.slice(0, 600));
+  // Wortlaut seit der Nachprüfung 07.11.2026 (ehrlichkeit-3): sagt auch, wo der Fehllauf zählt.
+  assert.ok(t.includes("1 Fehllauf (bezahlt, ohne verwertbare Antwort) im Zähler Fehllauf, nicht als Antwort oder Plan gezählt"), t.slice(0, 600));
   // Etiketten der Liste (font-mono); seit der Tor-Prüfung (F5) heißt auch ein Zähler "Fehllauf".
   const etiketten = finde(
     baum,

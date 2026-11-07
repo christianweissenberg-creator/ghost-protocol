@@ -14,7 +14,9 @@
 // das Dashboard aufruft (lib/agent-modelle.ts — nur die Zuordnung, keine Prompts), nicht mehr
 // agents.llm_model. Das Register lieferte "Sonnet 10 · Haiku 6" (Seed bzw. Python-Pfad); laut
 // Dashboard-Konfiguration sind es 7 Sonnet, 8 Haiku und SENTINEL ohne Prompt. Abweichungen des
-// Registers stehen sichtbar da.
+// Registers stehen sichtbar da. Nachprüfung 07.11.2026 (ehrlichkeit-1): Der Satz dazu nennt seinen
+// Umfang ("Aufrufe über das Dashboard") — der Python-Pfad (execution/agent_runner.py) ruft für
+// AMPLIFIER, MERCHANT, SCRIBE und COUNSEL ein anderes Modell auf.
 
 import { useMetrics } from "@/lib/hooks-metrics";
 import { useAgents, useJetztIso } from "@/lib/hooks";
@@ -211,7 +213,7 @@ export default function MetricsPage() {
                 Register (agents.llm_model) weicht bei {uebersicht.abweichend.length}{" "}
                 {uebersicht.abweichend.length === 1 ? "Agent" : "Agenten"} ab:{" "}
                 {uebersicht.abweichend.map((a) => `${a.name} (Register ${a.register}, Dashboard ${a.dashboard})`).join(", ")} — Seed, Python-Pfad
-                oder älterer Lauf; aufgerufen wird das Dashboard-Modell.
+                oder älterer Lauf; Aufrufe über das Dashboard nutzen das Dashboard-Modell.
               </p>
             )}
             <p className="text-[10px] text-text-muted mt-2">Preisquelle: {PREIS_QUELLE}.</p>

@@ -1239,6 +1239,15 @@ test("TOR-F8 Kachel Freigegeben: nur Einträge mit Vermerk → kein Altbestand-T
   const mit = baueSimulation({ suche: "tab=content", zeilen: [zeile(21, { status: "freigegeben", extra: { freigabe: VERMERK } })] });
   const kachel = text(finde(await mit.start(), (k) => k.props?.["data-kpi"] === "Freigegeben")[0]);
   assert.equal(kachel, "Freigegeben: 1 · 1 bereit zum Posten (mit Betreiber-Vermerk) · in den letzten 50");
+  // Nachprüfung K7: Ein geposteter Eintrag behält metadata.freigabe (die Status-Route schreibt beim
+  // Posten einen eigenen Vermerk metadata.gepostet) — er ist nicht mehr "bereit zum Posten".
+  const gepostet = zeile(23, {
+    status: "gepostet",
+    extra: { freigabe: VERMERK, gepostet: { aktion: "gepostet", am: "2026-11-06T09:00:00Z", durch: "betreiber-session", published_url: "https://x.example/p/23" } },
+  });
+  const mitGepostet = baueSimulation({ suche: "tab=content", zeilen: [zeile(21, { status: "freigegeben", extra: { freigabe: VERMERK } }), gepostet] });
+  const k4 = text(finde(await mitGepostet.start(), (k) => k.props?.["data-kpi"] === "Freigegeben")[0]);
+  assert.equal(k4, "Freigegeben: 1 · 1 bereit zum Posten (mit Betreiber-Vermerk) · in den letzten 50");
   // Ein abgelehnter Vermerk (aktion ablehnen) ist kein Freigabe-Vermerk.
   const falsch = baueSimulation({ suche: "tab=content", zeilen: [zeile(22, { status: "freigegeben", extra: { freigabe: { aktion: "ablehnen" } } })] });
   const k2 = text(finde(await falsch.start(), (k) => k.props?.["data-kpi"] === "Freigegeben")[0]);
