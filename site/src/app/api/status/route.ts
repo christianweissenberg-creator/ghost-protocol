@@ -314,14 +314,29 @@ async function messeKosten(sb: () => ServiceClient, jetzt: Date) {
 // eingetragen_am (DB-Uhr) für den Uhrenabgleich der Zeile (Prüfbefunde Z2, SR-5).
 const NACHWEIS_SPALTEN = "job, begonnen_am, beendet_am, eingetragen_am, ergebnis, http_status, teilergebnisse, hinweis";
 
-// Je Plan-Job zwei Zeilen (order begonnen_am desc, limit 1; Index idx_lauf_nachweis_job_beginn in
-// scripts/lauf_nachweis.sql): die jüngste und die jüngste mit einem Ergebnis außer uebersprungen.
-// Prüfbefund Z5: Mit nur der jüngsten machte ein späterer übersprungener Lauf ein früheres
-// Ergebnis zum selben Sollzeitpunkt unsichtbar. Alle Abfragen mit demselben Zeitlimit wie die
-// übrigen Messungen. Probe-Zeilen (content-auto-produce-probe) stehen in keinem Plan und werden gar
-// nicht gelesen. Ein Lesefehler — auch eine fehlende Tabelle, solange das SQL nicht ausgeführt ist,
-// oder ein fehlender Service-Schlüssel — geht als lesefehler an bewerteTotmann: Sind alle Jobs aus,
-// bleibt die Zeile bernstein mit Hinweis; ist einer aktiv, wird sie rot.
+// Je Plan-Job die zuletzt eingetragene Zeile (order eingetragen_am desc, id desc, limit 1; Index
+// idx_lauf_nachweis_job_eingetragen in scripts/lauf_nachweis.sql) und — nur für aktive Jobs — die
+// zuletzt eingetragene mit einem Ergebnis außer uebersprungen.
+// - Prüfbefund D1 (zweite Prüfung): geordnet nach der DB-Uhr (eingetragen_am), bei Gleichstand nach
+//   id, nicht mehr nach begonnen_am (App-Uhr). Eine Zeile aus einer vorgelaufenen App-Uhr blieb sonst
+//   bis zu ihrem Datum "die jüngste", und neuere plausible Läufe wurden nie gelesen: bei einem aktiven
+//   Job rot "unplausibel" bis zu diesem Datum, bei einem abgeschalteten ein Stolperdraht, der sich nur
+//   mit einer Quittung in die Zukunft beenden ließ und danach blind war. Abweichung von §2.2 Punkt 4
+//   (order begonnen_am) und vom Index in §5.5 (b).
+// - Prüfbefund Z5: Mit nur der jüngsten machte ein späterer übersprungener Lauf ein früheres
+//   Ergebnis zum selben Sollzeitpunkt unsichtbar — daher die zweite Abfrage.
+// - Prüfbefund betrieb-1: Die zweite Abfrage braucht nur ein aktiver Job (Urteil über das Ergebnis);
+//   bei einem abgeschalteten entscheidet allein, ob nach aus_seit etwas lief (Stolperdraht), und das
+//   zeigt die zuletzt eingetragene Zeile — lief danach etwas, ist sie von danach (bis auf Läufe, die
+//   sich am Stichtag überlappen). Gewollt in Kauf genommen: Eine ältere unlesbare Zeile eines
+//   abgeschalteten Jobs wird nicht mehr gelesen, die Lage heißt dann "aus" statt "nicht lesbar"
+//   (beides bernstein); ein Laufergebnis, das sie verfälschen könnte, hat ein abgeschalteter Job
+//   nicht. Beim heutigen Plan (alle aus) sind es 3 statt 6 Abfragen je Abruf.
+// Alle Abfragen mit demselben Zeitlimit wie die übrigen Messungen. Probe-Zeilen
+// (content-auto-produce-probe) stehen in keinem Plan und werden gar nicht gelesen. Ein Lesefehler —
+// auch eine fehlende Tabelle, solange das SQL nicht ausgeführt ist, oder ein fehlender
+// Service-Schlüssel — geht als lesefehler an bewerteTotmann: Sind alle Jobs aus, bleibt die Zeile
+// bernstein mit Hinweis; ist einer aktiv, wird sie rot.
 async function messeCrons(sb: () => ServiceClient, jetzt: Date): Promise<Messwert<CronsWert>> {
   const zeilen: unknown[] = [];
   let lesefehler: string | null = null;
@@ -329,13 +344,18 @@ async function messeCrons(sb: () => ServiceClient, jetzt: Date): Promise<Messwer
   try {
     const client = sb();
     const signal = zeitlimit();
-    const juengste = (job: string) =>
-      client.from(NACHWEIS_TABELLE).select(NACHWEIS_SPALTEN).eq("job", job);
+    const zuletztEingetragen = (job: string, ohneUebersprungen: boolean) => {
+      const abfrage = client.from(NACHWEIS_TABELLE).select(NACHWEIS_SPALTEN).eq("job", job);
+      return (ohneUebersprungen ? abfrage.neq("ergebnis", "uebersprungen") : abfrage)
+        .order("eingetragen_am", { ascending: false })
+        .order("id", { ascending: false })
+        .limit(1)
+        .abortSignal(signal);
+    };
     const antworten = await Promise.all(
-      TOTMANN_PLAN.flatMap((j) => [
-        juengste(j.job).order("begonnen_am", { ascending: false }).limit(1).abortSignal(signal),
-        juengste(j.job).neq("ergebnis", "uebersprungen").order("begonnen_am", { ascending: false }).limit(1).abortSignal(signal),
-      ])
+      TOTMANN_PLAN.flatMap((j) =>
+        j.aktiv ? [zuletztEingetragen(j.job, false), zuletztEingetragen(j.job, true)] : [zuletztEingetragen(j.job, false)]
+      )
     );
     for (const res of antworten) {
       pruefeAntwort(res);

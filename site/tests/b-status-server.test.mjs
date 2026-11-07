@@ -885,10 +885,9 @@ test("Totmann §2.3: aktiv, S liegt vor aktiv_seit → nicht gemessen ('erster S
   assert.equal(j.aktiv_seit, AKTIV_AB);
   // Ab Mo 09.11. 10:03 Berlin liegt S nach aktiv_seit: dann wird geurteilt.
   assert.equal(bewerteJob(aktiv(MORGEN), [], MO_1004).lage, "ueberfaellig");
-  // Ohne Wochentage gibt es keinen Sollzeitpunkt.
-  const nie = bewerteJob({ ...aktiv(MORGEN), wochentage: [] }, [], MO_1004);
-  assert.equal(nie.sollzeitpunkt, null);
-  assert.equal(nie.status, "nicht_gemessen");
+  // Ohne Wochentage gäbe es nie einen Sollzeitpunkt: für einen aktiven Job ein Planfehler (Prüfbefund
+  // logik-3, Test unten); ein abgeschalteter hat ohnehin keinen.
+  assert.equal(letzterSollzeitpunkt({ ...MORGEN, wochentage: [] }, MO_1004), null);
 });
 
 test("Totmann (Prüfbefund Z1): Messbeginn je Job — eine Aktivierung mitten am Tag ist erst 'nicht gemessen', nicht sofort rot", () => {
@@ -1189,6 +1188,182 @@ test("Totmann §2.6 (M05b): aktiv entscheidet, nicht aus_seit — aktiviert mit 
     ],
   );
   assert.equal(b.hinweis, "Briefing abends, Content Auto-Produce laut Plan aus seit 30.07.2026");
+});
+
+// ── Totmann: zweite Prüfung des Branches (Befunde logik-1 bis logik-4, anzeige-2) ──
+// Je Befund ein Test, im Namen genannt; jeder ist gegen den Stand vor der Behebung (6388eb0) rot.
+
+/** auto-produce aktiv seit Mo 09.11.2026 00:00 Berlin (wie die Proben der Prüfung). */
+const AUTO_SEIT_MO = aktiv(AUTO, "2026-11-09T00:00:00+01:00");
+
+test("Totmann (Prüfbefund logik-1): ein übersprungener Lauf an einem Tag ohne Sollzeitpunkt deckt keinen — Fr verpasst, Sa übersprungen → rot seit Fr", () => {
+  // Letzter echter Lauf Do 12.11. 09:07 ok; Fr 13.11. fehlt; Sa 14.11. 11:30 ein manueller Lauf ohne
+  // ?dry: "skipped, Wochenende" (api/content/auto-produce/route.ts). Vorher stand der Job dann von
+  // Samstag bis Mo 11:07 auf grün "übersprungen" — ein gescheiterter Freitag blieb rot (Z5).
+  const doOk = lauf(JOB_AUTO_PRODUCE, "2026-11-12T08:07:00Z");
+  const saSkip = lauf(JOB_AUTO_PRODUCE, "2026-11-14T10:30:00Z", "uebersprungen", { hinweis: "status skipped · Wochenende — kein Content geplant" });
+  const sa = bewerteJob(AUTO_SEIT_MO, [doOk, saSkip], new Date("2026-11-14T12:00:00Z"));
+  assert.deepEqual([sa.lage, sa.status], ["ueberfaellig", "fehler"]);
+  assert.equal(sa.sollzeitpunkt_berlin, "Fr 13.11. 09:07");
+  assert.equal(sa.ueberfaellig_seit_berlin, "Fr 13.11. 09:07");
+  assert.equal(sa.letzter_lauf.begonnen_am, saSkip.begonnen_am, "der Samstagslauf bleibt als letzter Lauf sichtbar");
+  // Fällt auch der Montag aus: überfällig seit Freitag — der Samstagslauf hebt die Untergrenze nicht an.
+  const mo = bewerteJob(AUTO_SEIT_MO, [doOk, saSkip], new Date("2026-11-16T11:00:00Z"));
+  assert.equal(mo.lage, "ueberfaellig");
+  assert.equal(mo.ueberfaellig_seit_berlin, "Fr 13.11. 09:07");
+  // Gegenprobe ohne den Samstagslauf: dasselbe Urteil.
+  assert.equal(bewerteJob(AUTO_SEIT_MO, [doOk], new Date("2026-11-14T12:00:00Z")).ueberfaellig_seit_berlin, "Fr 13.11. 09:07");
+  // Die Lebenszeichen-Regel bleibt: Mo 09:07 übersprungen ("kein Kalendereintrag", ein Plan-Wochentag)
+  // deckt den verpassten Freitag (Mo 10:00 Berlin, S = Fr 09:07).
+  const moSkip = lauf(JOB_AUTO_PRODUCE, "2026-11-16T08:07:00Z", "uebersprungen", { hinweis: "status skipped · kein Kalendereintrag" });
+  const gedeckt = bewerteJob(AUTO_SEIT_MO, [doOk, moSkip], new Date("2026-11-16T09:00:00Z"));
+  assert.equal(gedeckt.sollzeitpunkt_berlin, "Fr 13.11. 09:07");
+  assert.deepEqual([gedeckt.lage, gedeckt.status], ["ok", "ok"]);
+  assert.equal(gedeckt.bewerteter_lauf.begonnen_am, moSkip.begonnen_am);
+  // Folgt auf den deckenden Freitagslauf ("kein Kalendereintrag") ein Samstagslauf, bleibt der Freitag
+  // der bewertete Lauf; der Samstag ist nur der letzte.
+  const frSkip = lauf(JOB_AUTO_PRODUCE, "2026-11-20T08:07:00Z", "uebersprungen", { hinweis: "status skipped · kein Kalendereintrag" });
+  const saSkip2 = lauf(JOB_AUTO_PRODUCE, "2026-11-21T10:30:00Z", "uebersprungen", { hinweis: "status skipped · Wochenende — kein Content geplant" });
+  const frGedeckt = bewerteJob(AUTO_SEIT_MO, [frSkip, saSkip2], new Date("2026-11-21T11:00:00Z"));
+  assert.deepEqual([frGedeckt.lage, frGedeckt.letzter_lauf.begonnen_am, frGedeckt.bewerteter_lauf.begonnen_am], ["ok", saSkip2.begonnen_am, frSkip.begonnen_am]);
+  // Der Wochentag zählt in der Zone des Plans: So 15.11. 23:30 UTC ist in Europe/Berlin Mo 00:30.
+  const doMorgen = lauf(JOB_BRIEFING_MORGEN, "2026-11-12T08:03:05Z");
+  const nachtSkip = lauf(JOB_BRIEFING_MORGEN, "2026-11-15T23:30:00Z", "uebersprungen");
+  const frueh = new Date("2026-11-16T05:00:00Z"); // S = Fr 13.11. 08:03 in beiden Zonen
+  const utc = bewerteJob({ ...aktiv(MORGEN, "2026-11-09T00:00:00+01:00"), zeitzone: "UTC" }, [doMorgen, nachtSkip], frueh);
+  assert.equal(utc.lage, "ueberfaellig", "Plan in UTC: Sonntag, deckt nicht");
+  assert.equal(bewerteJob(aktiv(MORGEN, "2026-11-09T00:00:00+01:00"), [doMorgen, nachtSkip], frueh).lage, "ok", "Plan in Europe/Berlin: Montag, deckt");
+});
+
+test("Totmann (Prüfbefund logik-4): Lesbarkeit und Plausibilität nur für die Zeilen, die das Urteil tragen", () => {
+  // Fr 13.11. 09:07 ok, aber die DB trug die Zeile 16 min nach beendet_am ein; danach Mo 16.11. 09:07
+  // übersprungen ("kein Kalendereintrag", z. B. eine geleerte Kalenderwoche). Mo 12:00 Berlin: S = Mo
+  // 09:07, gedeckt vom Montag. Vorher hielt die alte Zeile den Job rot "Zeitpunkt unplausibel".
+  const frSchief = lauf(JOB_AUTO_PRODUCE, "2026-11-13T08:07:00Z", "ok", { eingetragen_am: "2026-11-13T08:24:00Z" });
+  const moSkip = lauf(JOB_AUTO_PRODUCE, "2026-11-16T08:07:00Z", "uebersprungen", { hinweis: "status skipped · kein Kalendereintrag" });
+  const moMittag = new Date("2026-11-16T11:00:00Z");
+  const mo = bewerteJob(AUTO_SEIT_MO, [moSkip, frSchief], moMittag);
+  assert.deepEqual([mo.lage, mo.status], ["ok", "ok"]);
+  // Eine ganze Woche nur übersprungene Läufe: weiter grün (Fr 20.11. 12:00 Berlin).
+  const frSkip = lauf(JOB_AUTO_PRODUCE, "2026-11-20T08:07:00Z", "uebersprungen");
+  assert.equal(bewerteJob(AUTO_SEIT_MO, [frSkip, frSchief], new Date("2026-11-20T11:00:00Z")).lage, "ok");
+  // Ebenso eine ältere unlesbare Zeile außerhalb des Fensters (vorher "nicht lesbar", rot).
+  const b = bewerteTotmann([MORGEN, ABEND, AUTO_SEIT_MO], [moSkip, { ...frSchief, http_status: 0 }], moMittag, null, NACHWEIS_SEIT);
+  assert.equal(b.wert.jobs[2].lage, "ok");
+  assert.match(b.hinweis, /Zeile in lauf_nachweis unlesbar \(content-auto-produce\)/, "der Hinweis bleibt");
+  // Gegenproben — trägt die Zeile das Urteil, bleibt es rot: die jüngste (auch ein Samstagslauf, der
+  // nichts deckt) …
+  const juengsteSchief = { ...moSkip, eingetragen_am: "2026-11-16T08:30:00Z" };
+  assert.equal(bewerteJob(AUTO_SEIT_MO, [juengsteSchief, frSchief], moMittag).lage, "zeit_unplausibel");
+  const frOk = lauf(JOB_AUTO_PRODUCE, "2026-11-20T08:07:00Z");
+  const saSchief = lauf(JOB_AUTO_PRODUCE, "2026-11-21T10:30:00Z", "uebersprungen", { eingetragen_am: "2026-11-21T10:56:00Z" });
+  assert.equal(bewerteJob(AUTO_SEIT_MO, [saSchief, frOk], new Date("2026-11-21T11:00:00Z")).lage, "zeit_unplausibel");
+  // … eine nicht übersprungene im Fenster …
+  const moOkSchief = lauf(JOB_AUTO_PRODUCE, "2026-11-16T08:07:00Z", "ok", { eingetragen_am: "2026-11-16T08:30:00Z" });
+  const moSkipSpaet = lauf(JOB_AUTO_PRODUCE, "2026-11-16T09:30:00Z", "uebersprungen");
+  assert.equal(bewerteJob(AUTO_SEIT_MO, [moSkipSpaet, moOkSchief], moMittag).lage, "zeit_unplausibel");
+  // … die deckende im Fenster, auch wenn ein späterer Samstagslauf die jüngste ist …
+  const frSkipSchief = lauf(JOB_AUTO_PRODUCE, "2026-11-20T08:07:00Z", "uebersprungen", { eingetragen_am: "2026-11-20T08:30:00Z" });
+  const saSkip = lauf(JOB_AUTO_PRODUCE, "2026-11-21T10:30:00Z", "uebersprungen");
+  assert.equal(bewerteJob(AUTO_SEIT_MO, [saSkip, frSkipSchief], new Date("2026-11-21T11:00:00Z")).lage, "zeit_unplausibel");
+  // … eine unlesbare Zeile, die die jüngste sein kann (im Fenster oder ohne lesbaren Beginn).
+  const kaputtNeu = { ...lauf(JOB_AUTO_PRODUCE, "2026-11-16T08:30:00Z"), http_status: 0 };
+  assert.equal(bewerteTotmann([MORGEN, ABEND, AUTO_SEIT_MO], [moSkip, kaputtNeu], moMittag, null, NACHWEIS_SEIT).wert.jobs[2].lage, "nicht_lesbar");
+  const ohneBeginn = { ...frSchief, begonnen_am: "gestern" };
+  assert.equal(bewerteTotmann([MORGEN, ABEND, AUTO_SEIT_MO], [moSkip, ohneBeginn], moMittag, null, NACHWEIS_SEIT).wert.jobs[2].lage, "nicht_lesbar");
+});
+
+test("Totmann (Prüfbefund logik-2): Quittung oder aus_seit in der Zukunft → Planfehler; unplausible Zeile eines abgeschalteten Jobs → Stolperdraht nach eingetragen_am", () => {
+  const mit = (aenderung) => TOTMANN_PLAN.map((j) => (j.job === JOB_BRIEFING_ABEND ? { ...j, ...aenderung } : j));
+  const jetzt = new Date("2026-11-24T20:00:00Z"); // Di 21:00 Berlin
+  // (a) Vorher still angenommen: Die Zeile blieb bernstein "aus", der Stolperdraht war blind.
+  assert.throws(
+    () => bewerteTotmann(mit({ stolperdraht_quittiert_bis: "2062-11-20T00:00:00+01:00" }), [], jetzt, null, NACHWEIS_SEIT),
+    /Plan briefing-abend: stolperdraht_quittiert_bis liegt nach der Messzeit/,
+  );
+  // Grenze: dieselbe geduldete Uhrenabweichung wie für Zeilen (UHR_TOLERANZ_MS).
+  const bis = (ms) => new Date(jetzt.getTime() + ms).toISOString();
+  assert.doesNotThrow(() => bewerteTotmann(mit({ stolperdraht_quittiert_bis: bis(UHR_TOLERANZ_MS) }), [], jetzt, null, NACHWEIS_SEIT));
+  assert.throws(() => bewerteTotmann(mit({ stolperdraht_quittiert_bis: bis(UHR_TOLERANZ_MS + 1) }), [], jetzt, null, NACHWEIS_SEIT), /liegt nach der Messzeit/);
+  assert.throws(() => bewerteTotmann(mit({ aus_seit: "2062-07-30" }), [], jetzt, null, NACHWEIS_SEIT), /Plan briefing-abend: aus_seit liegt nach dem heutigen Tag/);
+  // Heute zählt in Europe/Berlin: 24.11. 23:30 UTC ist dort schon der 25.11.
+  const nacht = new Date("2026-11-24T23:30:00Z");
+  assert.doesNotThrow(() => bewerteTotmann(mit({ aus_seit: "2026-11-25" }), [], nacht, null, NACHWEIS_SEIT));
+  assert.throws(() => bewerteTotmann(mit({ aus_seit: "2026-11-26" }), [], nacht, null, NACHWEIS_SEIT), /aus_seit liegt nach dem heutigen Tag/);
+  // Auch wenn lauf_nachweis nicht lesbar ist.
+  assert.throws(() => bewerteTotmann(mit({ aus_seit: "2062-07-30" }), [], jetzt, "relation does not exist", NACHWEIS_SEIT), /aus_seit liegt nach dem heutigen Tag/);
+
+  // (b) Abgeschalteter Job, App-Uhr ein Jahr voraus, DB-Uhr richtig: Stolperdraht nach eingetragen_am.
+  const zukunft = lauf(JOB_BRIEFING_ABEND, "2027-11-24T17:03:00Z", "ok", { eingetragen_am: "2026-11-24T17:04:01Z" });
+  const b = bewerteTotmann(TOTMANN_PLAN, [zukunft], jetzt, null, NACHWEIS_SEIT);
+  const j = b.wert.jobs[1];
+  assert.deepEqual([j.lage, j.status, b.status], ["laeuft_obwohl_aus", "fehler", "fehler"], "rot bleibt rot");
+  assert.equal(j.stolperdraht_am, "2026-11-24T17:04:01.000Z", "Zeitpunkt nach der DB-Uhr, nicht 24.11.2027");
+  assert.equal(j.stolperdraht_am_berlin, "24.11.2026 18:04");
+  assert.equal(j.stolperdraht_spalte, "eingetragen_am");
+  assert.equal(
+    j.hinweis,
+    "Zeitstempel des Laufs unplausibel, eingetragen am 24.11.2026 18:04 (DB-Uhr; begonnen_am 24.11.2027 18:03 liegt mehr als 10 min nach der Messzeit)",
+  );
+  // Eine Quittung bis jetzt reicht — vorher erst eine über den 24.11.2027 hinaus, die den Stolperdraht
+  // bis dahin blind machte.
+  const quittiert = mit({ stolperdraht_quittiert_bis: "2026-11-24T21:00:00+01:00" });
+  assert.equal(bewerteTotmann(quittiert, [zukunft], jetzt, null, NACHWEIS_SEIT).wert.jobs[1].lage, "aus");
+  // Ein späterer echter Lauf löst wieder aus, mit seinem Beginn.
+  const echt = lauf(JOB_BRIEFING_ABEND, "2026-12-01T17:03:00Z");
+  const wieder = bewerteTotmann(quittiert, [zukunft, echt], new Date("2026-12-01T20:00:00Z"), null, NACHWEIS_SEIT).wert.jobs[1];
+  assert.deepEqual([wieder.lage, wieder.stolperdraht_am_berlin, wieder.stolperdraht_spalte], ["laeuft_obwohl_aus", "01.12.2026 18:03", "begonnen_am"]);
+  assert.equal(wieder.hinweis, null);
+  // App- gegen DB-Uhr verschoben (26 min): ebenso nach eingetragen_am.
+  const schief = lauf(JOB_BRIEFING_ABEND, "2026-11-24T17:03:00Z", "ok", { eingetragen_am: "2026-11-24T17:30:00Z" });
+  const s = bewerteTotmann(TOTMANN_PLAN, [schief], jetzt, null, NACHWEIS_SEIT).wert.jobs[1];
+  assert.equal(s.stolperdraht_am_berlin, "24.11.2026 18:30");
+  assert.match(s.hinweis, /^Zeitstempel des Laufs unplausibel, eingetragen am 24\.11\.2026 18:30 \(DB-Uhr; App-Uhr \(beendet_am\) und DB-Uhr \(eingetragen_am\) weichen um mehr als 10 min ab\)$/);
+  // Teils unlesbare Zeile mit Zukunftsbeginn: dieselbe Regel, beide Hinweise.
+  const teils = bewerteTotmann(TOTMANN_PLAN, [{ ...zukunft, http_status: 0 }], jetzt, null, NACHWEIS_SEIT).wert.jobs[1];
+  assert.deepEqual([teils.lage, teils.stolperdraht_am_berlin, teils.stolperdraht_spalte], ["laeuft_obwohl_aus", "24.11.2026 18:04", "eingetragen_am"]);
+  assert.match(teils.hinweis, /^Zeitstempel des Laufs unplausibel, eingetragen am 24\.11\.2026 18:04 .* · eine Zeile in lauf_nachweis ist teilweise unlesbar$/);
+});
+
+test("Totmann (Prüfbefund logik-3): Planfehler — aktiv ohne Wochentage, aktiv_seit mehr als 31 Tage voraus, ungültiger Kalendertag; keine Mindest-Karenz", () => {
+  // Vorher: ohne Wochentage für immer "erster Sollzeitpunkt steht aus", nie rot.
+  assert.throws(() => bewerteJob({ ...aktiv(MORGEN), wochentage: [] }, [], MO_1004), /Plan briefing-morgen: aktiv ohne Wochentage/);
+  assert.throws(() => bewerteTotmann([{ ...aktiv(MORGEN), wochentage: [] }, ABEND, AUTO], [], MO_1004, null, NACHWEIS_SEIT), /aktiv ohne Wochentage/);
+  // Tippfehler im Jahr: vorher bis 2062 "erster Sollzeitpunkt steht aus". Setzung: höchstens 31 Tage voraus.
+  assert.throws(() => bewerteJob(aktiv(MORGEN, "2062-11-09T00:00:00+01:00"), [], MO_1004), /aktiv_seit liegt mehr als 31 Tage nach der Messzeit/);
+  const TAGE_31 = 31 * 24 * 3_600_000;
+  const vorgeplant = bewerteJob(aktiv(MORGEN, new Date(MO_1004.getTime() + TAGE_31).toISOString()), [], MO_1004);
+  assert.equal(vorgeplant.lage, "erster_sollzeitpunkt_steht_aus", "genau 31 Tage voraus: erlaubt");
+  assert.throws(() => bewerteJob(aktiv(MORGEN, new Date(MO_1004.getTime() + TAGE_31 + 1).toISOString()), [], MO_1004), /mehr als 31 Tage/);
+  // Kalendertag und Uhrzeit streng: Date.parse machte aus dem 31.11. den 01.12. und nahm 24:00 an.
+  for (const falsch of ["2026-11-31T00:00:00+01:00", "2027-02-29T00:00:00+01:00", "2026-11-30T24:00:00+01:00", "2026-11-09T08:60:00+01:00", "2026-11-09T08:03:00+24:00"]) {
+    assert.throws(() => bewerteJob(aktiv(MORGEN, falsch), [], MO_1004), /aktiv_seit unlesbar/, falsch);
+    assert.throws(() => bewerteJob({ ...MORGEN, stolperdraht_quittiert_bis: falsch }, [], MO_1004), /stolperdraht_quittiert_bis unlesbar/, falsch);
+  }
+  // Gegenprobe: der 29.02. eines Schaltjahrs ist ein Tag.
+  const schaltjahr = new Date("2028-02-20T12:00:00Z");
+  assert.equal(bewerteJob(aktiv(MORGEN, "2028-02-29T00:00:00+01:00"), [], schaltjahr).lage, "erster_sollzeitpunkt_steht_aus");
+  assert.equal(bewerteJob({ ...MORGEN, stolperdraht_quittiert_bis: "2028-02-29T00:00:00+01:00" }, [], new Date("2028-03-01T12:00:00Z")).lage, "aus");
+  // Bewusst keine Mindest-Karenz: Karenz 0 heißt "rot, bis der Lauf fertig ist" (Zeile erst im finally).
+  const ohneKarenz = bewerteJob({ ...aktiv(MORGEN), karenz_h: 0 }, [], new Date("2026-11-09T07:04:00Z"));
+  assert.deepEqual([ohneKarenz.lage, ohneKarenz.sollzeitpunkt_berlin], ["ueberfaellig", "Mo 09.11. 08:03"]);
+});
+
+test("Totmann (Prüfbefund anzeige-2): 'erster Sollzeitpunkt steht aus' nennt den ersten zählenden Sollzeitpunkt und den Urteilszeitpunkt", () => {
+  // Aktiv seit Mo 16.11. 00:00, jetzt Mo 07:00 Berlin: Der jüngste S (Fr 13.11.) liegt davor und zählt nicht.
+  const j = bewerteJob(aktiv(MORGEN, "2026-11-16T00:00:00+01:00"), [], new Date("2026-11-16T06:00:00Z"));
+  assert.equal(j.lage, "erster_sollzeitpunkt_steht_aus");
+  assert.equal(j.sollzeitpunkt_berlin, "Fr 13.11. 08:03");
+  assert.equal(j.erster_sollzeitpunkt, "2026-11-16T07:03:00.000Z");
+  assert.equal(j.erster_sollzeitpunkt_berlin, "Mo 16.11. 08:03");
+  assert.equal(j.urteil_ab, "2026-11-16T09:03:00.000Z", "S + Karenz 2 h");
+  assert.equal(j.urteil_ab_berlin, "Mo 16.11. 10:03");
+  // Aktiviert nach dem heutigen Sollzeitpunkt: der erste zählende ist am nächsten Plan-Wochentag.
+  const spaeter = bewerteJob(aktiv(MORGEN, "2026-11-16T09:00:00+01:00"), [], new Date("2026-11-16T08:30:00Z"));
+  assert.deepEqual([spaeter.erster_sollzeitpunkt_berlin, spaeter.urteil_ab_berlin], ["Di 17.11. 08:03", "Di 17.11. 10:03"]);
+  // Andere Lagen tragen keinen.
+  assert.equal(bewerteJob(aktiv(MORGEN), [], MO_1004).erster_sollzeitpunkt, null);
+  assert.equal(bewerteJob(MORGEN, [], MO_1004).urteil_ab, null);
 });
 
 // ── Totmann: Ableitung der Schreiber (§2.2 Punkt 2) ──

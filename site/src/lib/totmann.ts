@@ -47,7 +47,11 @@ export interface TotmannJob {
   /** Kennung in lauf_nachweis.job (CHECK ^[a-z0-9-]{1,40}$). */
   job: string;
   bezeichnung: string;
-  /** Wochentage wie crontab und Date.getDay(): 0 = So, 1 = Mo … 6 = Sa. */
+  /**
+   * Wochentage wie crontab und Date.getDay(): 0 = So, 1 = Mo … 6 = Sa. Bei aktiv nicht leer (sonst nie ein
+   * Sollzeitpunkt). Ein übersprungener Lauf deckt einen Sollzeitpunkt nur, wenn er an einem dieser Tage
+   * begann (Prüfbefund logik-1).
+   */
   wochentage: readonly number[];
   /** Ortszeit HH:MM in zeitzone. */
   uhrzeit: string;
@@ -65,16 +69,19 @@ export interface TotmannJob {
   /**
    * Pflicht, wenn aktiv true ist: ISO-Zeitpunkt mit Zeitzone (z. B. "2027-01-18T00:00:00+01:00"), ab
    * dem der Crontab den Job ausführt — gesetzt im Aktivierungs-PR (§2.6), frühestens zu dessen
-   * Deploy. Sollzeitpunkte davor heißen "erster Sollzeitpunkt steht aus" (nicht gemessen).
+   * Deploy. Sollzeitpunkte davor heißen "erster Sollzeitpunkt steht aus" (nicht gemessen). Höchstens
+   * 31 Tage nach der Messzeit, sonst Planfehler (Prüfbefund logik-3, gegen Tippfehler im Jahr).
    */
   aktiv_seit: string | null;
-  /** JJJJ-MM-TT; gesetzt, wenn aktiv false ist. */
+  /** JJJJ-MM-TT; gesetzt, wenn aktiv false ist; nicht nach heute (Europe/Berlin, Prüfbefund logik-2). */
   aus_seit: string | null;
   /**
    * Nur bei aktiv false: ISO-Zeitpunkt mit Zeitzone, bis zu dem der Stolperdraht quittiert ist — ein
    * Lauf, der bis dahin begann, löst ihn nicht mehr aus (Prüfbefund Z6; die Tabelle nimmt nur Anhänge
    * an, eine Zeile lässt sich nicht zurücknehmen). Gesetzt im Code nach Klärung des Laufs, die
-   * Git-Historie ist die Quittung. null = nichts quittiert.
+   * Git-Historie ist die Quittung. null = nichts quittiert. Nie in der Zukunft (mehr als 10 min nach
+   * der Messzeit ist ein Planfehler, Prüfbefund logik-2); ist die Zeit einer Zeile unplausibel, zählt
+   * ihr eingetragen_am (DB-Uhr) — dann reicht eine Quittung bis zur Klärung.
    */
   stolperdraht_quittiert_bis: string | null;
   grund: string | null;

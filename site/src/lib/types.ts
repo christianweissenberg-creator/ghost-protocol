@@ -262,7 +262,9 @@ const STATUS_FARBE: Record<MessStatus, string> = {
 };
 
 export function statusFarbe(status: MessStatus): string {
-  return STATUS_FARBE[status] ?? "var(--gp-ink-3)";
+  // Prüfbefund anzeige-5 (zweite Prüfung): Object.hasOwn statt Index — ein Status wie "toString"
+  // aus einer fremden Antwort ergab sonst die geerbte Funktion als Farbe.
+  return Object.hasOwn(STATUS_FARBE, status) ? STATUS_FARBE[status] : "var(--gp-ink-3)";
 }
 
 /** Klartext für ein Messfeld ohne Wert. */
@@ -287,8 +289,40 @@ export function messTitel(m: Messwert<unknown>, zusatz?: string): string {
 
 // ── Totmann: Zeile „Crons" im Systemzustand (Objekt-Studio Stufe 2, §2.4) ──
 // Der Server bewertet (bewerteTotmann in lib/status-server.ts), hier entsteht nur der Text — mit
-// vorZeit und datumZeit, Bezug ist der Messzeitpunkt erzeugt_am. Nie „kein Lauf seit 30.07.":
-// Die GitHub-Läufe bis 28.09.2026 haben nie einen Nachweis geschrieben (Spezifikation §2.4).
+// vorZeit, Bezug ist der Messzeitpunkt erzeugt_am. Nie „kein Lauf seit 30.07.": Die GitHub-Läufe
+// bis 28.09.2026 haben nie einen Nachweis geschrieben (Spezifikation §2.4).
+// Abweichung von §2.4 (datumZeit), Prüfbefund anzeige-4: Zeitpunkte im Tooltip stehen in
+// Europe/Berlin (berlinDatumZeit) mit Zonenangabe, wie die Texte des Servers in der Zeile. Mit
+// datumZeit (Zeitzone des Browsers) nannten Zeile und Tooltip für denselben Lauf verschiedene
+// Uhrzeiten, sobald der Browser nicht auf Europe/Berlin stand.
+
+let berlinZeitFormat: Intl.DateTimeFormat | null = null;
+
+/** "09.11.2026 08:03:05" in Europe/Berlin; null, wenn der Zeitpunkt fehlt oder unlesbar ist. */
+function berlinDatumZeit(iso: string | null | undefined): string | null {
+  if (!iso) return null;
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return null;
+  berlinZeitFormat ??= new Intl.DateTimeFormat("de-DE", {
+    timeZone: "Europe/Berlin",
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23",
+  });
+  const teil: Partial<Record<Intl.DateTimeFormatPartTypes, string>> = {};
+  for (const p of berlinZeitFormat.formatToParts(new Date(t))) teil[p.type] = p.value;
+  return `${teil.day}.${teil.month}.${teil.year} ${teil.hour}:${teil.minute}:${teil.second}`;
+}
+
+/** Zeitpunkt für den Tooltip: "09.11.2026 08:03:05 (Europe/Berlin)"; unlesbar → der Rohwert. */
+function berlinZeitText(iso: string | null | undefined): string {
+  const t = berlinDatumZeit(iso);
+  return t === null ? (iso ?? "unbekannt") : `${t} (Europe/Berlin)`;
+}
 
 /**
  * Dieselbe Folge wie STATUS_RANG in lib/status-server.ts (Server-Datei, hier nicht importierbar).
@@ -321,12 +355,20 @@ const ERGEBNIS_TEXT: Record<LaufErgebnis, string> = {
   uebersprungen: "übersprungen",
 };
 
+// Prüfbefund anzeige-5 (zweite Prüfung): Object.hasOwn statt "in" bzw. Index. Vorher griffen die
+// Rückfallregeln nicht für Namen aus Object.prototype: Ein Status "toString" ergab "0 von 3 Jobs:
+// undefined", ein Ergebnis "constructor" im Tooltip den Quelltext einer Funktion.
 function cronRang(status: unknown): number {
-  return typeof status === "string" && status in CRON_STATUS_RANG ? CRON_STATUS_RANG[status as MessStatus] : CRON_STATUS_RANG.fehler;
+  return typeof status === "string" && Object.hasOwn(CRON_STATUS_RANG, status) ? CRON_STATUS_RANG[status as MessStatus] : CRON_STATUS_RANG.fehler;
 }
 
 function lageVorrang(lage: unknown): number {
-  return typeof lage === "string" && lage in LAGE_VORRANG ? LAGE_VORRANG[lage as CronLage] : 0;
+  return typeof lage === "string" && Object.hasOwn(LAGE_VORRANG, lage) ? LAGE_VORRANG[lage as CronLage] : 0;
+}
+
+/** Ergebnis in Worten; ein unbekannter Wert erscheint, wie er ist. */
+function ergebnisText(ergebnis: string): string {
+  return Object.hasOwn(ERGEBNIS_TEXT, ergebnis) ? ERGEBNIS_TEXT[ergebnis as LaufErgebnis] : ergebnis;
 }
 
 function istSatz(x: unknown): x is Record<string, unknown> {
@@ -361,9 +403,14 @@ const CRON_TEXTFELDER = [
   "aktiv_seit",
   "aus_seit",
   "grund",
+  "sollzeitpunkt",
   "sollzeitpunkt_berlin",
+  "erster_sollzeitpunkt_berlin",
+  "urteil_ab_berlin",
   "ueberfaellig_seit_berlin",
   "stolperdraht_am_berlin",
+  "stolperdraht_spalte",
+  "stolperdraht_quittiert_bis_berlin",
   "hinweis",
 ] as const;
 
@@ -457,35 +504,75 @@ export function cronJobText(j: CronJobStand, bezugIso: string): string {
   }
 }
 
-/** Tooltip-Zeile eines gelesenen Laufs: Zeitpunkte, Ergebnis, HTTP-Status, Hinweis. */
+/** Tooltip-Zeile eines gelesenen Laufs: Zeitpunkte (Europe/Berlin), Ergebnis, HTTP-Status, Hinweis. */
 function laufZeile(titel: string, lauf: LaufNachweisLesung): string[] {
+  const beginn = berlinDatumZeit(lauf.begonnen_am);
   const teile = [
-    datumZeit(lauf.begonnen_am) ?? "Zeitpunkt unlesbar",
-    ERGEBNIS_TEXT[lauf.ergebnis] ?? lauf.ergebnis,
+    beginn === null ? "Zeitpunkt unlesbar" : `${beginn} (Europe/Berlin)`,
+    ergebnisText(lauf.ergebnis),
     lauf.http_status !== null && lauf.http_status !== undefined ? `HTTP ${lauf.http_status}` : "ohne HTTP-Status",
     lauf.hinweis,
-    lauf.eingetragen_am ? `eingetragen ${datumZeit(lauf.eingetragen_am) ?? "unlesbar"} (DB-Uhr)` : null,
+    lauf.eingetragen_am ? `eingetragen ${berlinDatumZeit(lauf.eingetragen_am) ?? "unlesbar"} (Europe/Berlin, DB-Uhr)` : null,
   ];
   const zeilen = [`  ${titel}: ${teile.filter(Boolean).join(" · ")}`];
   if (lauf.teilergebnisse.length > 0) {
-    const agenten = lauf.teilergebnisse.map(
-      (t) => `${t.agent} ${ERGEBNIS_TEXT[t.ergebnis] ?? t.ergebnis}${t.fehler ? ` (${t.fehler})` : ""}`,
-    );
+    const agenten = lauf.teilergebnisse.map((t) => `${t.agent} ${ergebnisText(t.ergebnis)}${t.fehler ? ` (${t.fehler})` : ""}`);
     zeilen.push(`  Agenten: ${agenten.join(" · ")}`);
   }
   return zeilen;
 }
 
-/** title-Zeilen eines Jobs: Plan mit Fundstelle, letzter Lauf mit Ergebnis, Teilergebnisse je Agent. */
-function cronJobTitel(j: CronJobStand, w: CronsWert): string[] {
-  const aktivText = j.aktiv_seit ? `aktiv seit ${datumZeit(j.aktiv_seit) ?? j.aktiv_seit}` : "aktiv";
+/** Liegt der gemeldete Sollzeitpunkt vor aktiv_seit? Dann zählt er nicht (Prüfbefund anzeige-2). */
+function sollVorAktivierung(j: CronJobStand): boolean {
+  if (!j.aktiv || !j.aktiv_seit || !j.sollzeitpunkt) return false;
+  const s = Date.parse(j.sollzeitpunkt);
+  const seit = Date.parse(j.aktiv_seit);
+  return Number.isFinite(s) && Number.isFinite(seit) && s < seit;
+}
+
+/** "Mo 16.11. 10:03" → "10:03", wenn der Tag derselbe ist wie in bezug ("Mo 16.11. 08:03"). */
+function ohneGleichenTag(text: string, bezug: string): string {
+  const tag = (t: string) => t.split(" ").slice(0, 2).join(" ");
+  return tag(text) === tag(bezug) ? text.split(" ").slice(2).join(" ") : text;
+}
+
+/**
+ * title-Zeilen eines Jobs: Plan-Setzung, Lage (wie die Zeile), Plan mit Fundstelle, Sollzeitpunkte,
+ * Stolperdraht und Quittung, letzter Lauf mit Ergebnis, Teilergebnisse je Agent. Zweite Prüfung:
+ * - anzeige-1: Der Stolperdraht nennt seinen Lauf immer; stammt er aus einer teilweise unlesbaren
+ *   Zeile, heißt es nicht mehr "keine Zeile in lauf_nachweis" (das widersprach der roten Zeile).
+ * - anzeige-2: Je Job die Lage; bei "erster Sollzeitpunkt steht aus" der erste zählende Sollzeitpunkt
+ *   mit dem Urteilszeitpunkt statt eines S vor aktiv_seit; aktiv_seit heißt "laut Plan" (Setzung des
+ *   Aktivierungs-PR, kein gemessener Zustand des VPS).
+ * - anzeige-3: Die Quittung des Stolperdrahts ist sichtbar.
+ * - anzeige-4: Zeitpunkte in Europe/Berlin mit Zonenangabe (Abweichung von §2.4, siehe oben).
+ */
+function cronJobTitel(j: CronJobStand, w: CronsWert, bezugIso: string): string[] {
+  const planAktiv = j.aktiv_seit ? `laut Plan aktiv seit ${berlinZeitText(j.aktiv_seit)}` : "laut Plan aktiv";
+  const lage = cronJobText(j, bezugIso);
   const zeilen = [
-    `${j.bezeichnung} (${j.job}): ${j.aktiv ? aktivText : `aus seit ${tagAnzeige(j.aus_seit)}${j.grund ? ` — ${j.grund}` : ""}`}`,
+    `${j.bezeichnung} (${j.job}): ${j.aktiv ? planAktiv : `aus seit ${tagAnzeige(j.aus_seit)}${j.grund ? ` — ${j.grund}` : ""}`}`,
+    `  Lage: ${lage}`,
     `  Plan: ${j.plan} · Fundstelle: ${j.fundstelle}`,
   ];
-  if (j.sollzeitpunkt_berlin) zeilen.push(`  Sollzeitpunkt: ${j.sollzeitpunkt_berlin} (Europe/Berlin)`);
+  if (j.sollzeitpunkt_berlin && !sollVorAktivierung(j)) zeilen.push(`  Sollzeitpunkt: ${j.sollzeitpunkt_berlin} (Europe/Berlin)`);
+  if (j.erster_sollzeitpunkt_berlin) {
+    const urteil = j.urteil_ab_berlin ? `, Urteil ab ${ohneGleichenTag(j.urteil_ab_berlin, j.erster_sollzeitpunkt_berlin)}` : "";
+    zeilen.push(`  Erster zählender Sollzeitpunkt: ${j.erster_sollzeitpunkt_berlin} (Europe/Berlin)${urteil}`);
+  }
   if (j.ueberfaellig_seit_berlin) zeilen.push(`  Überfällig seit: ${j.ueberfaellig_seit_berlin} (Europe/Berlin, erster verpasster Sollzeitpunkt)`);
-  if (j.hinweis) zeilen.push(`  Hinweis: ${j.hinweis}`);
+  if (j.lage === "laeuft_obwohl_aus" && j.stolperdraht_am_berlin) {
+    zeilen.push(
+      j.stolperdraht_spalte === "eingetragen_am"
+        ? `  Stolperdraht: Lauf eingetragen ${j.stolperdraht_am_berlin} (Europe/Berlin, DB-Uhr — Zeitstempel des Laufs unplausibel)`
+        : `  Stolperdraht: Lauf begonnen ${j.stolperdraht_am_berlin} (Europe/Berlin)`,
+    );
+  }
+  if (j.stolperdraht_quittiert_bis_berlin) {
+    zeilen.push(`  Stolperdraht quittiert bis ${j.stolperdraht_quittiert_bis_berlin} (Europe/Berlin, Plan lib/totmann.ts) — Läufe davor lösen nicht aus`);
+  }
+  // Steht der Hinweis schon in der Lage (Stolperdraht, unplausible Zeit), nicht zweimal.
+  if (j.hinweis && !lage.includes(j.hinweis)) zeilen.push(`  Hinweis: ${j.hinweis}`);
   const lauf = j.letzter_lauf;
   const bewertet = j.bewerteter_lauf ?? null;
   if (lauf) {
@@ -493,6 +580,12 @@ function cronJobTitel(j: CronJobStand, w: CronsWert): string[] {
     if (bewertet && (bewertet.begonnen_am !== lauf.begonnen_am || bewertet.ergebnis !== lauf.ergebnis)) {
       zeilen.push(...laufZeile("Bewertet (ein übersprungener Lauf überdeckt kein früheres Ergebnis)", bewertet));
     }
+  } else if (j.lage === "laeuft_obwohl_aus") {
+    // Prüfbefund anzeige-1: Der Stolperdraht kam aus einer Zeile, die nur teilweise lesbar ist.
+    const wann = j.stolperdraht_am_berlin
+      ? ` (${j.stolperdraht_spalte === "eingetragen_am" ? "eingetragen" : "begonnen"} ${j.stolperdraht_am_berlin}, Europe/Berlin)`
+      : "";
+    zeilen.push(`  Letzter Lauf: Zeile teilweise unlesbar${wann}`);
   } else if (j.lage === "nicht_lesbar" || w.lesefehler !== null) {
     zeilen.push("  Letzter Lauf: Nachweis nicht lesbar");
   } else if (!j.aktiv) {
@@ -504,7 +597,9 @@ function cronJobTitel(j: CronJobStand, w: CronsWert): string[] {
         : "  Letzter Lauf: keine Zeile in lauf_nachweis · seit wann die Tabelle besteht, ist nicht festgehalten · VPS-Crontab selbst nicht gemessen",
     );
   } else {
-    zeilen.push(`  Letzter Lauf: keiner in lauf_nachweis${j.aktiv_seit ? ` (Job aktiv seit ${datumZeit(j.aktiv_seit) ?? j.aktiv_seit})` : ""}`);
+    const seit = berlinDatumZeit(j.aktiv_seit);
+    const wann = j.aktiv_seit ? ` (laut Plan aktiv seit ${seit === null ? j.aktiv_seit : `${seit}, Europe/Berlin`})` : "";
+    zeilen.push(`  Letzter Lauf: keiner in lauf_nachweis${wann}`);
   }
   return zeilen;
 }
@@ -548,7 +643,7 @@ export function cronsAnzeige(m: Messwert<CronsWert>, bezugIso: string): CronsAnz
       text = `${schlecht[0].bezeichnung}: ${texte[0]} · +${schlecht.length - 1} weitere`;
     }
   }
-  const zusatz = jobs.flatMap((j) => cronJobTitel(j, w)).join("\n");
+  const zusatz = jobs.flatMap((j) => cronJobTitel(j, w, bezugIso)).join("\n");
   return { text, zusatz };
 }
 

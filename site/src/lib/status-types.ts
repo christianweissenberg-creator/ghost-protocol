@@ -91,8 +91,8 @@ export type CronLage =
   | "zeit_unplausibel"
   | "nicht_lesbar";
 
-// Felder nach dem 07.11.2026 (Prüfbefunde Z1, Z3, Z5, Z6) sind optional: Eine Antwort ohne sie
-// liest cronsAnzeige (lib/types.ts) wie bisher.
+// Felder nach dem 07.11.2026 (Prüfbefunde Z1, Z3, Z5, Z6; zweite Prüfung: logik-2, anzeige-2,
+// anzeige-3) sind optional: Eine Antwort ohne sie liest cronsAnzeige (lib/types.ts) wie bisher.
 export interface CronJobStand {
   job: string;
   bezeichnung: string;
@@ -112,20 +112,47 @@ export interface CronJobStand {
   sollzeitpunkt: string | null;
   /** S in Europe/Berlin, z. B. "Mo 09.11. 08:03" — der Browser kann in einer anderen Zeitzone stehen. */
   sollzeitpunkt_berlin: string | null;
+  /**
+   * Nur bei erster_sollzeitpunkt_steht_aus: der erste Sollzeitpunkt ab aktiv_seit, der zählt (ISO).
+   * Prüfbefund anzeige-2: Vorher nannte der Tooltip nur S vor aktiv_seit — der zählt nicht.
+   */
+  erster_sollzeitpunkt?: string | null;
+  /** erster_sollzeitpunkt in Europe/Berlin, z. B. "Mo 16.11. 08:03". */
+  erster_sollzeitpunkt_berlin?: string | null;
+  /** Ab hier wird geurteilt: erster_sollzeitpunkt + Karenz (ISO). */
+  urteil_ab?: string | null;
+  /** urteil_ab in Europe/Berlin, z. B. "Mo 16.11. 10:03". */
+  urteil_ab_berlin?: string | null;
   /** Nur bei ueberfaellig: erster verpasster Sollzeitpunkt nach dem letzten Lauf bzw. ab aktiv_seit (ISO). */
   ueberfaellig_seit?: string | null;
   /** ueberfaellig_seit in Europe/Berlin, z. B. "Di 17.11. 08:03". */
   ueberfaellig_seit_berlin?: string | null;
-  /** Nur bei laeuft_obwohl_aus: begonnen_am des jüngsten auslösenden Laufs (ISO). */
+  /**
+   * Nur bei laeuft_obwohl_aus: Zeitpunkt des jüngsten auslösenden Laufs (ISO) — sein begonnen_am, bei
+   * unplausibler Zeit der Zeile ihr eingetragen_am (DB-Uhr; Prüfbefund logik-2, siehe stolperdraht_spalte).
+   */
   stolperdraht_am?: string | null;
   /** stolperdraht_am in Europe/Berlin, z. B. "20.11.2026 18:03". */
   stolperdraht_am_berlin?: string | null;
-  /** Jüngste Zeile dieses Jobs in lauf_nachweis; null = keine Zeile oder nicht lesbar. */
+  /** Spalte, aus der stolperdraht_am stammt: begonnen_am (App-Uhr) oder eingetragen_am (DB-Uhr). */
+  stolperdraht_spalte?: "begonnen_am" | "eingetragen_am" | null;
+  /**
+   * Nur bei abgeschalteten Jobs: stolperdraht_quittiert_bis aus dem Plan (ISO) — Läufe bis dahin lösen
+   * den Stolperdraht nicht aus. Prüfbefund anzeige-3: Vorher war die Quittung in der Anzeige unsichtbar.
+   */
+  stolperdraht_quittiert_bis?: string | null;
+  /** stolperdraht_quittiert_bis in Europe/Berlin, z. B. "21.11.2026 00:00". */
+  stolperdraht_quittiert_bis_berlin?: string | null;
+  /**
+   * Jüngste gelesene Zeile dieses Jobs (nach begonnen_am; GET /api/status liest die zuletzt
+   * eingetragenen, Prüfbefund D1); null = keine Zeile oder nicht lesbar.
+   */
   letzter_lauf: LaufNachweisLesung | null;
   /**
    * Die Zeile, aus der ok, teilweise oder fehlgeschlagen folgt: der jüngste Lauf ab S − 10 min mit
-   * einem Ergebnis außer uebersprungen, sonst der übersprungene. Kann älter sein als letzter_lauf —
-   * ein übersprungener Lauf überdeckt kein früheres Ergebnis (Prüfbefund Z5). null sonst.
+   * einem Ergebnis außer uebersprungen, sonst der übersprungene, der S deckt (an einem Plan-Wochentag
+   * begonnen, Prüfbefund logik-1). Kann älter sein als letzter_lauf — ein übersprungener Lauf
+   * überdeckt kein früheres Ergebnis (Prüfbefund Z5). null sonst.
    */
   bewerteter_lauf?: LaufNachweisLesung | null;
   /** Begründung zur Lage, z. B. warum die Zeit unplausibel ist oder dass eine Zeile teilweise unlesbar ist. */

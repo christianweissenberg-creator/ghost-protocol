@@ -415,19 +415,22 @@ const CHECK_NACHBILDUNG = new Map([
 const vereinheitlicht = (c) => c.replace(/\s+/g, " ").trim();
 const SQL_DATEI = path.join(SITE, "..", "scripts", "lauf_nachweis.sql");
 
+/** Attrappe wie Postgres: Ein Insert in lauf_nachweis, der eine nachgebildete CHECK verletzt, scheitert (23514). */
+const checkStoerung = (dbUhr) => (a) => {
+  if (a.art !== "supabase" || a.tabelle !== "lauf_nachweis" || a.methode !== "POST") return null;
+  const z = { ...a.body, eingetragen_am: dbUhr };
+  const verletzt = [...CHECK_NACHBILDUNG].filter(([, gilt]) => !gilt(z)).map(([c]) => c);
+  return verletzt.length > 0 ? { status: 400, body: { code: "23514", message: `CHECK verletzt: ${verletzt.join(", ")}` } } : null;
+};
+
 test("T-R13 Zeile wird angenommen, wenn die DB-Uhr 5 min vor- oder nachgeht (CHECKs aus scripts/lauf_nachweis.sql, nachgebildet)", async () => {
-  const sql = readFileSync(SQL_DATEI, "utf8").replace(/--[^\n]*/g, "");
+  const sql = ohneKommentare(readFileSync(SQL_DATEI, "utf8"));
   assert.deepEqual(checkAusdruecke(sql).map(vereinheitlicht).sort(), [...CHECK_NACHBILDUNG.keys()].sort(), "Nachbildung = CHECKs der SQL-Datei");
   const APP = "2026-11-09T07:03:00.000Z";
   for (const versatz of [-5 * 60_000, 5 * 60_000]) {
     zuruecksetzen();
     const dbUhr = new Date(Date.parse(APP) + versatz).toISOString();
-    welt.stoerung = (a) => {
-      if (a.art !== "supabase" || a.tabelle !== "lauf_nachweis" || a.methode !== "POST") return null;
-      const z = { ...a.body, eingetragen_am: dbUhr };
-      const verletzt = [...CHECK_NACHBILDUNG].filter(([, gilt]) => !gilt(z)).map(([c]) => c);
-      return verletzt.length > 0 ? { status: 400, body: { code: "23514", message: `CHECK verletzt: ${verletzt.join(", ")}` } } : null;
-    };
+    welt.stoerung = checkStoerung(dbUhr);
     const r = await mitDatum(APP, async () => antwort(await briefing.GET(briefingReq())));
     assert.equal(r.body.nachweis_fehler, undefined, `angenommen bei DB-Uhr ${dbUhr}`);
     const z = welt.tabellen.lauf_nachweis[0];
@@ -460,11 +463,15 @@ test("T-R14 Zeitlimit (Prüfbefund SR-3): Insert der Schreiber und alle Lesungen
     pipelineWelt(FERTIG);
     await mitDatum(MONTAG, async () => auto.GET(autoReq()));
     await statusAbruf();
+    // Ein aktiver Job: dazu die zweite Abfrage (ohne übersprungene), mit derselben Frist.
+    await mitAktivenJobs(["content-auto-produce"], "2026-11-07T00:00:00+01:00", () => mitDatum("2026-11-09T11:00:00Z", statusAbruf));
   } finally {
     globalThis.fetch = harnessFetch;
     AbortSignal.timeout = original;
   }
-  assert.deepEqual(fristen.map((f) => f.methode), ["POST", "POST", "GET", "GET", "GET", "GET", "GET", "GET"]);
+  // Prüfbefund betrieb-1: Beim heutigen Plan (alle Jobs aus) eine Lesung je Job, nicht zwei; mit einem
+  // aktiven Job eine mehr.
+  assert.deepEqual(fristen.map((f) => f.methode), ["POST", "POST", "GET", "GET", "GET", "GET", "GET", "GET", "GET"]);
   for (const f of fristen) assert.equal(f.ms, statusServer.ABFRAGE_TIMEOUT_MS, JSON.stringify(f));
 });
 
@@ -533,7 +540,7 @@ const dbZeile = (id, job, begonnen, ergebnis = "ok", extra = {}) => ({
   ...extra,
 });
 
-test("T-L1 /api/status: je Plan-Job die jüngste Zeile und die jüngste mit Ergebnis außer uebersprungen; Probe-Zeilen werden nicht gelesen", async () => {
+test("T-L1 /api/status (Prüfbefunde D1, betrieb-1): je Plan-Job die zuletzt eingetragene Zeile, für aktive Jobs auch die mit Ergebnis außer uebersprungen; Probe-Zeilen werden nicht gelesen", async () => {
   welt.tabellen.lauf_nachweis = [
     dbZeile(1, "briefing-morgen", "2026-11-06T07:03:00.000Z"),
     dbZeile(2, "briefing-morgen", "2026-11-09T07:03:00.000Z", "teilweise"),
@@ -541,18 +548,26 @@ test("T-L1 /api/status: je Plan-Job die jüngste Zeile und die jüngste mit Erge
   ];
   const s = await statusAbruf();
   const gelesen = lesungen().map((e) => new URLSearchParams(e.query));
-  // Prüfbefund Z5: zwei Abfragen je Job, sonst verdeckt ein übersprungener Lauf ein früheres Ergebnis.
-  assert.equal(gelesen.length, 6, "zwei Abfragen je Plan-Job");
-  for (const job of ["briefing-morgen", "briefing-abend", "content-auto-produce"]) {
-    const je = gelesen.filter((p) => p.get("job") === `eq.${job}`);
-    assert.deepEqual(je.map((p) => p.get("ergebnis")).sort(), ["neq.uebersprungen", null].sort(), job);
-  }
+  // Prüfbefund betrieb-1: Beim heutigen Plan (alle aus) eine Abfrage je Job — die zweite trägt bei
+  // einem abgeschalteten Job nichts zum Urteil bei (vorher 6 Abfragen je Abruf).
+  assert.deepEqual(gelesen.map((p) => p.get("job")), ["eq.briefing-morgen", "eq.briefing-abend", "eq.content-auto-produce"], "eine Abfrage je Plan-Job");
   for (const p of gelesen) {
-    assert.equal(p.get("order"), "begonnen_am.desc");
+    assert.equal(p.get("ergebnis"), null, "ohne Ergebnis-Filter");
+    // Prüfbefund D1: nach der DB-Uhr, Gleichstand nach id — nicht nach begonnen_am (App-Uhr).
+    assert.equal(p.get("order"), "eingetragen_am.desc,id.desc");
     assert.equal(p.get("limit"), "1");
     // Prüfbefunde Z2, SR-5: eingetragen_am (DB-Uhr) wird mitgelesen.
     assert.equal(p.get("select"), "job,begonnen_am,beendet_am,eingetragen_am,ergebnis,http_status,teilergebnisse,hinweis");
   }
+  // Ein aktiver Job: zwei Abfragen (Prüfbefund Z5), sonst verdeckt ein übersprungener Lauf ein früheres Ergebnis.
+  zuruecksetzen();
+  await mitAktivenJobs(["content-auto-produce"], "2026-11-07T00:00:00+01:00", () => mitDatum("2026-11-09T11:00:00Z", statusAbruf));
+  const aktivGelesen = lesungen().map((e) => new URLSearchParams(e.query));
+  assert.equal(aktivGelesen.length, 4);
+  const auto = aktivGelesen.filter((p) => p.get("job") === "eq.content-auto-produce");
+  assert.deepEqual(auto.map((p) => p.get("ergebnis")).sort(), ["neq.uebersprungen", null].sort());
+  for (const p of aktivGelesen) assert.equal(p.get("order"), "eingetragen_am.desc,id.desc");
+  // Die übrigen Prüfungen gelten dem ersten Abruf (Plan wie heute).
   assert.equal(s.crons.quelle, Q_CRONS);
   assert.equal(s.crons.wert.jobs[0].letzter_lauf.begonnen_am, "2026-11-09T07:03:00.000Z", "die jüngste Zeile");
   // Der Plan ist aus: Ein Nachweis nach aus_seit ist der Stolperdraht; die Probe löst ihn nicht aus.
@@ -730,12 +745,13 @@ test("T-A3 Anzeige: Tooltip nennt je Job letzten Lauf mit Ergebnis und Teilergeb
   const z = cronsZeile({ erzeugt_am: ZEIT, crons: m });
   assert.equal(z.text, "Briefing morgens: 1 von 2 Agenten gescheitert");
   assert.equal(z.farbe, "var(--gp-amber)");
-  assert.ok(z.title.includes("Briefing morgens (briefing-morgen): aktiv"), z.title);
+  // Prüfbefund anzeige-2: aktiv_seit ist eine Setzung des Plans; anzeige-4: Zeitpunkte in Europe/Berlin.
+  assert.ok(z.title.includes("Briefing morgens (briefing-morgen): laut Plan aktiv seit 07.11.2026 00:00:00 (Europe/Berlin)"), z.title);
   assert.ok(z.title.includes("Sollzeitpunkt: Mo 09.11. 08:03 (Europe/Berlin)"), z.title);
   assert.match(z.title, /Letzter Lauf: [^\n]* · teilweise · HTTP 200 · 1 von 2 Agenten vollständig/);
   assert.ok(z.title.includes("Agenten: oracle ok · donna fehler (HTTP 502: leere Antwort)"), z.title);
   assert.ok(z.title.includes("Plan: Mo–Fr 08:03 Europe/Berlin (gemessen: Testannahme), Karenz 2 h (Setzung)"), z.title);
-  assert.match(z.title, /Letzter Lauf: [^\n]* · eingetragen [^\n]* \(DB-Uhr\)/);
+  assert.match(z.title, /Letzter Lauf: [^\n]* · eingetragen \d{2}\.\d{2}\.\d{4} \d{2}:\d{2}:\d{2} \(Europe\/Berlin, DB-Uhr\)/);
   const rot = cronsZeile({ erzeugt_am: ZEIT, crons: cronsMesswert(totmann.TOTMANN_PLAN, [zeile("briefing-abend", "2026-11-09T17:03:05.000Z")], ZEIT) });
   assert.equal(rot.farbe, "var(--gp-rose)");
   const gruen = cronsZeile({
@@ -812,6 +828,42 @@ test("T-L6 /api/status (Prüfbefunde Z2, SR-5): Zeile aus der Zukunft oder mit v
   const v = await mitAktivenJobs(["briefing-morgen"], AKTIV_AB, () => mitDatum("2026-11-20T09:04:00Z", statusAbruf));
   assert.equal(v.crons.wert.jobs[0].lage, "zeit_unplausibel");
   assert.equal(v.crons.wert.jobs[0].hinweis, "App-Uhr (beendet_am) und DB-Uhr (eingetragen_am) weichen um mehr als 10 min ab");
+});
+
+test("T-L7 /api/status (Prüfbefund D1): gelesen wird die zuletzt eingetragene Zeile — ein späterer plausibler Lauf löst das Rot einer Zukunftszeile", async () => {
+  // Do 19.11. schrieb ein Lauf mit vorgehender App-Uhr: begonnen_am 01.03.2027, eingetragen (DB-Uhr) 19.11.2026.
+  const zukunft = dbZeile(1, "briefing-morgen", "2027-03-01T07:03:00.000Z", "ok", { eingetragen_am: "2026-11-19T07:04:01.000Z" });
+  welt.tabellen.lauf_nachweis = [zukunft];
+  const vorher = await mitAktivenJobs(["briefing-morgen"], AKTIV_AB, () => mitDatum("2026-11-19T09:04:00Z", statusAbruf));
+  assert.equal(vorher.crons.wert.jobs[0].lage, "zeit_unplausibel", "solange sie die zuletzt eingetragene ist: rot");
+  // Fr 20.11. 08:03 ein plausibler ok-Lauf: Er wird gelesen und bewertet. Vorher (order begonnen_am)
+  // blieb die Zukunftszeile "die jüngste" — rot bis März 2027.
+  zuruecksetzen();
+  welt.tabellen.lauf_nachweis = [zukunft, dbZeile(2, "briefing-morgen", "2026-11-20T07:03:05.000Z")];
+  const s = await mitAktivenJobs(["briefing-morgen"], AKTIV_AB, () => mitDatum("2026-11-20T09:04:00Z", statusAbruf));
+  const j = s.crons.wert.jobs[0];
+  assert.deepEqual([j.lage, j.status], ["ok", "ok"]);
+  assert.equal(j.letzter_lauf.begonnen_am, "2026-11-20T07:03:05.000Z");
+  assert.equal(j.bewerteter_lauf.begonnen_am, "2026-11-20T07:03:05.000Z");
+  // Gleichstand der DB-Uhr: Die höhere id ist die zuletzt eingetragene Zeile.
+  zuruecksetzen();
+  const gleich = "2026-11-20T07:04:06.000Z";
+  welt.tabellen.lauf_nachweis = [
+    dbZeile(7, "briefing-morgen", "2026-11-20T07:03:06.000Z", "ok", { eingetragen_am: gleich }),
+    dbZeile(8, "briefing-morgen", "2026-11-20T07:03:05.000Z", "fehler", { eingetragen_am: gleich }),
+  ];
+  const t = await mitAktivenJobs(["briefing-morgen"], AKTIV_AB, () => mitDatum("2026-11-20T09:04:00Z", statusAbruf));
+  assert.equal(t.crons.wert.jobs[0].lage, "fehlgeschlagen", "id 8 (fehler) vor id 7 (ok)");
+  // Abgeschalteter Job: Der echte Lauf vom 01.12. wird gelesen, nicht die Zukunftszeile vom 24.11.
+  zuruecksetzen();
+  welt.tabellen.lauf_nachweis = [
+    dbZeile(1, "briefing-abend", "2027-11-24T17:03:00.000Z", "ok", { eingetragen_am: "2026-11-24T17:04:01.000Z" }),
+    dbZeile(2, "briefing-abend", "2026-12-01T17:03:00.000Z"),
+  ];
+  const aus = await mitDatum("2026-12-01T20:00:00Z", statusAbruf);
+  const abend = aus.crons.wert.jobs[1];
+  assert.deepEqual([abend.lage, abend.stolperdraht_am_berlin, abend.stolperdraht_spalte], ["laeuft_obwohl_aus", "01.12.2026 18:03", "begonnen_am"]);
+  assert.equal(abend.letzter_lauf.begonnen_am, "2026-12-01T17:03:00.000Z");
 });
 
 test("T-A5 Anzeige (Prüfbefunde Z7, B3): bei gleicher Farbe nennt die Zeile den Mangel eines aktiven Jobs vor 'aus' und 'nicht lesbar'", () => {
@@ -914,6 +966,161 @@ test("T-A9 Anzeige: Texte der nachgebesserten Lagen (Z3, Z2, Z4, Z6) und ältere
   assert.equal(anzeige(altStolper), "Briefing abends: läuft, obwohl als aus geführt");
 });
 
+// ═══ Anzeige: zweite Prüfung des Branches (anzeige-1 bis anzeige-5) ═══
+
+/** Der Tooltip-Block eines Jobs: seine Kopfzeile und die eingerückten Zeilen darunter. */
+function jobBlock(title, kopf) {
+  const zeilen = title.split("\n");
+  const ab = zeilen.findIndex((l) => l.startsWith(kopf));
+  assert.ok(ab >= 0, `Block ${kopf} fehlt:\n${title}`);
+  const ende = zeilen.findIndex((l, i) => i > ab && !l.startsWith("  "));
+  return zeilen.slice(ab, ende === -1 ? undefined : ende).join("\n");
+}
+
+test("T-A10 Anzeige (Prüfbefund anzeige-1): Stolperdraht im Tooltip — aus einer teilweise unlesbaren Zeile nicht 'keine Zeile in lauf_nachweis'", () => {
+  const jetzt = "2026-11-20T20:00:00.000Z";
+  // Der Fall "teils" aus T-A9: einzige Zeile briefing-abend Fr 20.11. 18:03, http_status 0.
+  const teils = cronsMesswert(totmann.TOTMANN_PLAN, [{ ...zeile("briefing-abend", "2026-11-20T17:03:00.000Z"), http_status: 0 }], jetzt);
+  const z = cronsZeile({ erzeugt_am: jetzt, crons: teils });
+  assert.equal(z.text, "Briefing abends: lief zuletzt am 20.11.2026 18:03, obwohl als aus geführt · eine Zeile in lauf_nachweis ist teilweise unlesbar");
+  const abend = jobBlock(z.title, "Briefing abends (briefing-abend):");
+  // Die übrigen Jobs haben wirklich keine Zeile; der des Stolperdrahts hat eine.
+  assert.doesNotMatch(abend, /keine Zeile in lauf_nachweis/, "die rote Zeile nennt einen Lauf");
+  assert.ok(abend.includes("\n  Stolperdraht: Lauf begonnen 20.11.2026 18:03 (Europe/Berlin)\n"), abend);
+  assert.ok(abend.includes("\n  Letzter Lauf: Zeile teilweise unlesbar (begonnen 20.11.2026 18:03, Europe/Berlin)"), abend);
+  // Ältere lesbare Zeile und jüngere unlesbare: Der Tooltip nennt beide Zeitpunkte.
+  const zwei = cronsMesswert(
+    totmann.TOTMANN_PLAN,
+    [zeile("briefing-abend", "2026-11-19T17:03:00.000Z"), { ...zeile("briefing-abend", "2026-11-20T17:03:00.000Z", "uebersprungen"), teilergebnisse: [{ ergebnis: "ok" }] }],
+    jetzt,
+  );
+  const z2 = cronsZeile({ erzeugt_am: jetzt, crons: zwei });
+  assert.ok(z2.title.includes("Stolperdraht: Lauf begonnen 20.11.2026 18:03 (Europe/Berlin)"), z2.title);
+  assert.ok(z2.title.includes("Letzter Lauf: 19.11.2026 18:03:00 (Europe/Berlin) · ok"), z2.title);
+  // Lesbare Zeile: Die Stolperdraht-Zeile steht ebenso da.
+  const lesbar = cronsZeile({ erzeugt_am: jetzt, crons: cronsMesswert(totmann.TOTMANN_PLAN, [zeile("briefing-abend", "2026-11-20T17:03:00.000Z")], jetzt) });
+  assert.ok(lesbar.title.includes("Stolperdraht: Lauf begonnen 20.11.2026 18:03 (Europe/Berlin)"), lesbar.title);
+  // Prüfbefund logik-2: Stolperdraht aus einer Zeile mit unplausibler Zeit — nach der DB-Uhr, gekennzeichnet.
+  const di = "2026-11-24T20:00:00.000Z";
+  const zukunft = cronsMesswert(totmann.TOTMANN_PLAN, [{ ...zeile("briefing-abend", "2027-11-24T17:03:00.000Z"), eingetragen_am: "2026-11-24T17:04:01.000Z" }], di);
+  const z3 = cronsZeile({ erzeugt_am: di, crons: zukunft });
+  assert.equal(
+    z3.text,
+    "Briefing abends: lief zuletzt am 24.11.2026 18:04, obwohl als aus geführt · Zeitstempel des Laufs unplausibel, eingetragen am 24.11.2026 18:04 (DB-Uhr; begonnen_am 24.11.2027 18:03 liegt mehr als 10 min nach der Messzeit)",
+  );
+  assert.ok(z3.title.includes("Stolperdraht: Lauf eingetragen 24.11.2026 18:04 (Europe/Berlin, DB-Uhr — Zeitstempel des Laufs unplausibel)"), z3.title);
+});
+
+test("T-A11 Anzeige (Prüfbefund anzeige-2): erster Sollzeitpunkt steht aus — Lage je Job, erster zählender Sollzeitpunkt mit Urteil, 'laut Plan aktiv seit'", () => {
+  const seit = "2026-11-16T00:00:00+01:00";
+  const jetzt = "2026-11-16T06:00:00.000Z"; // Mo 07:00 Berlin, Tabelle leer
+  // d1: nur Briefing morgens aktiv — die Zeile nennt die bernsteinfarbenen Jobs, der Tooltip die Lage.
+  const d1 = cronsZeile({ erzeugt_am: jetzt, crons: cronsMesswert([aktiv(MORGEN, seit), ABEND, AUTO], [], jetzt) });
+  assert.equal(d1.text, "2 von 3 Jobs: aus seit 30.07.2026");
+  assert.equal(d1.farbe, "var(--gp-amber)");
+  assert.ok(d1.title.includes("Briefing morgens (briefing-morgen): laut Plan aktiv seit 16.11.2026 00:00:00 (Europe/Berlin)\n  Lage: erster Sollzeitpunkt steht aus\n"), d1.title);
+  assert.ok(d1.title.includes("\n  Erster zählender Sollzeitpunkt: Mo 16.11. 08:03 (Europe/Berlin), Urteil ab 10:03\n"), d1.title);
+  assert.ok(d1.title.includes("Letzter Lauf: keiner in lauf_nachweis (laut Plan aktiv seit 16.11.2026 00:00:00, Europe/Berlin)"), d1.title);
+  assert.ok(d1.title.includes("Briefing abends (briefing-abend): aus seit 30.07.2026 — Crons abgeschaltet (Betreiber-Entscheid)\n  Lage: aus seit 30.07.2026\n"), d1.title);
+  // Ein S vor aktiv_seit heißt nicht mehr "Sollzeitpunkt".
+  assert.doesNotMatch(d1.title, /Sollzeitpunkt: Fr 13\.11\./);
+  // d2: alle drei aktiv — die Zeile grau, im Tooltip je Job erster zählender Sollzeitpunkt und Urteil.
+  const d2 = cronsZeile({ erzeugt_am: jetzt, crons: cronsMesswert(totmann.TOTMANN_PLAN.map((j) => aktiv(j, seit)), [], jetzt) });
+  assert.equal(d2.text, "erster Sollzeitpunkt steht aus");
+  assert.equal(d2.farbe, "var(--gp-ink-3)");
+  for (const [uhr, urteil] of [
+    ["08:03", "10:03"],
+    ["18:03", "20:03"],
+    ["09:07", "11:07"],
+  ]) {
+    assert.ok(d2.title.includes(`Erster zählender Sollzeitpunkt: Mo 16.11. ${uhr} (Europe/Berlin), Urteil ab ${urteil}`), d2.title);
+  }
+  assert.equal((d2.title.match(/\n {2}Lage: erster Sollzeitpunkt steht aus\n/g) ?? []).length, 3);
+  assert.doesNotMatch(d2.title, /Sollzeitpunkt: Fr 13\.11\./);
+  // Urteil am Folgetag: mit Datum.
+  const spaet = cronsZeile({
+    erzeugt_am: jetzt,
+    crons: cronsMesswert([{ ...aktiv(MORGEN, seit), uhrzeit: "23:30" }, ABEND, AUTO], [], jetzt),
+  });
+  assert.ok(spaet.title.includes("Erster zählender Sollzeitpunkt: Mo 16.11. 23:30 (Europe/Berlin), Urteil ab Di 17.11. 01:30"), spaet.title);
+});
+
+test("T-A12 Anzeige (Prüfbefund anzeige-3): Die Quittung des Stolperdrahts steht in der Antwort, im Tooltip und im Hinweis", () => {
+  const plan = totmann.TOTMANN_PLAN.map((j) => (j.job === "briefing-abend" ? { ...j, stolperdraht_quittiert_bis: "2026-11-21T00:00:00+01:00" } : j));
+  const jetzt = "2026-11-25T10:00:00.000Z";
+  const m = cronsMesswert(plan, [zeile("briefing-abend", "2026-11-20T17:03:00.000Z")], jetzt);
+  const abend = m.wert.jobs[1];
+  assert.equal(abend.lage, "aus", "der Lauf vom 20.11. ist quittiert");
+  assert.equal(abend.stolperdraht_quittiert_bis, "2026-11-20T23:00:00.000Z");
+  assert.equal(abend.stolperdraht_quittiert_bis_berlin, "21.11.2026 00:00");
+  assert.equal(m.wert.jobs[0].stolperdraht_quittiert_bis_berlin, null);
+  const z = cronsZeile({ erzeugt_am: jetzt, crons: m });
+  assert.equal(z.text, "aus seit 30.07.2026");
+  assert.ok(z.title.includes("\n  Stolperdraht quittiert bis 21.11.2026 00:00 (Europe/Berlin, Plan lib/totmann.ts) — Läufe davor lösen nicht aus\n"), z.title);
+  // Auch im Hinweis der Messung — den liest ein Bundle von vor dieser Änderung (Prüfbefund B7).
+  assert.equal(m.hinweis, "alle 3 Jobs laut Plan aus seit 30.07.2026 · Stolperdraht Briefing abends laut Plan quittiert bis 21.11.2026 00:00 (Europe/Berlin)");
+  assert.ok(z.title.includes(`Hinweis: ${m.hinweis}`), z.title);
+  // Ohne Quittung kein solcher Satz.
+  const ohne = cronsZeile({ erzeugt_am: jetzt, crons: cronsMesswert(totmann.TOTMANN_PLAN, [], jetzt) });
+  assert.doesNotMatch(ohne.title, /quittiert/);
+});
+
+test("T-A13 Anzeige (Prüfbefund anzeige-4): Zeitpunkte im Tooltip in Europe/Berlin — unter TZ=UTC nennen Zeile und Tooltip dieselbe Uhrzeit", () => {
+  // TZ wird hier erst zur Laufzeit umgestellt; einen beim ersten Aufruf zwischengespeicherten
+  // Formatierer ohne feste Zone deckt erst T-A13b in tests/t-totmann-zeitzone.test.mjs auf (eigener Prozess).
+  const vorher = process.env.TZ;
+  process.env.TZ = "UTC";
+  try {
+    assert.equal(new Date("2026-11-09T07:03:05.000Z").getHours(), 7, "Voraussetzung: der Prozess rechnet jetzt in UTC");
+    const m = cronsMesswert(totmann.TOTMANN_PLAN, [zeile("briefing-morgen", "2026-11-09T07:03:05.000Z")], ZEIT);
+    const z = cronsZeile({ erzeugt_am: ZEIT, crons: m });
+    assert.equal(z.text, "Briefing morgens: lief zuletzt am 09.11.2026 08:03, obwohl als aus geführt");
+    assert.ok(
+      z.title.includes("\n  Letzter Lauf: 09.11.2026 08:03:05 (Europe/Berlin) · ok · HTTP 200 · eingetragen 09.11.2026 08:03:06 (Europe/Berlin, DB-Uhr)"),
+      z.title,
+    );
+    assert.ok(z.title.includes("\n  Stolperdraht: Lauf begonnen 09.11.2026 08:03 (Europe/Berlin)"), z.title);
+    const totmannTeil = z.title.split("\n").filter((l) => !l.startsWith("gemessen:")).join("\n");
+    assert.doesNotMatch(totmannTeil, /07:03/, "keine Uhrzeit in der Zone des Prozesses");
+    const seit = "2026-11-16T00:00:00+01:00";
+    const akt = cronsZeile({ erzeugt_am: "2026-11-16T06:00:00.000Z", crons: cronsMesswert([aktiv(MORGEN, seit), ABEND, AUTO], [], "2026-11-16T06:00:00.000Z") });
+    assert.ok(akt.title.includes("laut Plan aktiv seit 16.11.2026 00:00:00 (Europe/Berlin)"), akt.title);
+    assert.doesNotMatch(akt.title, /15\.11\.2026/, "nicht der Vortag in UTC");
+  } finally {
+    if (vorher === undefined) delete process.env.TZ;
+    else process.env.TZ = vorher;
+  }
+});
+
+test("T-A14 Anzeige (Prüfbefund anzeige-5): 'toString' und 'constructor' fallen auf die Rückfallregeln, nicht auf Object.prototype", () => {
+  const echt = cronsMesswert(totmann.TOTMANN_PLAN, [zeile("briefing-morgen", "2026-11-09T07:03:05.000Z")], ZEIT);
+  const anzeige = (m) => types.cronsAnzeige(types.cronsFeld(m), ZEIT);
+  for (const name of ["toString", "constructor"]) {
+    // Unbekannter Status: Rang "fehler" (Rückfall) — vorher "0 von 3 Jobs: undefined".
+    const einer = structuredClone(echt);
+    einer.wert.jobs[0].status = name;
+    assert.equal(anzeige(einer).text, "Briefing morgens: lief zuletzt am 09.11.2026 08:03, obwohl als aus geführt", name);
+    const alle = structuredClone(echt);
+    for (const j of alle.wert.jobs) j.status = name;
+    assert.equal(anzeige(alle).text, "Briefing morgens: lief zuletzt am 09.11.2026 08:03, obwohl als aus geführt · +2 weitere", name);
+    // Unbekanntes Ergebnis: erscheint, wie es ist — vorher der Quelltext einer Funktion.
+    const erg = structuredClone(echt);
+    erg.wert.jobs[0].letzter_lauf.ergebnis = name;
+    const titel = anzeige(erg).zusatz;
+    assert.ok(titel.includes(`(Europe/Berlin) · ${name} · HTTP 200`), titel);
+    assert.doesNotMatch(titel, /native code/, name);
+    // Unbekannte Lage: Vorrang 0 wie eine Lage mit Laufergebnis, Text "Lage unbekannt".
+    const lage = structuredClone(cronsMesswert(totmann.TOTMANN_PLAN, [], ZEIT));
+    lage.wert.jobs[1].lage = name;
+    assert.equal(anzeige(lage).text, "Briefing abends: Lage unbekannt · +2 weitere", name);
+    // Farbe eines unbekannten Status (statusFarbe, vorbestehend): grau statt Funktion.
+    assert.equal(types.statusFarbe(name), "var(--gp-ink-3)", name);
+    const farbe = cronsZeile({ erzeugt_am: ZEIT, crons: { ...echt, status: name } });
+    assert.equal(farbe.farbe, "var(--gp-ink-3)", name);
+    assert.doesNotMatch(farbe.html, /native code/, name);
+  }
+});
+
 // ═══ scripts/lauf_nachweis.sql ═══
 
 /** Inhalt jeder CHECK (...)-Klausel, Klammern ausgezählt. */
@@ -933,27 +1140,140 @@ function checkAusdruecke(sql) {
   return aus;
 }
 
-test("T-S1 scripts/lauf_nachweis.sql: Entwurf-Kopf, keine CHECK-Bedingung gegen now() oder eingetragen_am (App- gegen DB-Uhr)", () => {
+/**
+ * SQL ohne Kommentare: "--" bis zum Zeilenende und "/* … *\/" (in Postgres verschachtelbar); Text in
+ * '…' bleibt unberührt. Prüfbefund oeffentlich-1: Vorher entfernte T-S1 nur "--"-Kommentare — eine
+ * Anweisung in einem Blockkommentar galt als vorhanden, obwohl Postgres sie nie ausführt.
+ */
+function ohneKommentare(sql) {
+  let aus = "";
+  let tiefe = 0;
+  let imText = false;
+  for (let i = 0; i < sql.length; i++) {
+    const c = sql[i];
+    const n = sql[i + 1];
+    if (tiefe > 0) {
+      if (c === "/" && n === "*") {
+        tiefe++;
+        i++;
+      } else if (c === "*" && n === "/") {
+        tiefe--;
+        i++;
+        if (tiefe === 0) aus += " ";
+      }
+      continue;
+    }
+    if (imText) {
+      aus += c;
+      if (c === "'") imText = false;
+      continue;
+    }
+    if (c === "'") {
+      imText = true;
+      aus += c;
+    } else if (c === "-" && n === "-") {
+      while (i + 1 < sql.length && sql[i + 1] !== "\n") i++;
+    } else if (c === "/" && n === "*") {
+      tiefe = 1;
+      i++;
+    } else {
+      aus += c;
+    }
+  }
+  return aus;
+}
+
+/** Anweisungen der SQL-Datei: ohne Kommentare, am ";" außerhalb von Text getrennt, Leerraum vereinheitlicht. */
+function anweisungen(sql) {
+  const liste = [];
+  let jetzt = "";
+  let imText = false;
+  for (const c of ohneKommentare(sql)) {
+    if (c === "'") imText = !imText;
+    if (c === ";" && !imText) {
+      liste.push(jetzt);
+      jetzt = "";
+    } else {
+      jetzt += c;
+    }
+  }
+  liste.push(jetzt);
+  return liste.map(vereinheitlicht).filter(Boolean);
+}
+
+/**
+ * Alle Anweisungen nach CREATE TABLE, in dieser Reihenfolge (Prüfbefunde oeffentlich-1, oeffentlich-3,
+ * D1): Index nach der DB-Uhr; RLS ohne Policy; anon, authenticated und PUBLIC ohne Rechte; service_role
+ * erst ohne alle Rechte, dann genau lesen und anhängen (Sequenz: USAGE für nextval).
+ */
+const ANWEISUNGEN_NACH_TABELLE = [
+  "CREATE INDEX IF NOT EXISTS idx_lauf_nachweis_job_eingetragen ON public.lauf_nachweis (job, eingetragen_am DESC)",
+  "ALTER TABLE public.lauf_nachweis ENABLE ROW LEVEL SECURITY",
+  "REVOKE ALL ON TABLE public.lauf_nachweis FROM PUBLIC, anon, authenticated",
+  "REVOKE ALL ON SEQUENCE public.lauf_nachweis_id_seq FROM PUBLIC, anon, authenticated",
+  "REVOKE ALL ON TABLE public.lauf_nachweis FROM service_role",
+  "REVOKE ALL ON SEQUENCE public.lauf_nachweis_id_seq FROM service_role",
+  "GRANT SELECT, INSERT ON TABLE public.lauf_nachweis TO service_role",
+  "GRANT USAGE ON SEQUENCE public.lauf_nachweis_id_seq TO service_role",
+];
+
+test("T-S1 scripts/lauf_nachweis.sql (Prüfbefunde B2, oeffentlich-1, oeffentlich-3): Entwurf-Kopf, keine CHECK-Bedingung gegen die DB-Uhr, Rechteblock als exakte, geordnete Liste", () => {
   const sql = readFileSync(SQL_DATEI, "utf8");
   assert.match(sql, /ENTWURF, NICHT AUSGEFÜHRT\. Ausführung nur nach Inhaberentscheid/);
-  const code = sql.replace(/--[^\n]*/g, "");
+  const code = ohneKommentare(sql);
   const checks = checkAusdruecke(code);
   assert.equal(checks.length, 6, checks.join(" | "));
   const UHR = /\b(now|current_timestamp|clock_timestamp|statement_timestamp|transaction_timestamp|localtimestamp|current_date|current_time)\b/i;
   for (const c of checks) assert.doesNotMatch(c, UHR, `CHECK gegen die DB-Uhr: ${c}`);
   // Prüfbefund B2: Die DB-Uhr steht auch in der Spalte eingetragen_am — kein CHECK darf sie nennen.
   for (const c of checks) assert.doesNotMatch(c, /\beingetragen_am\b/, `CHECK mit der DB-Uhr-Spalte: ${c}`);
-  assert.ok(checks.some((c) => c.replace(/\s+/g, " ").trim() === "beendet_am >= begonnen_am"), "beendet_am >= begonnen_am, dieselbe Uhr");
-  // now() steht genau einmal: als DEFAULT von eingetragen_am (DB-Uhr nur zur Nachvollziehbarkeit).
+  assert.ok(checks.some((c) => vereinheitlicht(c) === "beendet_am >= begonnen_am"), "beendet_am >= begonnen_am, dieselbe Uhr");
+  // now() steht genau einmal: als DEFAULT von eingetragen_am (DB-Uhr).
   assert.equal((code.match(/now\s*\(\s*\)/gi) ?? []).length, 1);
   assert.match(code, /eingetragen_am\s+TIMESTAMPTZ\s+NOT NULL\s+DEFAULT now\(\)/);
-  // Nur die Service-Rolle: keine Policy, kein Realtime, Rechte nur lesen und anhängen.
-  assert.doesNotMatch(code, /CREATE POLICY/i);
-  assert.doesNotMatch(code, /ALTER PUBLICATION/i);
-  assert.match(code, /ENABLE ROW LEVEL SECURITY/);
-  assert.match(code, /GRANT SELECT, INSERT ON TABLE public\.lauf_nachweis TO service_role;/);
-  assert.match(code, /REVOKE ALL ON TABLE public\.lauf_nachweis FROM PUBLIC, anon, authenticated;/);
+  // Prüfbefund oeffentlich-1: alle Anweisungen, ohne "--"- und Blockkommentare. Zuerst die Tabelle,
+  // danach genau diese Liste — eine fehlende, zusätzliche, auskommentierte oder verschobene
+  // Anweisung macht den Test rot (vorher prüfte er nur fünf Teilstrings).
+  const liste = anweisungen(sql);
+  assert.match(liste[0] ?? "", /^CREATE TABLE IF NOT EXISTS public\.lauf_nachweis \(/, "zuerst die Tabelle");
+  assert.equal(liste.filter((a) => /^CREATE TABLE\b/i.test(a)).length, 1, "genau eine Tabelle");
+  assert.deepEqual(liste.slice(1), ANWEISUNGEN_NACH_TABELLE);
+  // Zusätzlich ausgeschlossen, unabhängig von der Liste: Rechte an anon, authenticated oder PUBLIC,
+  // abgeschaltete RLS, eine Policy, Realtime.
+  for (const a of liste) {
+    assert.doesNotMatch(a, /^GRANT\b.*\bTO\b.*\b(anon|authenticated|public)\b/i, a);
+    assert.doesNotMatch(a, /\bDISABLE\s+ROW\s+LEVEL\s+SECURITY\b/i, a);
+    assert.doesNotMatch(a, /\bCREATE\s+POLICY\b/i, a);
+    assert.doesNotMatch(a, /\bALTER\s+PUBLICATION\b/i, a);
+  }
   // Dieselben Ergebnis-Werte wie der Code.
   assert.ok(checks.some((c) => c.includes("ergebnis IN ('ok','teilweise','fehler','uebersprungen')")));
   assert.deepEqual([...statusServer.LAUF_ERGEBNISSE], ["ok", "teilweise", "fehler", "uebersprungen"]);
+});
+
+test("T-S2 (Prüfbefund oeffentlich-2): NACHWEIS_HINWEIS_MAX = Grenze aus CHECK (char_length(hinweis) <= N); der lange Fehlerpfad besteht die CHECK-Nachbildung", async () => {
+  const grenzen = checkAusdruecke(ohneKommentare(readFileSync(SQL_DATEI, "utf8")))
+    .map((c) => /^char_length\(hinweis\) <= (\d+)$/.exec(vereinheitlicht(c))?.[1])
+    .filter((n) => n !== undefined)
+    .map(Number);
+  assert.deepEqual(grenzen, [statusServer.NACHWEIS_HINWEIS_MAX], "dieselbe Grenze in SQL und Code");
+  // Der lange Fehlerpfad: status fehler mit langem fehler und Speicherfehler — roh über der Grenze
+  // (je Teil höchstens 160 Zeichen nach bereinigeFehler, zusammen mehr als 300).
+  const roh = statusServer.autoProduceNachweis(200, { status: "fehler", fehler: "y".repeat(500), speicherfehler: ["z".repeat(500)] }, null);
+  assert.ok(Array.from(roh.hinweis).length > 300, `roh ${Array.from(roh.hinweis).length} Zeichen`);
+  const beginn = new Date(MONTAG);
+  const z = statusServer.laufNachweisZeile("content-auto-produce", beginn, new Date(beginn.getTime() + 90_000), roh);
+  const verletzt = [...CHECK_NACHBILDUNG].filter(([, gilt]) => !gilt({ ...z, eingetragen_am: MONTAG })).map(([c]) => c);
+  assert.deepEqual(verletzt, [], "die Zeile hält alle CHECKs");
+  assert.equal(Array.from(z.hinweis).length, 300);
+  // Ende zu Ende: Die Route schreibt diese Zeile durch die CHECK-Nachbildung (wie T-R13).
+  welt.stoerung = checkStoerung(new Date(Date.parse(MONTAG) + 60_000).toISOString());
+  pipelineWelt({ ...FERTIG, status: "fehler", fehler: { stufe: "researcher", grund: "y".repeat(500) }, speicherfehler: ["z".repeat(500)] });
+  const r = await mitDatum(MONTAG, async () => antwort(await auto.GET(autoReq())));
+  assert.equal(r.status, 200);
+  assert.equal(r.body.status, "fehler");
+  assert.equal(r.body.nachweis_fehler, undefined, "die Zeile wurde angenommen");
+  assert.equal(inserts().length, 1);
+  assert.equal(Array.from(welt.tabellen.lauf_nachweis[0].hinweis).length, 300);
+  assert.match(welt.tabellen.lauf_nachweis[0].hinweis, /^status fehler · researcher: y+…/);
 });

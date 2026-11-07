@@ -71,7 +71,10 @@ function normalisiereZeit(text) {
   return `${iso}${String(rest).padStart(3, "0")}+00:00`;
 }
 
-const ZEITSPALTEN = new Set(["created_at", "updated_at", "published_at"]);
+// lauf_nachweis (Totmann): GET /api/status ordnet nach eingetragen_am, bei Gleichstand nach id
+// (Prüfbefund D1, zweite Prüfung). Als Zeitspalten verglichen über Mikrosekunden wie in Postgres —
+// als Text sortiert lägen "…:06.000Z" (Testzeile) und "…:06.000001+00:00" (Attrappe) verkehrt.
+const ZEITSPALTEN = new Set(["created_at", "updated_at", "published_at", "begonnen_am", "beendet_am", "eingetragen_am"]);
 
 // ── PostgREST-Filter ─────────────────────────────────────────────────────────
 function jsonPfad(zeile, ausdruck) {
