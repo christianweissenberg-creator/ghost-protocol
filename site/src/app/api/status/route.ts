@@ -2,7 +2,8 @@ import { NextResponse } from "next/server";
 import { createServiceClient, istKonfigurationsFehler } from "@/lib/supabase";
 import { PREIS_STAND_AB } from "@/lib/kosten";
 import { AUSGEBLENDETE_AGENTEN } from "@/lib/types";
-import type { Messwert, SystemStatus } from "@/lib/status-types";
+import type { CronsWert, Messwert, SystemStatus } from "@/lib/status-types";
+import { NACHWEIS_SEIT, NACHWEIS_TABELLE, TOTMANN_PLAN } from "@/lib/totmann";
 import {
   ABFRAGE_TIMEOUT_MS,
   ANTHROPIC_SCHLUESSEL,
@@ -17,6 +18,7 @@ import {
   STUNDE_MS,
   bereinigeFehler,
   berlinAnzeige,
+  bewerteTotmann,
   fehlgeschlagen,
   haengendOderFilter,
   isoOderNull,
@@ -73,7 +75,8 @@ const Q = {
   kosten: "Supabase · messages (source activation-api, delegate-plan, fehllauf; metadata.cost_usd, metadata.preis_stand)",
   steinadel: "steinadel.de · /api/objekte/export (Server-Abruf)",
   anthropic: "Server-Umgebung · Anthropic-Schlüssel",
-  crons: "kein Lauf-Protokoll",
+  // Stufe 2 (07.11.2026, Totmann): vorher fest "kein Lauf-Protokoll" (nicht gemessen).
+  crons: "Plan site/src/lib/totmann.ts · Supabase · lauf_nachweis (begonnen_am, ergebnis)",
   riegel: "Agenten-Container · GP_EXTERNAL_POSTING",
   telegram: "kein Zustell-Protokoll",
 } as const;
@@ -306,6 +309,45 @@ async function messeKosten(sb: () => ServiceClient, jetzt: Date) {
   return messwert(auswertung.wert, auswertung.status, Q.kosten, verbinde(KOSTEN_HINWEIS, ...auswertung.hinweise));
 }
 
+// ── Totmann: Crons und Agenten (Objekt-Studio Stufe 2, §2.2–2.4) ──────────────
+
+const NACHWEIS_SPALTEN = "job, begonnen_am, beendet_am, ergebnis, http_status, teilergebnisse, hinweis";
+
+// Je Plan-Job die jüngste Zeile (order begonnen_am desc, limit 1; Index
+// idx_lauf_nachweis_job_beginn in scripts/lauf_nachweis.sql), mit demselben Zeitlimit wie die
+// übrigen Messungen. Probe-Zeilen (content-auto-produce-probe) stehen in keinem Plan und werden
+// gar nicht gelesen. Ein Lesefehler — auch eine fehlende Tabelle, solange das SQL nicht
+// ausgeführt ist, oder ein fehlender Service-Schlüssel — geht als lesefehler an bewerteTotmann:
+// Sind alle Jobs aus, bleibt die Zeile bernstein mit Hinweis; ist einer aktiv, wird sie rot.
+async function messeCrons(sb: () => ServiceClient, jetzt: Date): Promise<Messwert<CronsWert>> {
+  const zeilen: unknown[] = [];
+  let lesefehler: string | null = null;
+  try {
+    const client = sb();
+    const signal = zeitlimit();
+    const antworten = await Promise.all(
+      TOTMANN_PLAN.map((j) =>
+        client
+          .from(NACHWEIS_TABELLE)
+          .select(NACHWEIS_SPALTEN)
+          .eq("job", j.job)
+          .order("begonnen_am", { ascending: false })
+          .limit(1)
+          .abortSignal(signal)
+      )
+    );
+    for (const res of antworten) {
+      pruefeAntwort(res);
+      if (!Array.isArray(res.data)) throw new Error("Antwort ohne Zeilenliste");
+      zeilen.push(...res.data);
+    }
+  } catch (e) {
+    lesefehler = istKonfigurationsFehler(e) ? `${bereinigeFehler(e)} — nicht abgefragt` : bereinigeFehler(e);
+  }
+  const b = bewerteTotmann(TOTMANN_PLAN, zeilen, jetzt, lesefehler, NACHWEIS_SEIT);
+  return messwert(b.wert, b.status, Q.crons, b.hinweis);
+}
+
 // ── Steinadel-Export (5 min zwischengespeichert) ──────────────────────────────
 
 const STEINADEL_EXPORT_URL = "https://steinadel.de/api/objekte/export";
@@ -403,7 +445,7 @@ export async function GET() {
     const jetzt = new Date();
     const sb = clientFabrik();
 
-    const [supabase, agenten, bus, letzte, aktive, contentHeute, freigabe, kosten, steinadel] = await Promise.all([
+    const [supabase, agenten, bus, letzte, aktive, contentHeute, freigabe, kosten, steinadel, crons] = await Promise.all([
       messe(Q.supabase, () => messeSupabase(sb)),
       messe(Q.agenten, () => messeAgenten(sb)),
       messe(Q.bus, () => messeBus(sb)),
@@ -413,6 +455,8 @@ export async function GET() {
       messe(Q.freigabe, () => messeFreigabe(sb, jetzt)),
       messe(Q.kosten, () => messeKosten(sb, jetzt)),
       messe(Q.steinadel, () => messeSteinadelExport()),
+      // Lesefehler fängt messeCrons selbst (Totmann-Regel); messe fängt nur einen kaputten Plan.
+      messe(Q.crons, () => messeCrons(sb, jetzt)),
     ]);
 
     const antwort: SystemStatus = {
@@ -427,7 +471,7 @@ export async function GET() {
       kosten,
       steinadel_export: steinadel,
       anthropic: messeAnthropic(),
-      crons: nichtGemessen(Q.crons, "Kein Cron schreibt einen Lauf-Nachweis, den das Dashboard lesen kann."),
+      crons,
       // Stufe 1 (05.11.2026): "veröffentlicht" statt "sendet" — das Dashboard schickt
       // Prompts an api.anthropic.com, postet aber nirgends (grep über src/ am 06.11.2026:
       // kein Aufruf an Social-, Telegram- oder Newsletter-Schnittstellen).

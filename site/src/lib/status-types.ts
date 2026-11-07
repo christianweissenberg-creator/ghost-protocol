@@ -43,6 +43,77 @@ export interface KostenWert {
   abgeschnitten: boolean;
 }
 
+// ── Totmann für Crons und Agenten (Objekt-Studio Stufe 2, Rest aus Stufe 1) ──
+// Spezifikation: docs/intern/objekt-studio-stufe-2.md §2.2–2.4. Plan: lib/totmann.ts; Bewertung:
+// bewerteTotmann() in lib/status-server.ts; Tabelle: scripts/lauf_nachweis.sql (Entwurf).
+
+/** Ergebnis eines Laufs; dieselben Werte wie der CHECK auf lauf_nachweis.ergebnis. */
+export type LaufErgebnis = "ok" | "teilweise" | "fehler" | "uebersprungen";
+
+/** Ergebnis je Agent eines Laufs (lauf_nachweis.teilergebnisse); fehler bereinigt (bereinigeFehler). */
+export interface LaufTeilergebnis {
+  agent: string;
+  ergebnis: LaufErgebnis;
+  fehler: string | null;
+}
+
+/** Eine gelesene Zeile aus lauf_nachweis. begonnen_am und beendet_am stammen beide aus der App-Uhr. */
+export interface LaufNachweisLesung {
+  job: string;
+  begonnen_am: string;
+  beendet_am: string | null;
+  ergebnis: LaufErgebnis;
+  http_status: number | null;
+  teilergebnisse: LaufTeilergebnis[];
+  hinweis: string | null;
+}
+
+/**
+ * Lage eines Jobs nach der Tabelle in §2.3. Farbe (status): ok → "ok"; teilweise und aus →
+ * "warnung"; fehlgeschlagen, ueberfaellig und laeuft_obwohl_aus → "fehler";
+ * erster_sollzeitpunkt_steht_aus → "nicht_gemessen"; nicht_lesbar → "warnung", wenn der Job aus
+ * ist, sonst "fehler".
+ */
+export type CronLage =
+  | "ok"
+  | "teilweise"
+  | "fehlgeschlagen"
+  | "ueberfaellig"
+  | "erster_sollzeitpunkt_steht_aus"
+  | "aus"
+  | "laeuft_obwohl_aus"
+  | "nicht_lesbar";
+
+export interface CronJobStand {
+  job: string;
+  bezeichnung: string;
+  /** Plan in Worten, z. B. "Mo–Fr 08:03 (Europe/Berlin), Karenz 2 h". */
+  plan: string;
+  /** Woher der Plan stammt (lib/totmann.ts, fundstelle). */
+  fundstelle: string;
+  aktiv: boolean;
+  /** JJJJ-MM-TT, nur bei abgeschalteten Jobs. */
+  aus_seit: string | null;
+  grund: string | null;
+  lage: CronLage;
+  status: MessStatus;
+  /** Jüngster Sollzeitpunkt S mit S + Karenz ≤ Messzeit (ISO); null bei abgeschalteten Jobs oder ohne Sollzeitpunkt. */
+  sollzeitpunkt: string | null;
+  /** S in Europe/Berlin, z. B. "Mo 09.11. 08:03" — der Browser kann in einer anderen Zeitzone stehen. */
+  sollzeitpunkt_berlin: string | null;
+  /** Jüngste Zeile dieses Jobs in lauf_nachweis; null = keine Zeile oder nicht lesbar. */
+  letzter_lauf: LaufNachweisLesung | null;
+}
+
+export interface CronsWert {
+  /** Je Job des Plans ein Eintrag, in Plan-Reihenfolge. */
+  jobs: CronJobStand[];
+  /** NACHWEIS_SEIT aus lib/totmann.ts: seit diesem Tag steht der Schreiber im Code (kein Deploy-Datum). */
+  nachweis_seit: string;
+  /** Lesefehler von lauf_nachweis (bereinigt, auch eine fehlende Tabelle); null = gelesen. */
+  lesefehler: string | null;
+}
+
 export interface SystemStatus {
   erzeugt_am: string;
   /** Probe-Abfrage mit dem Service-Key, Dauer in ms. */
@@ -65,8 +136,15 @@ export interface SystemStatus {
   steinadel_export: Messwert<{ objekte: number; latenz_ms: number }>;
   /** Nur ob ANTHROPIC_API_KEY gesetzt ist — nie der Wert. */
   anthropic: Messwert<{ konfiguriert: boolean }>;
-  /** Kein Lauf-Nachweis im Dashboard lesbar: immer "nicht_gemessen" mit Hinweis. */
-  crons: Messwert<null>;
+  /**
+   * Totmann: je Job des Plans (lib/totmann.ts) die jüngste Zeile aus lauf_nachweis, bewertet nach
+   * §2.3; status = Farbe des schlechtesten Jobs. Ausnahme von der Grundregel oben: Steht der
+   * schlechteste Job auf "erster Sollzeitpunkt steht aus", ist status "nicht_gemessen", wert und
+   * gemessen_am bleiben aber gesetzt — gelesen wurde, nur geurteilt werden kann noch nicht.
+   * Antworten von vor dem Totmann tragen hier wert null und status "nicht_gemessen"; der Leser
+   * (cronsFeld in lib/types.ts) verträgt beides.
+   */
+  crons: Messwert<CronsWert>;
   /** Der Riegel liegt im Agenten-Container (GP_EXTERNAL_POSTING); vom Dashboard nicht messbar. */
   posting_riegel: Messwert<null>;
   /** Kein gespeicherter Zustellstatus: "nicht_gemessen". */

@@ -2,7 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { createHash, timingSafeEqual } from "crypto";
 import { SESSION_COOKIE, getSessionSecret, signSession } from "@/lib/auth";
 import { maskiereGeschuetzteNamen } from "@/lib/freigabe-regeln";
-import { bereinigeFehler } from "@/lib/status-server";
+import { schreibeLaufNachweis } from "@/lib/lauf-nachweis";
+import { ausnahmeNachweis, autoProduceNachweis, bereinigeFehler, starteLaufUhr } from "@/lib/status-server";
+import { JOB_AUTO_PRODUCE, JOB_AUTO_PRODUCE_PROBE } from "@/lib/totmann";
 
 // Fixrunde 06.11.2026:
 // - R36: CONTENT_LAUNCH_DATE wird streng als JJJJ-MM-TT gelesen (sonst 500); eine im
@@ -96,8 +98,25 @@ function istKalenderEintrag(wert: unknown): wert is KalenderEintrag {
   return typeof e.platform === "string" && typeof e.format === "string" && typeof e.topic === "string";
 }
 
+/** Ergebnis eines Laufs, bevor es zur Antwort wird: Der Totmann leitet daraus die Nachweis-Zeile ab. */
+interface Lauf {
+  status: number;
+  body: Record<string, unknown>;
+  /** steps der Pipeline-Antwort (Teilergebnisse je Agent); null, wenn die Pipeline nicht lief. */
+  schritte: unknown;
+}
+
+function lauf(body: Record<string, unknown>, status = 200, schritte: unknown = null): Lauf {
+  return { status, body, schritte };
+}
+
 // GET /api/content/auto-produce — Secret im Header x-cron-secret, optional ?dry=true
 // Produziert automatisch das Content-Piece des Tages aus dem Launch-Kalender
+// Stufe 2 (07.11.2026, Totmann): Jeder Lauf nach der Secret-Prüfung hängt genau eine Zeile an
+// lauf_nachweis an (lib/lauf-nachweis.ts), per finally — Job content-auto-produce, mit ?dry=true
+// content-auto-produce-probe (zählt für keinen Sollzeitpunkt). Ergebnis: produced → ok, skipped →
+// uebersprungen, partial/abgelehnt → teilweise, status "fehler" → fehler auch bei HTTP 200, 5xx →
+// fehler (autoProduceNachweis). Scheitert der Insert, kommt nur der Vermerk nachweis_fehler dazu.
 export async function GET(request: NextRequest) {
   // Stufe 1 (05.11.2026): Secret nur noch im Header. Als Query-Parameter landet es in
   // Server-, Proxy- und Cron-Logs — deshalb abgewiesen, auch wenn es stimmt.
@@ -108,25 +127,45 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ fehler: "Unauthorized" }, { status: 401 });
   }
 
+  const dryRun = request.nextUrl.searchParams.get("dry") === "true";
+  const job = dryRun ? JOB_AUTO_PRODUCE_PROBE : JOB_AUTO_PRODUCE;
+  const uhr = starteLaufUhr();
+  let ergebnis: Lauf | null = null;
+  let ausnahme: unknown = null;
+  let nachweisFehler: string | null = null;
+  try {
+    ergebnis = await produziere(dryRun);
+  } catch (e) {
+    ausnahme = e;
+    throw e;
+  } finally {
+    const fertig = ergebnis;
+    nachweisFehler = await schreibeLaufNachweis(job, uhr.begonnen, uhr.beendet(), () =>
+      fertig === null ? ausnahmeNachweis(ausnahme) : autoProduceNachweis(fertig.status, fertig.body, fertig.schritte)
+    );
+  }
+  return NextResponse.json(
+    nachweisFehler === null ? ergebnis.body : { ...ergebnis.body, nachweis_fehler: nachweisFehler },
+    { status: ergebnis.status }
+  );
+}
+
+async function produziere(dryRun: boolean): Promise<Lauf> {
   // Launch-Datum (konfigurierbar, default: nächster Montag als Referenz).
   // R36: vor allem anderen prüfen, auch am Wochenende und im Dry-Run — eine
   // Fehlkonfiguration soll auffallen, nicht als "skipped" durchrutschen. Der Wert selbst
   // wird nicht ausgegeben.
   const launch = leseLaunchDatum(process.env.CONTENT_LAUNCH_DATE || LAUNCH_DATUM_STANDARD);
   if (!launch) {
-    return NextResponse.json(
-      { status: "fehler", fehler: "CONTENT_LAUNCH_DATE ungültig (erwartet JJJJ-MM-TT, z. B. 2026-04-07)" },
-      { status: 500 }
-    );
+    return lauf({ status: "fehler", fehler: "CONTENT_LAUNCH_DATE ungültig (erwartet JJJJ-MM-TT, z. B. 2026-04-07)" }, 500);
   }
-  const dryRun = request.nextUrl.searchParams.get("dry") === "true";
 
   const now = new Date();
   const dayOfWeek = now.getDay(); // 0=So, 1=Mo, ..., 5=Fr, 6=Sa
 
   // Nur Mo-Fr produzieren
   if (dayOfWeek === 0 || dayOfWeek === 6) {
-    return NextResponse.json({
+    return lauf({
       status: "skipped",
       grund: "Wochenende — kein Content geplant",
       day: now.toLocaleDateString("de-DE", { weekday: "long" }),
@@ -136,7 +175,7 @@ export async function GET(request: NextRequest) {
   const dayKey = DAY_MAP[dayOfWeek];
   const weekNum = getCurrentWeek(launch, now);
   if (!Number.isInteger(weekNum)) {
-    return NextResponse.json({ status: "fehler", fehler: "Kalenderwoche nicht berechenbar" }, { status: 500 });
+    return lauf({ status: "fehler", fehler: "Kalenderwoche nicht berechenbar" }, 500);
   }
   const weekKey = `week${weekNum}`;
 
@@ -148,13 +187,10 @@ export async function GET(request: NextRequest) {
       cache: "no-store",
     });
   } catch (err) {
-    return NextResponse.json(
-      { status: "fehler", fehler: `Kalender nicht erreichbar: ${bereinigeFehler(err)}` },
-      { status: 500 }
-    );
+    return lauf({ status: "fehler", fehler: `Kalender nicht erreichbar: ${bereinigeFehler(err)}` }, 500);
   }
   if (!calendarRes.ok) {
-    return NextResponse.json({ status: "fehler", fehler: `Kalender nicht erreichbar (HTTP ${calendarRes.status})` }, { status: 500 });
+    return lauf({ status: "fehler", fehler: `Kalender nicht erreichbar (HTTP ${calendarRes.status})` }, 500);
   }
   const calendarData: unknown = await calendarRes.json().catch(() => null);
   const kalender =
@@ -162,15 +198,12 @@ export async function GET(request: NextRequest) {
       ? (calendarData as { launch_calendar?: unknown }).launch_calendar
       : undefined;
   if (typeof kalender !== "object" || kalender === null) {
-    return NextResponse.json({ status: "fehler", fehler: "Kalender-Antwort ohne launch_calendar" }, { status: 500 });
+    return lauf({ status: "fehler", fehler: "Kalender-Antwort ohne launch_calendar" }, 500);
   }
   const weekData: unknown = (kalender as Record<string, unknown>)[weekKey];
   // R36: Eine fehlende Woche ist ein Fehler im Kalender, kein Leertag.
   if (!istObjekt(weekData)) {
-    return NextResponse.json(
-      { status: "fehler", fehler: `Woche fehlt im Kalender (${weekKey})`, week: weekNum, day: dayKey },
-      { status: 500 }
-    );
+    return lauf({ status: "fehler", fehler: `Woche fehlt im Kalender (${weekKey})`, week: weekNum, day: dayKey }, 500);
   }
   const weekTheme = typeof weekData.theme === "string" ? weekData.theme : null;
   const todayEntry = weekData[dayKey];
@@ -178,7 +211,7 @@ export async function GET(request: NextRequest) {
   // Stufe 1 (05.11.2026): Ein Tag ohne Eintrag in einer vorhandenen Woche (z. B. die
   // geleerte Woche 2) ist kein Fehler, sondern nichts zu tun.
   if (todayEntry === undefined || todayEntry === null) {
-    return NextResponse.json({
+    return lauf({
       status: "skipped",
       grund: "kein Kalendereintrag",
       date: now.toISOString(),
@@ -188,9 +221,9 @@ export async function GET(request: NextRequest) {
     });
   }
   if (!istKalenderEintrag(todayEntry)) {
-    return NextResponse.json(
+    return lauf(
       { status: "fehler", fehler: `Kalendereintrag ${weekKey}/${dayKey} unvollständig (platform, format, topic)` },
-      { status: 500 }
+      500
     );
   }
 
@@ -199,7 +232,7 @@ export async function GET(request: NextRequest) {
 
   // Dry-Run: Nur zeigen was produziert würde
   if (dryRun) {
-    return NextResponse.json({
+    return lauf({
       status: "dry_run",
       date: now.toISOString(),
       week: weekNum,
@@ -222,13 +255,13 @@ export async function GET(request: NextRequest) {
       body: JSON.stringify({ topic, platform, format, category }),
     });
   } catch (err) {
-    return NextResponse.json(
+    return lauf(
       {
         status: "fehler",
         scheduled: { platform, format, topic, category },
         fehler: `Pipeline nicht erreichbar: ${bereinigeFehler(err)}`,
       },
-      { status: 500 }
+      500
     );
   }
 
@@ -243,20 +276,25 @@ export async function GET(request: NextRequest) {
           : undefined
       : undefined;
     const contentId = istObjekt(err) && (typeof err.contentId === "number" || typeof err.contentId === "string") ? err.contentId : null;
-    return NextResponse.json({
-      status: "fehler",
-      scheduled: { platform, format, topic, category },
-      fehler: meldung !== undefined ? maskiereGeschuetzteNamen(bereinigeFehler(meldung)) : `Pipeline HTTP ${pipelineRes.status}`,
-      pipeline_http: pipelineRes.status,
-      contentId,
-    }, { status: 500 });
+    return lauf(
+      {
+        status: "fehler",
+        scheduled: { platform, format, topic, category },
+        fehler: meldung !== undefined ? maskiereGeschuetzteNamen(bereinigeFehler(meldung)) : `Pipeline HTTP ${pipelineRes.status}`,
+        pipeline_http: pipelineRes.status,
+        contentId,
+      },
+      500,
+      // Eine Fehlerantwort nach dem Insert trägt die Schritte (Prüflauf 06.11.2026).
+      istObjekt(err) ? err.steps : null
+    );
   }
 
   const result: unknown = await pipelineRes.json().catch(() => null);
   if (!istObjekt(result)) {
-    return NextResponse.json(
+    return lauf(
       { status: "fehler", scheduled: { platform, format, topic, category }, fehler: "Pipeline-Antwort ist kein JSON" },
-      { status: 500 }
+      500
     );
   }
 
@@ -289,34 +327,38 @@ export async function GET(request: NextRequest) {
   // Vorschau fürs Cron-Log: geschützter Name maskiert, höchstens 2000 Zeichen.
   const vorschau = publisherText === null ? null : Array.from(maskiereGeschuetzteNamen(publisherText));
 
-  return NextResponse.json({
-    status,
-    date: now.toISOString(),
-    week: weekNum,
-    weekTheme,
-    day: dayKey,
-    scheduled: { platform, format, topic, category },
-    contentId: result.contentId ?? null,
-    pipeline: {
-      status: pipelineStatus ?? null,
-      completed: summary.completed,
-      // Schätzung aus Tokens × fester Preistabelle, keine Abrechnung. null = keine Stufe hat
-      // Kosten gemeldet (oder der Lauf lieferte keine Zusammenfassung), nie 0 als Ersatz.
-      kosten_usd_geschaetzt: typeof summary.total_cost_usd === "number" ? summary.total_cost_usd : null,
-      kosten_unvollstaendig: summary.kosten_unvollstaendig,
-      duration_ms: summary.total_duration_ms,
+  return lauf(
+    {
+      status,
+      date: now.toISOString(),
+      week: weekNum,
+      weekTheme,
+      day: dayKey,
+      scheduled: { platform, format, topic, category },
+      contentId: result.contentId ?? null,
+      pipeline: {
+        status: pipelineStatus ?? null,
+        completed: summary.completed,
+        // Schätzung aus Tokens × fester Preistabelle, keine Abrechnung. null = keine Stufe hat
+        // Kosten gemeldet (oder der Lauf lieferte keine Zusammenfassung), nie 0 als Ersatz.
+        kosten_usd_geschaetzt: typeof summary.total_cost_usd === "number" ? summary.total_cost_usd : null,
+        kosten_unvollstaendig: summary.kosten_unvollstaendig,
+        duration_ms: summary.total_duration_ms,
+      },
+      ...(result.fehler ? { fehler: result.fehler } : {}),
+      ...(result.counsel ? { counsel: result.counsel } : {}),
+      speicherfehler,
+      publisher_fassung: vorschau === null ? null : vorschau.slice(0, 2000).join(""),
+      publisher_fassung_gekuerzt: vorschau !== null && vorschau.length > 2000,
+      // Ohne PUBLISHER-Text (z. B. COUNSEL hat abgelehnt) gibt es auch keine Fassung zu benennen.
+      publisher_fassung_hinweis:
+        vorschau === null
+          ? "keine PUBLISHER-Fassung im Ergebnis"
+          : identisch
+            ? "PUBLISHER-Fassung, identisch mit dem von COUNSEL geprüften SCRIBE-Text"
+            : "PUBLISHER-Fassung, von COUNSEL nicht geprüft",
     },
-    ...(result.fehler ? { fehler: result.fehler } : {}),
-    ...(result.counsel ? { counsel: result.counsel } : {}),
-    speicherfehler,
-    publisher_fassung: vorschau === null ? null : vorschau.slice(0, 2000).join(""),
-    publisher_fassung_gekuerzt: vorschau !== null && vorschau.length > 2000,
-    // Ohne PUBLISHER-Text (z. B. COUNSEL hat abgelehnt) gibt es auch keine Fassung zu benennen.
-    publisher_fassung_hinweis:
-      vorschau === null
-        ? "keine PUBLISHER-Fassung im Ergebnis"
-        : identisch
-          ? "PUBLISHER-Fassung, identisch mit dem von COUNSEL geprüften SCRIBE-Text"
-          : "PUBLISHER-Fassung, von COUNSEL nicht geprüft",
-  });
+    200,
+    result.steps
+  );
 }
