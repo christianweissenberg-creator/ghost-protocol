@@ -556,8 +556,9 @@ test("T-L1 /api/status (Prüfbefunde D1, betrieb-1): je Plan-Job die zuletzt ein
     // Prüfbefund D1: nach der DB-Uhr, Gleichstand nach id — nicht nach begonnen_am (App-Uhr).
     assert.equal(p.get("order"), "eingetragen_am.desc,id.desc");
     assert.equal(p.get("limit"), "1");
-    // Prüfbefunde Z2, SR-5: eingetragen_am (DB-Uhr) wird mitgelesen.
-    assert.equal(p.get("select"), "job,begonnen_am,beendet_am,eingetragen_am,ergebnis,http_status,teilergebnisse,hinweis");
+    // Prüfbefunde Z2, SR-5: eingetragen_am (DB-Uhr) wird mitgelesen; Prüfbefund r3-logik-1: die id für
+    // die Reihenfolge bei gleicher DB-Uhr (bewerteJob ordnet wie die Route).
+    assert.equal(p.get("select"), "id,job,begonnen_am,beendet_am,eingetragen_am,ergebnis,http_status,teilergebnisse,hinweis");
   }
   // Ein aktiver Job: zwei Abfragen (Prüfbefund Z5), sonst verdeckt ein übersprungener Lauf ein früheres Ergebnis.
   zuruecksetzen();
@@ -565,7 +566,16 @@ test("T-L1 /api/status (Prüfbefunde D1, betrieb-1): je Plan-Job die zuletzt ein
   const aktivGelesen = lesungen().map((e) => new URLSearchParams(e.query));
   assert.equal(aktivGelesen.length, 4);
   const auto = aktivGelesen.filter((p) => p.get("job") === "eq.content-auto-produce");
-  assert.deepEqual(auto.map((p) => p.get("ergebnis")).sort(), ["neq.uebersprungen", null].sort());
+  // Prüfbefunde r3-logik-1, P3A-1: ohne Ergebnis-Filter die zuletzt eingetragenen ZEILEN_JE_AKTIVEM_JOB,
+  // mit Filter (ohne übersprungene) die zuletzt eingetragene.
+  assert.equal(statusServer.ZEILEN_JE_AKTIVEM_JOB, 10);
+  assert.deepEqual(
+    auto.map((p) => [p.get("ergebnis"), p.get("limit")]).sort(),
+    [
+      [null, "10"],
+      ["neq.uebersprungen", "1"],
+    ].sort(),
+  );
   for (const p of aktivGelesen) assert.equal(p.get("order"), "eingetragen_am.desc,id.desc");
   // Die übrigen Prüfungen gelten dem ersten Abruf (Plan wie heute).
   assert.equal(s.crons.quelle, Q_CRONS);
@@ -845,7 +855,8 @@ test("T-L7 /api/status (Prüfbefund D1): gelesen wird die zuletzt eingetragene Z
   assert.deepEqual([j.lage, j.status], ["ok", "ok"]);
   assert.equal(j.letzter_lauf.begonnen_am, "2026-11-20T07:03:05.000Z");
   assert.equal(j.bewerteter_lauf.begonnen_am, "2026-11-20T07:03:05.000Z");
-  // Gleichstand der DB-Uhr: Die höhere id ist die zuletzt eingetragene Zeile.
+  // Gleichstand der DB-Uhr: Die höhere id ist die zuletzt eingetragene Zeile. Seit Prüfbefund r3-logik-1
+  // liest die Route für aktive Jobs beide Zeilen; bewerteJob ordnet wie sie (eingetragen_am, dann id).
   zuruecksetzen();
   const gleich = "2026-11-20T07:04:06.000Z";
   welt.tabellen.lauf_nachweis = [
@@ -864,6 +875,86 @@ test("T-L7 /api/status (Prüfbefund D1): gelesen wird die zuletzt eingetragene Z
   const abend = aus.crons.wert.jobs[1];
   assert.deepEqual([abend.lage, abend.stolperdraht_am_berlin, abend.stolperdraht_spalte], ["laeuft_obwohl_aus", "01.12.2026 18:03", "begonnen_am"]);
   assert.equal(abend.letzter_lauf.begonnen_am, "2026-12-01T17:03:00.000Z");
+});
+
+// ═══ Dritte Prüfung des Branches (r3-logik-1 bis r3-logik-4, P3A-1): über die Route ═══
+
+const KEIN_EINTRAG = { hinweis: "status skipped · kein Kalendereintrag" };
+const WOCHENENDE = { hinweis: "status skipped · Wochenende — kein Content geplant" };
+const AUTO_AB_MO = "2026-11-09T00:00:00+01:00";
+
+test("T-L8 /api/status (Prüfbefunde r3-logik-1, P3A-1): ein Samstagslauf verdrängt den deckenden Freitagslauf nicht; 'überfällig seit' nach dem letzten deckenden Lauf", async () => {
+  // auto-produce aktiv seit Mo 09.11.; Do 12.11. ok; Fr 13.11. 09:07 der Cron, freitags kein
+  // Kalendereintrag → übersprungen (Plan-Wochentag, deckt S); Sa 14.11. 11:30 ein manueller Aufruf ohne
+  // ?dry → übersprungen ("Wochenende", deckt nichts). Vorher las die Route nur die Samstags- und die
+  // Donnerstagszeile: rot "überfällig seit Fr 13.11. 09:07", obwohl der Freitag lief.
+  welt.tabellen.lauf_nachweis = [
+    dbZeile(1, "content-auto-produce", "2026-11-12T08:07:05.000Z"),
+    dbZeile(2, "content-auto-produce", "2026-11-13T08:07:05.000Z", "uebersprungen", KEIN_EINTRAG),
+    dbZeile(3, "content-auto-produce", "2026-11-14T10:30:00.000Z", "uebersprungen", WOCHENENDE),
+  ];
+  for (const jetzt of ["2026-11-14T11:00:00Z", "2026-11-16T08:00:00Z"]) {
+    const s = await mitAktivenJobs(["content-auto-produce"], AUTO_AB_MO, () => mitDatum(jetzt, statusAbruf));
+    const j = s.crons.wert.jobs[2];
+    assert.deepEqual([j.lage, j.status, j.sollzeitpunkt_berlin], ["ok", "ok", "Fr 13.11. 09:07"], jetzt);
+    assert.equal(j.letzter_lauf.begonnen_am, "2026-11-14T10:30:00.000Z", "letzter Lauf: der Samstag");
+    assert.equal(j.bewerteter_lauf.begonnen_am, "2026-11-13T08:07:05.000Z", "bewertet: der Freitag");
+  }
+  // Fällt auch der Montag aus: überfällig seit Mo 16.11. 09:07 (vorher: seit Fr 13.11.).
+  const mo = await mitAktivenJobs(["content-auto-produce"], AUTO_AB_MO, () => mitDatum("2026-11-16T10:30:00Z", statusAbruf));
+  assert.deepEqual([mo.crons.wert.jobs[2].lage, mo.crons.wert.jobs[2].ueberfaellig_seit_berlin], ["ueberfaellig", "Mo 16.11. 09:07"]);
+  // Mo 02.11. ok, Di–Fr übersprungen (kein Kalendereintrag), Sa 07.11. manuell übersprungen, Mo 09.11.
+  // verpasst: überfällig seit Mo 09.11. 09:07 (vorher: seit Di 03.11., nach dem letzten Lauf mit Ergebnis).
+  zuruecksetzen();
+  welt.tabellen.lauf_nachweis = [
+    dbZeile(1, "content-auto-produce", "2026-11-02T08:07:05.000Z"),
+    ...["03", "04", "05", "06"].map((tag, i) => dbZeile(2 + i, "content-auto-produce", `2026-11-${tag}T08:07:05.000Z`, "uebersprungen", KEIN_EINTRAG)),
+    dbZeile(6, "content-auto-produce", "2026-11-07T10:30:00.000Z", "uebersprungen", WOCHENENDE),
+  ];
+  const s = await mitAktivenJobs(["content-auto-produce"], "2026-11-02T00:00:00+01:00", () => mitDatum("2026-11-09T11:00:00Z", statusAbruf));
+  assert.deepEqual([s.crons.wert.jobs[2].lage, s.crons.wert.jobs[2].ueberfaellig_seit_berlin], ["ueberfaellig", "Mo 09.11. 09:07"]);
+  assert.match(cronsZeile({ erzeugt_am: s.erzeugt_am, crons: s.crons }).text, /^Content Auto-Produce: überfällig seit Mo 09\.11\. 09:07 · letzter Lauf /);
+});
+
+test("T-L9 /api/status (Prüfbefunde r3-logik-2, r3-logik-3, r3-logik-4): nachgehende App-Uhr bleibt rot, eine alte Zukunftszeile hält nicht mehr rot, eine jüngere unlesbare Zeile trägt", async () => {
+  // r3-logik-2: Fr 13.11. 09:07 der Cron, fehler, App-Uhr 12 min nach (begonnen 08:55:05, eingetragen 09:08:06
+  // Berlin); Fr 10:00 ein Nachlauf mit richtiger Uhr, übersprungen (deckt S). Vorher grün.
+  welt.tabellen.lauf_nachweis = [
+    dbZeile(1, "content-auto-produce", "2026-11-13T07:55:05.000Z", "fehler", { http_status: 500, eingetragen_am: "2026-11-13T08:08:06.000Z" }),
+    dbZeile(2, "content-auto-produce", "2026-11-13T09:00:00.000Z", "uebersprungen", KEIN_EINTRAG),
+  ];
+  const nach = await mitAktivenJobs(["content-auto-produce"], AUTO_AB_MO, () => mitDatum("2026-11-13T11:00:00Z", statusAbruf));
+  assert.deepEqual([nach.crons.wert.jobs[2].lage, nach.crons.status], ["zeit_unplausibel", "fehler"]);
+  // r3-logik-3: Do 19.11. eine Zukunftszeile (begonnen 01.03.2027), danach plausible übersprungene Läufe.
+  // Vorher rot "unplausibel" bis zum nächsten Lauf mit Ergebnis.
+  zuruecksetzen();
+  welt.tabellen.lauf_nachweis = [
+    dbZeile(1, "content-auto-produce", "2027-03-01T08:07:00.000Z", "ok", { eingetragen_am: "2026-11-19T08:08:01.000Z" }),
+    ...["20", "23", "24"].map((tag, i) => dbZeile(2 + i, "content-auto-produce", `2026-11-${tag}T08:07:05.000Z`, "uebersprungen", KEIN_EINTRAG)),
+  ];
+  const zukunft = await mitAktivenJobs(["content-auto-produce"], AUTO_AB_MO, () => mitDatum("2026-11-24T11:00:00Z", statusAbruf));
+  const j = zukunft.crons.wert.jobs[2];
+  assert.deepEqual([j.lage, j.letzter_lauf.begonnen_am, j.bewerteter_lauf.begonnen_am], ["ok", "2026-11-24T08:07:05.000Z", "2026-11-24T08:07:05.000Z"]);
+  // r3-logik-4: Mo 16.11. 09:07 ok, Mo 10:00 eine jüngere Zeile "uebersprungen" mit unlesbarem http_status:
+  // Sie kann die zuletzt eingetragene sein → "nicht lesbar" (rot).
+  zuruecksetzen();
+  welt.tabellen.lauf_nachweis = [
+    dbZeile(1, "content-auto-produce", "2026-11-16T08:07:05.000Z"),
+    dbZeile(2, "content-auto-produce", "2026-11-16T09:00:00.000Z", "uebersprungen", { http_status: 0 }),
+  ];
+  const kaputt = await mitAktivenJobs(["content-auto-produce"], AUTO_AB_MO, () => mitDatum("2026-11-16T11:00:00Z", statusAbruf));
+  assert.deepEqual([kaputt.crons.wert.jobs[2].lage, kaputt.crons.status], ["nicht_lesbar", "fehler"]);
+});
+
+test("T-L10 Attrappe wie Postgres (Prüfbefund r3-logik-4): eingetragen_am wird nach der Zeit geordnet, nicht nach dem Text", async () => {
+  // Als Text stünde "…T07:59:01+01:00" (06:59:01 UTC) vor "…T07:04:01.000Z"; Postgres ordnet timestamptz
+  // nach der Zeit. Ohne die Zeitspalten in ZEITSPALTEN (tests/harness/fake.mjs) läse die Route die ältere Zeile.
+  welt.tabellen.lauf_nachweis = [
+    dbZeile(1, "briefing-morgen", "2026-11-20T06:58:00.000Z", "ok", { eingetragen_am: "2026-11-20T07:59:01+01:00" }),
+    dbZeile(2, "briefing-morgen", "2026-11-20T07:03:00.000Z", "fehler"),
+  ];
+  const s = await mitDatum("2026-11-20T09:00:00Z", statusAbruf);
+  assert.equal(s.crons.wert.jobs[0].letzter_lauf.begonnen_am, "2026-11-20T07:03:00.000Z");
 });
 
 test("T-A5 Anzeige (Prüfbefunde Z7, B3): bei gleicher Farbe nennt die Zeile den Mangel eines aktiven Jobs vor 'aus' und 'nicht lesbar'", () => {
@@ -945,6 +1036,23 @@ test("T-A8 Anzeige (Prüfbefund B8): Teilergebnis null oder in fremder Form → 
   const fremd = structuredClone(gut);
   fremd.wert.jobs[0].hinweis = { text: "x" };
   assert.equal(types.cronsFeld(fremd).wert, null, "Textfeld als Objekt");
+  // Prüfbefund P3A-3 (dritte Prüfung): dieselbe Prüfung für die neueren Textfelder (CRON_TEXTFELDER in
+  // lib/types.ts) — vorher ungetestet. Fehlte urteil_ab_berlin oder erster_sollzeitpunkt_berlin in der
+  // Liste, warf das Rendern bei einer Zahl oder einem Objekt (TypeError in ohneGleichenTag).
+  const basis = structuredClone(gut);
+  Object.assign(basis.wert.jobs[0], { erster_sollzeitpunkt_berlin: "Mo 16.11. 08:03", urteil_ab_berlin: "Mo 16.11. 10:03" });
+  assert.notEqual(types.cronsFeld(basis).wert, null, "Gegenprobe: mit beiden Feldern lesbar");
+  for (const feld of ["sollzeitpunkt", "erster_sollzeitpunkt_berlin", "urteil_ab_berlin", "stolperdraht_spalte", "stolperdraht_quittiert_bis_berlin"]) {
+    for (const wert of [5, { text: "x" }]) {
+      const name = `${feld} = ${JSON.stringify(wert)}`;
+      const kaputt = structuredClone(basis);
+      kaputt.wert.jobs[0][feld] = wert;
+      const f = types.cronsFeld(kaputt);
+      assert.equal(f.wert, null, name);
+      assert.match(f.hinweis, /Job-Liste der Antwort unlesbar/, name);
+      assert.equal(cronsZeile({ erzeugt_am: ZEIT, crons: kaputt }).text, "Fehler", `${name}: Status in Worten, kein Absturz`);
+    }
+  }
 });
 
 test("T-A9 Anzeige: Texte der nachgebesserten Lagen (Z3, Z2, Z4, Z6) und ältere Antworten ohne die neuen Felder", () => {
@@ -1009,6 +1117,16 @@ test("T-A10 Anzeige (Prüfbefund anzeige-1): Stolperdraht im Tooltip — aus ein
     "Briefing abends: lief zuletzt am 24.11.2026 18:04, obwohl als aus geführt · Zeitstempel des Laufs unplausibel, eingetragen am 24.11.2026 18:04 (DB-Uhr; begonnen_am 24.11.2027 18:03 liegt mehr als 10 min nach der Messzeit)",
   );
   assert.ok(z3.title.includes("Stolperdraht: Lauf eingetragen 24.11.2026 18:04 (Europe/Berlin, DB-Uhr — Zeitstempel des Laufs unplausibel)"), z3.title);
+  // Prüfbefund P3A-3: teils unlesbar UND Zeit unplausibel (kein lesbarer letzter Lauf) — die Zeile nennt
+  // "eingetragen" (DB-Uhr); "begonnen 24.11.2026" stimmte nicht, begonnen_am liegt im Jahr 2027.
+  const teilsZukunft = cronsMesswert(
+    totmann.TOTMANN_PLAN,
+    [{ ...zeile("briefing-abend", "2027-11-24T17:03:00.000Z"), eingetragen_am: "2026-11-24T17:04:01.000Z", http_status: 0 }],
+    di,
+  );
+  assert.deepEqual([teilsZukunft.wert.jobs[1].letzter_lauf, teilsZukunft.wert.jobs[1].stolperdraht_spalte], [null, "eingetragen_am"]);
+  const abend4 = jobBlock(cronsZeile({ erzeugt_am: di, crons: teilsZukunft }).title, "Briefing abends (briefing-abend):");
+  assert.ok(abend4.includes("\n  Letzter Lauf: Zeile teilweise unlesbar (eingetragen 24.11.2026 18:04, Europe/Berlin)"), abend4);
 });
 
 test("T-A11 Anzeige (Prüfbefund anzeige-2): erster Sollzeitpunkt steht aus — Lage je Job, erster zählender Sollzeitpunkt mit Urteil, 'laut Plan aktiv seit'", () => {
@@ -1202,6 +1320,21 @@ function anweisungen(sql) {
 }
 
 /**
+ * Die Tabelle, Leerraum vereinheitlicht (Prüfbefund P3A-2, dritte Prüfung): Vorher prüfte T-S1 von der
+ * ersten Anweisung nur den Anfang. Der Zerleger kennt nur '…' — hinter einem E'\''-String oder einem
+ * Bezeichner mit Hochkomma ("…'…") las er eine angehängte Anweisung samt ";" als Text der Tabelle, die
+ * Postgres aber einzeln ausführt (gemessen mit Mutanten der Datei: der Test blieb grün). Exakt
+ * verglichen fällt jede solche Anweisung auf: Die erwarteten Texte enthalten weder E'…' noch "…" noch
+ * $-Quotes, außerhalb von '…' also nichts, was Postgres anders liest als der Zerleger.
+ */
+const TABELLE =
+  "CREATE TABLE IF NOT EXISTS public.lauf_nachweis ( id BIGSERIAL PRIMARY KEY, job TEXT NOT NULL CHECK (job ~ '^[a-z0-9-]{1,40}$'), " +
+  "begonnen_am TIMESTAMPTZ NOT NULL, beendet_am TIMESTAMPTZ NOT NULL, eingetragen_am TIMESTAMPTZ NOT NULL DEFAULT now(), " +
+  "ergebnis TEXT NOT NULL CHECK (ergebnis IN ('ok','teilweise','fehler','uebersprungen')), http_status SMALLINT CHECK (http_status BETWEEN 100 AND 599), " +
+  "teilergebnisse JSONB NOT NULL DEFAULT '[]'::jsonb CHECK (jsonb_typeof(teilergebnisse) = 'array'), hinweis TEXT CHECK (char_length(hinweis) <= 300), " +
+  "CHECK (beendet_am >= begonnen_am) )";
+
+/**
  * Alle Anweisungen nach CREATE TABLE, in dieser Reihenfolge (Prüfbefunde oeffentlich-1, oeffentlich-3,
  * D1): Index nach der DB-Uhr; RLS ohne Policy; anon, authenticated und PUBLIC ohne Rechte; service_role
  * erst ohne alle Rechte, dann genau lesen und anhängen (Sequenz: USAGE für nextval).
@@ -1233,15 +1366,16 @@ test("T-S1 scripts/lauf_nachweis.sql (Prüfbefunde B2, oeffentlich-1, oeffentlic
   assert.match(code, /eingetragen_am\s+TIMESTAMPTZ\s+NOT NULL\s+DEFAULT now\(\)/);
   // Prüfbefund oeffentlich-1: alle Anweisungen, ohne "--"- und Blockkommentare. Zuerst die Tabelle,
   // danach genau diese Liste — eine fehlende, zusätzliche, auskommentierte oder verschobene
-  // Anweisung macht den Test rot (vorher prüfte er nur fünf Teilstrings).
+  // Anweisung macht den Test rot (vorher prüfte er nur fünf Teilstrings). Prüfbefund P3A-2: auch die
+  // Tabelle selbst exakt, die ganze Datei ist eine exakte, geordnete Liste.
   const liste = anweisungen(sql);
   assert.match(liste[0] ?? "", /^CREATE TABLE IF NOT EXISTS public\.lauf_nachweis \(/, "zuerst die Tabelle");
-  assert.equal(liste.filter((a) => /^CREATE TABLE\b/i.test(a)).length, 1, "genau eine Tabelle");
-  assert.deepEqual(liste.slice(1), ANWEISUNGEN_NACH_TABELLE);
+  assert.deepEqual(liste, [TABELLE, ...ANWEISUNGEN_NACH_TABELLE]);
   // Zusätzlich ausgeschlossen, unabhängig von der Liste: Rechte an anon, authenticated oder PUBLIC,
-  // abgeschaltete RLS, eine Policy, Realtime.
+  // abgeschaltete RLS, eine Policy, Realtime. Prüfbefund P3A-2: der GRANT-Ausschluss auch mitten in
+  // einer Anweisung (vorher am Anfang verankert).
   for (const a of liste) {
-    assert.doesNotMatch(a, /^GRANT\b.*\bTO\b.*\b(anon|authenticated|public)\b/i, a);
+    assert.doesNotMatch(a, /\bGRANT\b.*\bTO\b.*\b(anon|authenticated|public)\b/i, a);
     assert.doesNotMatch(a, /\bDISABLE\s+ROW\s+LEVEL\s+SECURITY\b/i, a);
     assert.doesNotMatch(a, /\bCREATE\s+POLICY\b/i, a);
     assert.doesNotMatch(a, /\bALTER\s+PUBLICATION\b/i, a);

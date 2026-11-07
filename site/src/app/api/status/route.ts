@@ -16,6 +16,7 @@ import {
   STATUS_HAENGEND,
   STATUS_WARTEND,
   STUNDE_MS,
+  ZEILEN_JE_AKTIVEM_JOB,
   bereinigeFehler,
   berlinAnzeige,
   bewerteTotmann,
@@ -311,12 +312,17 @@ async function messeKosten(sb: () => ServiceClient, jetzt: Date) {
 
 // ── Totmann: Crons und Agenten (Objekt-Studio Stufe 2, §2.2–2.4) ──────────────
 
-// eingetragen_am (DB-Uhr) für den Uhrenabgleich der Zeile (Prüfbefunde Z2, SR-5).
-const NACHWEIS_SPALTEN = "job, begonnen_am, beendet_am, eingetragen_am, ergebnis, http_status, teilergebnisse, hinweis";
+// eingetragen_am (DB-Uhr) für den Uhrenabgleich der Zeile (Prüfbefunde Z2, SR-5); id für die
+// Reihenfolge bei gleicher DB-Uhr, wie hier geordnet (Prüfbefund r3-logik-1, bewerteJob).
+const NACHWEIS_SPALTEN = "id, job, begonnen_am, beendet_am, eingetragen_am, ergebnis, http_status, teilergebnisse, hinweis";
 
 // Je Plan-Job die zuletzt eingetragene Zeile (order eingetragen_am desc, id desc, limit 1; Index
 // idx_lauf_nachweis_job_eingetragen in scripts/lauf_nachweis.sql) und — nur für aktive Jobs — die
 // zuletzt eingetragene mit einem Ergebnis außer uebersprungen.
+// - Prüfbefunde r3-logik-1, P3A-1 (dritte Prüfung): Für aktive Jobs liest die erste Abfrage die
+//   zuletzt eingetragenen ZEILEN_JE_AKTIVEM_JOB statt nur einer. Mit nur der jüngsten verdrängte ein
+//   übersprungener Lauf an einem Tag ohne Sollzeitpunkt (Samstag, "Wochenende") den übersprungenen
+//   Freitagslauf, der S deckt: rot "überfällig seit Fr", obwohl der Freitag lief.
 // - Prüfbefund D1 (zweite Prüfung): geordnet nach der DB-Uhr (eingetragen_am), bei Gleichstand nach
 //   id, nicht mehr nach begonnen_am (App-Uhr). Eine Zeile aus einer vorgelaufenen App-Uhr blieb sonst
 //   bis zu ihrem Datum "die jüngste", und neuere plausible Läufe wurden nie gelesen: bei einem aktiven
@@ -344,17 +350,19 @@ async function messeCrons(sb: () => ServiceClient, jetzt: Date): Promise<Messwer
   try {
     const client = sb();
     const signal = zeitlimit();
-    const zuletztEingetragen = (job: string, ohneUebersprungen: boolean) => {
+    const zuletztEingetragen = (job: string, ohneUebersprungen: boolean, anzahl: number) => {
       const abfrage = client.from(NACHWEIS_TABELLE).select(NACHWEIS_SPALTEN).eq("job", job);
       return (ohneUebersprungen ? abfrage.neq("ergebnis", "uebersprungen") : abfrage)
         .order("eingetragen_am", { ascending: false })
         .order("id", { ascending: false })
-        .limit(1)
+        .limit(anzahl)
         .abortSignal(signal);
     };
     const antworten = await Promise.all(
       TOTMANN_PLAN.flatMap((j) =>
-        j.aktiv ? [zuletztEingetragen(j.job, false), zuletztEingetragen(j.job, true)] : [zuletztEingetragen(j.job, false)]
+        j.aktiv
+          ? [zuletztEingetragen(j.job, false, ZEILEN_JE_AKTIVEM_JOB), zuletztEingetragen(j.job, true, 1)]
+          : [zuletztEingetragen(j.job, false, 1)]
       )
     );
     for (const res of antworten) {

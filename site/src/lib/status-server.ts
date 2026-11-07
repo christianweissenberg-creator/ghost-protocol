@@ -883,12 +883,14 @@ export function werteKostenAus(
 // Spezifikation: docs/intern/objekt-studio-stufe-2.md §2.2–2.5. Der Plan steht in lib/totmann.ts,
 // die Tabelle in scripts/lauf_nachweis.sql (Entwurf, nicht ausgeführt). Die Schreiber
 // (api/cron/briefing, api/content/auto-produce) hängen nach bestandener Secret-Prüfung genau eine
-// Zeile an; GET /api/status liest je Job die zuletzt eingetragene Zeile und, für aktive Jobs, die
-// zuletzt eingetragene mit einem Ergebnis außer uebersprungen und bewertet sie hier. Agenten bekommen
-// keinen eigenen Alterswächter: Ihr Ergebnis steht je Lauf in teilergebnisse (§2.2 Punkt 5).
+// Zeile an; GET /api/status liest je Job die zuletzt eingetragene Zeile (für aktive Jobs die zuletzt
+// eingetragenen ZEILEN_JE_AKTIVEM_JOB) und, für aktive Jobs, die zuletzt eingetragene mit einem
+// Ergebnis außer uebersprungen und bewertet sie hier. Agenten bekommen keinen eigenen Alterswächter:
+// Ihr Ergebnis steht je Lauf in teilergebnisse (§2.2 Punkt 5).
 // Nachbesserung 07.11.2026 nach der Prüfung des Branches: Prüfbefunde Z1–Z8, SR-1–SR-8 und B1–B11
 // sind an den Stellen genannt, die sie ändern; ebenso die der zweiten Prüfung (D1, logik-1 bis
-// logik-4, betrieb-1, anzeige-1 bis anzeige-5, oeffentlich-1 bis oeffentlich-3).
+// logik-4, betrieb-1, anzeige-1 bis anzeige-5, oeffentlich-1 bis oeffentlich-3) und der dritten
+// (r3-logik-1 bis r3-logik-4, P3A-1 bis P3A-3).
 
 /** Werte des CHECK auf lauf_nachweis.ergebnis (scripts/lauf_nachweis.sql). */
 export const LAUF_ERGEBNISSE: readonly LaufErgebnis[] = ["ok", "teilweise", "fehler", "uebersprungen"];
@@ -908,11 +910,27 @@ export const VORLAUF_MS = 10 * 60_000;
  * solange eine solche Zeile das Urteil trägt (Prüfbefund logik-4, siehe bewerteJob). Prüfbefund D1:
  * Vorher blieb sie als "jüngste nach begonnen_am" auch dann die gelesene Zeile, wenn längst neuere,
  * plausible Läufe eingetragen waren — rot bis zu ihrem Datum. GET /api/status liest deshalb die
- * zuletzt EINGETRAGENEN Zeilen (DB-Uhr); ein späterer plausibler Lauf löst das Rot.
+ * zuletzt EINGETRAGENEN Zeilen (DB-Uhr), und bewerteJob ordnet ebenso (juengsterLauf). Prüfbefund
+ * r3-logik-3: Vorher ordnete bewerteJob die gelesenen Zeilen weiter nach begonnen_am, und die
+ * Zukunftszeile lag im Fenster — das Rot löste erst ein späterer Lauf mit Ergebnis, kein
+ * übersprungener. Jetzt gilt für Fenster und Deckung bei begonnen_am nach der Messzeit eingetragen_am
+ * (laufBeginn): Die Zeile trägt das Urteil nur, solange sie die zuletzt eingetragene ist oder nach der
+ * DB-Uhr im Fenster liegt; danach löst ein späterer plausibler Lauf das Rot, auch ein übersprungener.
  * Bei einem abgeschalteten Job hängt der Stolperdraht einer unplausiblen Zeile an eingetragen_am
  * (Prüfbefund logik-2, bewerteAusJob).
  */
 export const UHR_TOLERANZ_MS = 10 * 60_000;
+
+/**
+ * So viele der zuletzt eingetragenen Zeilen liest GET /api/status je aktivem Job (Setzung, Prüfbefunde
+ * r3-logik-1, P3A-1). Vorher nur die jüngste und die jüngste mit Ergebnis: Ein übersprungener Lauf an
+ * einem Tag ohne Sollzeitpunkt (etwa ein manueller Aufruf am Samstag, "Wochenende") verdrängte den
+ * übersprungenen Freitagslauf, der S deckte — rot "überfällig", obwohl der Freitag lief, und
+ * "überfällig seit" zu früh. Einen deckenden Lauf mit Ergebnis liefert weiter die zweite Abfrage. Ein
+ * deckender übersprungener fehlt dem Urteil erst, wenn mindestens ZEILEN_JE_AKTIVEM_JOB übersprungene
+ * Läufe an Tagen ohne Sollzeitpunkt nach ihm eingetragen wurden — vorher genügte dafür ein einziger.
+ */
+export const ZEILEN_JE_AKTIVEM_JOB = 10;
 
 /**
  * So weit darf aktiv_seit nach der Messzeit liegen (Setzung, Prüfbefund logik-3): Der Aktivierungs-PR
@@ -1098,9 +1116,11 @@ function wochentagIn(zone: PlanZone, ms: number): number {
  * Vorher deckte auch ein manueller Samstagslauf ("skipped, Wochenende") einen verpassten Freitag —
  * ein fehlender Lauf wurde grün, ein gescheiterter blieb rot. Ein übersprungener Lauf an einem
  * Plan-Wochentag ("kein Kalendereintrag") ist dagegen ein echter Lauf des Crontabs und deckt weiter.
+ * beginnMs = laufBeginn der Zeile (Prüfbefund r3-logik-3: bei begonnen_am nach der Messzeit zählt der
+ * Wochentag der DB-Uhr).
  */
-function deckt(job: TotmannJob, l: LaufNachweisLesung): boolean {
-  return l.ergebnis !== "uebersprungen" || job.wochentage.includes(wochentagIn(job.zeitzone, Date.parse(l.begonnen_am)));
+function deckt(job: TotmannJob, ergebnis: LaufErgebnis, beginnMs: number): boolean {
+  return ergebnis !== "uebersprungen" || job.wochentage.includes(wochentagIn(job.zeitzone, beginnMs));
 }
 
 function wochentageText(tage: readonly number[]): string {
@@ -1218,13 +1238,42 @@ function jobStand(job: TotmannJob, lage: CronLage, status: MessStatus, a: StandA
   };
 }
 
-/** Jüngste Zeile nach begonnen_am; null bei leerer Liste. */
+/**
+ * Wurde a nach b eingetragen? Dieselbe Reihenfolge wie GET /api/status (order eingetragen_am desc,
+ * id desc; Prüfbefunde D1, r3-logik-1): nach der DB-Uhr, bei Gleichstand nach der id; fehlt eine id
+ * (etwa bei Zeilen, die ein Test direkt übergibt), nach begonnen_am. leseLaufNachweis liest
+ * eingetragen_am auf die Millisekunde; innerhalb derselben Millisekunde entscheidet die id.
+ */
+function spaeterEingetragen(a: LaufNachweisLesung, b: LaufNachweisLesung): boolean {
+  const ea = Date.parse(a.eingetragen_am);
+  const eb = Date.parse(b.eingetragen_am);
+  if (ea !== eb) return ea > eb;
+  if (typeof a.id === "number" && typeof b.id === "number" && a.id !== b.id) return a.id > b.id;
+  return Date.parse(a.begonnen_am) > Date.parse(b.begonnen_am);
+}
+
+/**
+ * Die zuletzt eingetragene Zeile (spaeterEingetragen); null bei leerer Liste. Prüfbefunde r3-logik-1,
+ * r3-logik-3: Vorher die jüngste nach begonnen_am (App-Uhr) — unter mehreren gelesenen Zeilen blieb
+ * eine aus einer vorgelaufenen App-Uhr "die jüngste", obwohl die Route längst neuere gelesen hatte.
+ */
 function juengsterLauf(laeufe: readonly LaufNachweisLesung[]): LaufNachweisLesung | null {
   let juengster: LaufNachweisLesung | null = null;
   for (const l of laeufe) {
-    if (juengster === null || Date.parse(l.begonnen_am) > Date.parse(juengster.begonnen_am)) juengster = l;
+    if (juengster === null || spaeterEingetragen(l, juengster)) juengster = l;
   }
   return juengster;
+}
+
+/**
+ * Beginn eines Laufs für Fenster, Deckung und "überfällig seit" (Prüfbefund r3-logik-3): begonnen_am;
+ * liegt es mehr als UHR_TOLERANZ_MS nach der Messzeit, geht die App-Uhr sicher falsch — dann
+ * eingetragen_am (DB-Uhr), wie beim Stolperdraht eines abgeschalteten Jobs (ausloeser, Prüfbefund
+ * logik-2). Die Zeile bleibt unplausibel; sie trägt das Urteil aber nur noch, wenn sie die zuletzt
+ * eingetragene ist oder nach der DB-Uhr im Fenster liegt.
+ */
+function laufBeginn(begonnenMs: number, eingetragenMs: number, jetztMs: number): number {
+  return begonnenMs > jetztMs + UHR_TOLERANZ_MS ? eingetragenMs : begonnenMs;
 }
 
 /**
@@ -1330,15 +1379,19 @@ function bewerteAusJob(
 
 /**
  * Bewertet einen Job nach der Tabelle in §2.3. laeufe = lesbare Zeilen (GET /api/status liest je Job
- * die zuletzt eingetragene Zeile, für aktive Jobs auch die zuletzt eingetragene mit einem Ergebnis
- * außer uebersprungen); Zeilen anderer Jobs (etwa der Probe) zählen nicht. unlesbare = je Zeile
- * dieses Jobs, die leseLaufNachweis verwarf, was von ihr lesbar ist.
+ * die zuletzt eingetragene Zeile, für aktive Jobs die zuletzt eingetragenen ZEILEN_JE_AKTIVEM_JOB und
+ * die zuletzt eingetragene mit einem Ergebnis außer uebersprungen); Zeilen anderer Jobs (etwa der
+ * Probe) zählen nicht. unlesbare = je Zeile dieses Jobs, die leseLaufNachweis verwarf, was von ihr
+ * lesbar ist. "Jüngste" heißt überall: zuletzt eingetragen (juengsterLauf, wie die Route ordnet).
  * - Plan: pruefePlanJob und pruefePlanZurMesszeit; ein Verstoß wirft (Fehler der Messung).
  * - aus: siehe bewerteAusJob.
  * - aktiv: S = letzterSollzeitpunkt, Fenster ab S − 10 min. Ein Lauf deckt S (Lebenszeichen), wenn er
- *   im Fenster begann und ein Ergebnis hat oder an einem Plan-Wochentag übersprungen wurde (deckt,
- *   Prüfbefund logik-1). Zuerst die Zeilen, die das Urteil tragen (Prüfbefund logik-4): die jüngste,
- *   die deckende im Fenster und jede nicht übersprungene im Fenster. Ist eine davon unlesbar →
+ *   im Fenster begann (laufBeginn) und ein Ergebnis hat oder an einem Plan-Wochentag übersprungen
+ *   wurde (deckt, Prüfbefund logik-1). Zuerst die Zeilen, die das Urteil tragen (Prüfbefund logik-4):
+ *   die jüngste, die jüngste deckende im Fenster und jede nicht übersprungene, die nach einer der
+ *   beiden Uhren im Fenster liegt (Prüfbefund r3-logik-2: Ging die App-Uhr mehr als 10 min nach, lag
+ *   ein Lauf zu S nach begonnen_am vor dem Fenster und entging so der Uhrenprüfung — ein späterer
+ *   deckender Lauf machte den Job grün, obwohl der Lauf zu S scheiterte). Ist eine davon unlesbar →
  *   "nicht lesbar" (rot), ihre Zeit unplausibel → zeit_unplausibel (rot). Ältere Zeilen außerhalb
  *   davon zählen dafür nicht mehr — vorher hielt eine alte Zeile mit Uhrabweichung einen Job rot,
  *   obwohl ein jüngerer übersprungener Lauf S deckte und die alte Zeile gar nicht bewertet wurde.
@@ -1371,19 +1424,29 @@ export function bewerteJob(
   const messbeginn = planZeitpunkt(job.aktiv_seit, `Plan ${job.job}: aktiv_seit`);
   const soll = letzterSollzeitpunkt(job, jetzt);
   const fenster = soll === null ? Number.POSITIVE_INFINITY : soll.getTime() - VORLAUF_MS;
-  const beginn = (l: LaufNachweisLesung) => Date.parse(l.begonnen_am);
+  const eingetragen = (l: LaufNachweisLesung) => Date.parse(l.eingetragen_am);
+  const beginn = (l: LaufNachweisLesung) => laufBeginn(Date.parse(l.begonnen_am), eingetragen(l), jetztMs);
+  const deckend = (l: LaufNachweisLesung) => deckt(job, l.ergebnis, beginn(l));
   const juengster = juengsterLauf(eigene);
-  const deckend = juengsterLauf(eigene.filter((l) => deckt(job, l)));
+  const deckendImFenster = juengsterLauf(eigene.filter((l) => deckend(l) && beginn(l) >= fenster));
 
   // Prüfbefund logik-4: Lesbarkeit und Plausibilität nur für die Zeilen, die das Urteil tragen. Von
-  // einer unlesbaren Zeile gilt als möglich, was nicht lesbar ist (ohne Beginn: könnte die jüngste sein).
-  const juengsterBeginn = juengster === null ? Number.NEGATIVE_INFINITY : beginn(juengster);
+  // einer unlesbaren Zeile gilt als möglich, was nicht lesbar ist: Ohne lesbaren Beginn oder lesbares
+  // eingetragen_am trägt sie immer. Sonst trägt sie, wenn sie die zuletzt eingetragene sein kann, oder
+  // wenn sie nach einer der beiden Uhren im Fenster liegt (Prüfbefund r3-logik-2) und ihr Ergebnis
+  // nicht lesbar "uebersprungen" ist — ein übersprungener Lauf ändert kein Ergebnis, ohne ihn ist das
+  // Urteil höchstens strenger (überfällig statt gedeckt).
+  const juengsterEingetragen = juengster === null ? Number.NEGATIVE_INFINITY : eingetragen(juengster);
   const unlesbarTraegt = unlesbare.some((u) => {
     const b = zeitMs(u.begonnen_am);
-    return !Number.isFinite(b) || b >= juengsterBeginn || (b >= fenster && u.ergebnis !== "uebersprungen");
+    const e = zeitMs(u.eingetragen_am);
+    if (!Number.isFinite(b) || !Number.isFinite(e) || e >= juengsterEingetragen) return true;
+    return Math.max(laufBeginn(b, e, jetztMs), e) >= fenster && u.ergebnis !== "uebersprungen";
   });
   if (unlesbarTraegt) return jobStand(job, "nicht_lesbar", "fehler", { soll, letzterLauf: juengster });
-  const tragend = eigene.filter((l) => l === juengster || (beginn(l) >= fenster && (l.ergebnis !== "uebersprungen" || l === deckend)));
+  const tragend = eigene.filter(
+    (l) => l === juengster || l === deckendImFenster || (l.ergebnis !== "uebersprungen" && Math.max(beginn(l), eingetragen(l)) >= fenster),
+  );
   const unplausibel = unplausibleZeit(tragend, jetztMs);
   if (unplausibel !== null) {
     return jobStand(job, "zeit_unplausibel", LAGE_STATUS.zeit_unplausibel, { soll, letzterLauf: juengster, hinweis: unplausibel });
@@ -1395,10 +1458,12 @@ export function bewerteJob(
       ersterSoll: ersterSollzeitpunktAb(job, messbeginn),
     });
   }
-  if (deckend === null || beginn(deckend) < fenster) {
-    // Ein deckender Lauf zu t deckt jeden S ≤ t + 10 min; verpasst ist der erste S danach, frühestens
-    // aktiv_seit. Ein übersprungener Lauf ohne Sollzeitpunkt am selben Tag hebt die Grenze nicht an.
-    const untergrenze = deckend === null ? messbeginn : Math.max(messbeginn, beginn(deckend) + VORLAUF_MS + 1);
+  if (deckendImFenster === null) {
+    // Ein deckender Lauf zu t deckt jeden S ≤ t + 10 min; verpasst ist der erste S nach dem spätesten
+    // Beginn eines deckenden Laufs, frühestens aktiv_seit. Ein übersprungener Lauf ohne Sollzeitpunkt
+    // am selben Tag hebt die Grenze nicht an.
+    const letzterDeckend = Math.max(...eigene.filter(deckend).map(beginn));
+    const untergrenze = Number.isFinite(letzterDeckend) ? Math.max(messbeginn, letzterDeckend + VORLAUF_MS + 1) : messbeginn;
     const erster = ersterSollzeitpunktAb(job, untergrenze);
     return jobStand(job, "ueberfaellig", LAGE_STATUS.ueberfaellig, {
       soll,
@@ -1413,7 +1478,7 @@ export function bewerteJob(
       : massgeblich.ergebnis === "teilweise"
         ? "teilweise"
         : "fehlgeschlagen";
-  return jobStand(job, lage, LAGE_STATUS[lage], { soll, letzterLauf: juengster, bewerteterLauf: massgeblich ?? deckend });
+  return jobStand(job, lage, LAGE_STATUS[lage], { soll, letzterLauf: juengster, bewerteterLauf: massgeblich ?? deckendImFenster });
 }
 
 /**
@@ -1447,7 +1512,15 @@ export function leseLaufNachweis(zeile: unknown): LaufNachweisLesung | null {
     teilergebnisse.push({ agent: t.agent, ergebnis: teil, fehler: typeof t.fehler === "string" ? t.fehler : null });
   }
   if (zeile.hinweis !== null && zeile.hinweis !== undefined && typeof zeile.hinweis !== "string") return null;
+  // id (BIGSERIAL): nur die Reihenfolge bei gleicher DB-Uhr (spaeterEingetragen, wie die Route; Prüfbefund
+  // r3-logik-1). Ohne id null; eine id, die keine ganze Zahl ist, macht die Zeile unlesbar.
+  let id: number | null = null;
+  if (zeile.id !== null && zeile.id !== undefined) {
+    if (typeof zeile.id !== "number" || !Number.isSafeInteger(zeile.id)) return null;
+    id = zeile.id;
+  }
   return {
+    id,
     job,
     begonnen_am: begonnen,
     beendet_am: beendet,
@@ -1499,8 +1572,9 @@ export interface TotmannBewertung {
 
 /**
  * Bewertet den ganzen Plan. laeufe = gelesene Zeilen aus lauf_nachweis (GET /api/status holt je
- * Job die zuletzt eingetragene und, für aktive Jobs, die zuletzt eingetragene mit einem Ergebnis außer
- * uebersprungen; Dubletten schaden nicht); je Plan-Job zählen die lesbaren Zeilen mit genau dieser
+ * Job die zuletzt eingetragene, für aktive Jobs die zuletzt eingetragenen ZEILEN_JE_AKTIVEM_JOB und
+ * die zuletzt eingetragene mit einem Ergebnis außer uebersprungen; Dubletten schaden nicht, die
+ * Reihenfolge auch nicht); je Plan-Job zählen die lesbaren Zeilen mit genau dieser
  * Kennung — Probe-Zeilen (content-auto-produce-probe) und fremde Jobs zählen nicht. Von einer
  * unlesbaren Zeile mit lesbarer Kennung geht an bewerteJob, was lesbar ist (UnlesbareZeile); eine ohne
  * lesbare Kennung zählt für alle Plan-Jobs als ganz unlesbar. lesefehler = bereinigter Grund, warum

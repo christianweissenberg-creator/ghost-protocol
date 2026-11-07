@@ -933,7 +933,7 @@ test("Totmann §2.3: die Zeile trägt die Farbe des schlechtesten Jobs (fehler >
   assert.equal(gruen.status, "ok");
 });
 
-test("Totmann: je Job zählt die jüngste Zeile (begonnen_am), unabhängig von der Reihenfolge", () => {
+test("Totmann: je Job zählt die jüngste Zeile (zuletzt eingetragen, Prüfbefund r3-logik-1), unabhängig von der Reihenfolge", () => {
   const alt = lauf(JOB_BRIEFING_MORGEN, "2026-11-09T07:03:05Z", "ok");
   const neu = lauf(JOB_BRIEFING_MORGEN, "2026-11-09T08:30:00Z", "fehler");
   for (const laeufe of [
@@ -1106,8 +1106,10 @@ test("Totmann: leseLaufNachweis prüft jede Zeile; eine unlesbare Zeile macht ih
     ],
     hinweis: "1 von 2 Agenten vollständig",
   });
-  // Postgres liefert timestamptz mit Mikrosekunden; die id liest der Totmann nicht.
+  // Postgres liefert timestamptz mit Mikrosekunden. Die id liest der Totmann seit Prüfbefund r3-logik-1
+  // mit: Bei gleicher DB-Uhr ordnet sie die Zeilen wie die Route (order eingetragen_am desc, id desc).
   assert.deepEqual(leseLaufNachweis({ ...gut, id: 7, eingetragen_am: "2026-11-09T07:04:06.123456+00:00", begonnen_am: "2026-11-09T07:03:05.123456+00:00" }), {
+    id: 7,
     job: "briefing-morgen",
     begonnen_am: "2026-11-09T07:03:05.123Z",
     beendet_am: gut.beendet_am,
@@ -1127,10 +1129,14 @@ test("Totmann: leseLaufNachweis prüft jede Zeile; eine unlesbare Zeile macht ih
     ["teilergebnisse kein Array", { ...gut, teilergebnisse: {} }],
     ["Teilergebnis mit fremdem Ergebnis", { ...gut, teilergebnisse: [{ agent: "oracle", ergebnis: "super", fehler: null }] }],
     ["hinweis keine Zeichenkette", { ...gut, hinweis: 5 }],
+    ["id keine Zahl", { ...gut, id: "7" }],
+    ["id keine ganze Zahl", { ...gut, id: 7.5 }],
     ["kein Objekt", "zeile"],
   ]) {
     assert.equal(leseLaufNachweis(kaputt), null, name);
   }
+  // Ohne id (etwa eine Zeile, die ein Test direkt übergibt): lesbar, id null.
+  assert.equal(leseLaufNachweis(gut).id, null);
   const b = bewerteTotmann(TOTMANN_PLAN, [{ ...gut, begonnen_am: "gestern" }], MO_1004, null, NACHWEIS_SEIT);
   assert.deepEqual(b.wert.jobs.map((j) => j.lage), ["nicht_lesbar", "aus", "aus"]);
   assert.equal(b.status, "warnung");
@@ -1266,11 +1272,131 @@ test("Totmann (Prüfbefund logik-4): Lesbarkeit und Plausibilität nur für die 
   const frSkipSchief = lauf(JOB_AUTO_PRODUCE, "2026-11-20T08:07:00Z", "uebersprungen", { eingetragen_am: "2026-11-20T08:30:00Z" });
   const saSkip = lauf(JOB_AUTO_PRODUCE, "2026-11-21T10:30:00Z", "uebersprungen");
   assert.equal(bewerteJob(AUTO_SEIT_MO, [saSkip, frSkipSchief], new Date("2026-11-21T11:00:00Z")).lage, "zeit_unplausibel");
-  // … eine unlesbare Zeile, die die jüngste sein kann (im Fenster oder ohne lesbaren Beginn).
+  // … eine unlesbare Zeile mit Ergebnis im Fenster, eine ohne lesbaren Beginn. Weitere Fälle unlesbarer
+  // Zeilen (die zuletzt eingetragene, eine übersprungene im Fenster): Test zu Prüfbefund r3-logik-4.
   const kaputtNeu = { ...lauf(JOB_AUTO_PRODUCE, "2026-11-16T08:30:00Z"), http_status: 0 };
   assert.equal(bewerteTotmann([MORGEN, ABEND, AUTO_SEIT_MO], [moSkip, kaputtNeu], moMittag, null, NACHWEIS_SEIT).wert.jobs[2].lage, "nicht_lesbar");
   const ohneBeginn = { ...frSchief, begonnen_am: "gestern" };
   assert.equal(bewerteTotmann([MORGEN, ABEND, AUTO_SEIT_MO], [moSkip, ohneBeginn], moMittag, null, NACHWEIS_SEIT).wert.jobs[2].lage, "nicht_lesbar");
+});
+
+// ── Dritte Prüfung des Branches (r3-logik-1 bis r3-logik-4); die Routenfälle stehen in t-totmann (T-L8–T-L10) ──
+
+/** Kopie der Zeile ohne id (wie eine Zeile, die ein Test direkt übergibt). */
+const ohneId = (l) => {
+  const k = { ...l };
+  delete k.id;
+  return k;
+};
+
+test("Totmann (Prüfbefunde r3-logik-1, D1): 'jüngste' heißt zuletzt eingetragen — wie die Route ordnet (eingetragen_am, bei Gleichstand id)", () => {
+  // Überlappende Läufe am Fr 13.11.: der Cron um 09:07 läuft bis 09:40 und scheitert, ein manueller Lauf
+  // 09:20–09:25 gelingt. Zuletzt eingetragen ist der Cron-Lauf; er entscheidet, so wie die Route ihn als
+  // jüngste Zeile liest (vorher nach begonnen_am: der manuelle Lauf, grün).
+  const cron = lauf(JOB_AUTO_PRODUCE, "2026-11-13T08:07:00Z", "fehler", { beendet_am: "2026-11-13T08:40:00Z", eingetragen_am: "2026-11-13T08:40:01Z" });
+  const hand = lauf(JOB_AUTO_PRODUCE, "2026-11-13T08:20:00Z", "ok", { beendet_am: "2026-11-13T08:25:00Z", eingetragen_am: "2026-11-13T08:25:01Z" });
+  const jetzt = new Date("2026-11-13T11:00:00Z");
+  for (const laeufe of [
+    [cron, hand],
+    [hand, cron],
+  ]) {
+    const j = bewerteJob(AUTO_SEIT_MO, laeufe, jetzt);
+    assert.deepEqual([j.lage, j.letzter_lauf.begonnen_am, j.bewerteter_lauf.begonnen_am], ["fehlgeschlagen", cron.begonnen_am, cron.begonnen_am]);
+  }
+  // Gleiche DB-Uhr: Die höhere id ist die zuletzt eingetragene (über die Route: T-L7).
+  const gleich = "2026-11-13T08:08:06.000Z";
+  const a = lauf(JOB_AUTO_PRODUCE, "2026-11-13T08:07:06Z", "ok", { id: 7, eingetragen_am: gleich });
+  const b = lauf(JOB_AUTO_PRODUCE, "2026-11-13T08:07:05Z", "fehler", { id: 8, eingetragen_am: gleich });
+  for (const laeufe of [
+    [a, b],
+    [b, a],
+  ]) {
+    assert.equal(bewerteJob(AUTO_SEIT_MO, laeufe, jetzt).lage, "fehlgeschlagen", "id 8 vor id 7");
+    // Ohne id: der später begonnene, unabhängig von der Reihenfolge.
+    assert.equal(bewerteJob(AUTO_SEIT_MO, laeufe.map(ohneId), jetzt).lage, "ok", "ohne id: begonnen_am");
+  }
+  // Abgeschalteter Job: Letzter Lauf ist der zuletzt eingetragene, nicht die Zukunftszeile.
+  const zukunft = lauf(JOB_BRIEFING_ABEND, "2027-11-24T17:03:00Z", "ok", { eingetragen_am: "2026-11-24T17:04:01Z" });
+  const echt = lauf(JOB_BRIEFING_ABEND, "2026-12-01T17:03:00Z");
+  const aus = bewerteTotmann(TOTMANN_PLAN, [zukunft, echt], new Date("2026-12-01T20:00:00Z"), null, NACHWEIS_SEIT).wert.jobs[1];
+  assert.deepEqual([aus.lage, aus.letzter_lauf.begonnen_am], ["laeuft_obwohl_aus", echt.begonnen_am]);
+});
+
+test("Totmann (Prüfbefund r3-logik-2): ob eine Zeile das Urteil trägt, entscheiden beide Uhren — ein Lauf zu S mit nachgehender App-Uhr bleibt rot", () => {
+  // Fr 13.11. 09:07 Berlin läuft der Cron und scheitert; die App-Uhr geht 12 min nach: begonnen_am 08:55:05,
+  // beendet_am 08:56:05 (App-Uhr), eingetragen_am 09:08:06 (DB-Uhr). Fr 10:00 ein Nachlauf mit richtiger
+  // Uhr, übersprungen ("kein Kalendereintrag", ein Plan-Wochentag: Er deckt S). Fr 12:00 Berlin. Vorher
+  // lag der Lauf nach begonnen_am vor dem Fenster (S − 10 min = 08:57), entging der Uhrenprüfung, und
+  // der Nachlauf machte den Job grün.
+  const frNachgehend = lauf(JOB_AUTO_PRODUCE, "2026-11-13T07:55:05Z", "fehler", { http_status: 500, eingetragen_am: "2026-11-13T08:08:06Z" });
+  const frNachlauf = lauf(JOB_AUTO_PRODUCE, "2026-11-13T09:00:00Z", "uebersprungen", { hinweis: "status skipped · kein Kalendereintrag" });
+  const jetzt = new Date("2026-11-13T11:00:00Z");
+  const j = bewerteJob(AUTO_SEIT_MO, [frNachlauf, frNachgehend], jetzt);
+  assert.deepEqual([j.lage, j.status], ["zeit_unplausibel", "fehler"]);
+  assert.equal(j.hinweis, "App-Uhr (beendet_am) und DB-Uhr (eingetragen_am) weichen um mehr als 10 min ab");
+  // Gegenprobe: derselbe Lauf mit richtiger Uhr wird bewertet → fehlgeschlagen.
+  const frRichtig = lauf(JOB_AUTO_PRODUCE, "2026-11-13T08:07:05Z", "fehler", { http_status: 500 });
+  assert.equal(bewerteJob(AUTO_SEIT_MO, [frNachlauf, frRichtig], jetzt).lage, "fehlgeschlagen");
+  // Ebenso eine unlesbare Zeile: nach eingetragen_am im Fenster, Ergebnis fehler → "nicht lesbar".
+  const b = bewerteTotmann([MORGEN, ABEND, AUTO_SEIT_MO], [frNachlauf, { ...frNachgehend, http_status: 0 }], jetzt, null, NACHWEIS_SEIT);
+  assert.equal(b.wert.jobs[2].lage, "nicht_lesbar");
+  // Liegt die Zeile nach beiden Uhren vor dem Fenster (Do 12.11.), trägt sie nicht (Prüfbefund logik-4).
+  const doNachgehend = lauf(JOB_AUTO_PRODUCE, "2026-11-12T07:55:05Z", "fehler", { eingetragen_am: "2026-11-12T08:08:06Z" });
+  assert.equal(bewerteJob(AUTO_SEIT_MO, [frNachlauf, doNachgehend], jetzt).lage, "ok");
+});
+
+test("Totmann (Prüfbefund r3-logik-3): eine Zukunftszeile hält den Job nur rot, solange sie die zuletzt eingetragene ist oder nach der DB-Uhr im Fenster liegt", () => {
+  // Do 19.11. schrieb ein Lauf mit vorgehender App-Uhr: begonnen_am 01.03.2027, eingetragen (DB-Uhr) Do
+  // 19.11. 09:08 Berlin. Danach laufen die Crons mit richtiger Uhr, aber ohne Kalendereintrag. Vorher blieb
+  // die Zukunftszeile nach begonnen_am "die jüngste" und lag im Fenster: rot, bis ein Lauf mit Ergebnis kam.
+  const zukunft = lauf(JOB_AUTO_PRODUCE, "2027-03-01T08:07:00Z", "ok", { eingetragen_am: "2026-11-19T08:08:01Z" });
+  const skip = (beginn) => lauf(JOB_AUTO_PRODUCE, beginn, "uebersprungen", { hinweis: "status skipped · kein Kalendereintrag" });
+  const frSkip = skip("2026-11-20T08:07:05Z");
+  const fr = bewerteJob(AUTO_SEIT_MO, [zukunft, frSkip], new Date("2026-11-20T11:00:00Z"));
+  assert.deepEqual([fr.lage, fr.status], ["ok", "ok"]);
+  assert.deepEqual([fr.letzter_lauf.begonnen_am, fr.bewerteter_lauf.begonnen_am], [frSkip.begonnen_am, frSkip.begonnen_am], "zuletzt eingetragen und bewertet: Fr");
+  const di = bewerteJob(AUTO_SEIT_MO, [zukunft, frSkip, skip("2026-11-23T08:07:05Z"), skip("2026-11-24T08:07:05Z")], new Date("2026-11-24T11:00:00Z"));
+  assert.deepEqual([di.lage, di.bewerteter_lauf.begonnen_am], ["ok", "2026-11-24T08:07:05.000Z"]);
+  // Solange sie die zuletzt eingetragene ist: rot (wie vorher).
+  assert.equal(bewerteJob(AUTO_SEIT_MO, [zukunft], new Date("2026-11-19T11:00:00Z")).lage, "zeit_unplausibel");
+  // Liegt sie nach der DB-Uhr im Fenster (der Lauf zu S selbst, App-Uhr ein Jahr voraus), trägt sie das
+  // Urteil weiter, auch wenn danach ein deckender Lauf eingetragen wurde.
+  const frZukunft = lauf(JOB_AUTO_PRODUCE, "2027-11-20T08:07:00Z", "fehler", { eingetragen_am: "2026-11-20T08:08:01Z" });
+  assert.equal(bewerteJob(AUTO_SEIT_MO, [skip("2026-11-20T09:00:00Z"), frZukunft], new Date("2026-11-20T11:00:00Z")).lage, "zeit_unplausibel");
+  // Ein übersprungener Lauf mit vorgehender App-Uhr deckt nach dem Wochentag der DB-Uhr: eingetragen Do
+  // 19.11., begonnen_am fällt auf einen Samstag (06.03.2027). Fr und Mo verpasst, dazwischen ein
+  // Samstagslauf: überfällig seit Fr 20.11. (nicht seit Mo 09.11., dem ersten Sollzeitpunkt).
+  const doZukunftSkip = lauf(JOB_AUTO_PRODUCE, "2027-03-06T08:07:00Z", "uebersprungen", { eingetragen_am: "2026-11-19T08:08:01Z" });
+  const saSkip = lauf(JOB_AUTO_PRODUCE, "2026-11-21T10:30:00Z", "uebersprungen", { hinweis: "status skipped · Wochenende — kein Content geplant" });
+  const mo = bewerteJob(AUTO_SEIT_MO, [doZukunftSkip, saSkip], new Date("2026-11-23T11:00:00Z"));
+  assert.deepEqual([mo.lage, mo.ueberfaellig_seit_berlin], ["ueberfaellig", "Fr 20.11. 09:07"]);
+});
+
+test("Totmann (Prüfbefund r3-logik-4): unlesbare Zeilen — die zuletzt eingetragene trägt das Urteil, eine übersprungene im Fenster nicht; Stolperdraht ohne lesbares eingetragen_am", () => {
+  const moOk = lauf(JOB_AUTO_PRODUCE, "2026-11-16T08:07:05Z");
+  const lage = (zeilen) => bewerteTotmann([MORGEN, ABEND, AUTO_SEIT_MO], zeilen, new Date("2026-11-16T11:00:00Z"), null, NACHWEIS_SEIT).wert.jobs[2].lage;
+  // Mo 09:07 ok, Mo 10:00 eine jüngere Zeile "uebersprungen" mit unlesbarem http_status: Sie kann die
+  // zuletzt eingetragene sein → "nicht lesbar" (rot). Über die Route: T-L9.
+  const moSkipKaputt = { ...lauf(JOB_AUTO_PRODUCE, "2026-11-16T09:00:00Z", "uebersprungen"), http_status: 0 };
+  assert.equal(lage([moOk, moSkipKaputt]), "nicht_lesbar");
+  // Dieselbe Zeile vor dem ok-Lauf eingetragen (Mo 09:00 Berlin, im Fenster): Ein übersprungener Lauf ändert
+  // kein Ergebnis → bewertet wird der lesbare ok-Lauf (grün). Mit unlesbarem Ergebnis: rot.
+  const frueherKaputt = { ...lauf(JOB_AUTO_PRODUCE, "2026-11-16T08:00:00Z", "uebersprungen"), http_status: 0 };
+  assert.equal(lage([moOk, frueherKaputt]), "ok");
+  assert.equal(lage([moOk, { ...frueherKaputt, ergebnis: "gut" }]), "nicht_lesbar");
+  // Ohne lesbares eingetragen_am kann eine Zeile die zuletzt eingetragene sein → "nicht lesbar", auch mit
+  // altem Beginn.
+  assert.equal(lage([moOk, { ...lauf(JOB_AUTO_PRODUCE, "2026-11-12T08:07:05Z"), eingetragen_am: null }]), "nicht_lesbar");
+  // Eine unlesbare Zukunftszeile, eingetragen am Do 12.11.: zählt nach der DB-Uhr — sie liegt vor dem
+  // Fenster und trägt nicht (Prüfbefund r3-logik-3).
+  const alteZukunft = { ...lauf(JOB_AUTO_PRODUCE, "2027-03-01T08:07:00Z", "ok", { eingetragen_am: "2026-11-12T08:08:01Z" }), http_status: 0 };
+  assert.equal(lage([moOk, alteZukunft]), "ok");
+  // Abgeschalteter Job (ausloeser): unlesbare Zeile mit Zukunftsbeginn ohne lesbares eingetragen_am — der
+  // Stolperdraht hängt dann an begonnen_am (rot bleibt rot), statt still zu entfallen.
+  const ohneDbUhr = { ...lauf(JOB_BRIEFING_ABEND, "2027-11-24T17:03:00Z"), eingetragen_am: undefined };
+  const aus = bewerteTotmann(TOTMANN_PLAN, [ohneDbUhr], new Date("2026-11-24T20:00:00Z"), null, NACHWEIS_SEIT).wert.jobs[1];
+  assert.deepEqual([aus.lage, aus.stolperdraht_am, aus.stolperdraht_spalte], ["laeuft_obwohl_aus", "2027-11-24T17:03:00.000Z", "begonnen_am"]);
+  assert.equal(aus.hinweis, "eine Zeile in lauf_nachweis ist teilweise unlesbar");
 });
 
 test("Totmann (Prüfbefund logik-2): Quittung oder aus_seit in der Zukunft → Planfehler; unplausible Zeile eines abgeschalteten Jobs → Stolperdraht nach eingetragen_am", () => {

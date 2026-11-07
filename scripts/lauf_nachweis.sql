@@ -21,10 +21,10 @@
 --
 -- Abweichungen von §5.5 (b) nach der zweiten Prüfung des Branches:
 -- - Index auf (job, eingetragen_am DESC) statt (job, begonnen_am DESC): GET /api/status liest je
---   Job die zuletzt eingetragene Zeile (DB-Uhr, Gleichstand nach id; Prüfbefund D1).
+--   Job die zuletzt eingetragenen Zeilen (DB-Uhr, Gleichstand nach id; Prüfbefunde D1, r3-logik-1).
 -- - service_role: erst alle Rechte auf Tabelle und Sequenz entziehen, dann genau SELECT, INSERT
 --   und USAGE vergeben (Prüfbefund oeffentlich-3).
--- Alle Anweisungen nach CREATE TABLE prüft T-S1 als exakte, geordnete Liste.
+-- Alle Anweisungen, CREATE TABLE eingeschlossen, prüft T-S1 als exakte, geordnete Liste.
 --
 -- Nach der Ausführung messen (§2.5 Live-Abnahme): anonymes Lesen per REST scheitert; die
 -- Rechte mit den Abfragen aus §5.5 (a), dort auch für grantee service_role (erwartet: genau

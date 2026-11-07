@@ -60,9 +60,15 @@ export interface LaufTeilergebnis {
 /**
  * Eine gelesene Zeile aus lauf_nachweis. begonnen_am und beendet_am stammen beide aus der App-Uhr,
  * eingetragen_am aus der DB-Uhr (DEFAULT now()). Alle drei sind NOT NULL (scripts/lauf_nachweis.sql);
- * eingetragen_am liest der Totmann für den Uhrenabgleich (Prüfbefunde Z2, SR-5).
+ * eingetragen_am liest der Totmann für den Uhrenabgleich (Prüfbefunde Z2, SR-5) und als Reihenfolge
+ * der Zeilen (Prüfbefund D1), id bei gleicher DB-Uhr (Prüfbefund r3-logik-1).
  */
 export interface LaufNachweisLesung {
+  /**
+   * lauf_nachweis.id (BIGSERIAL); null, wenn die Zeile ohne id gelesen wurde. Optional wie die übrigen
+   * Felder nach dem 07.11.2026: Eine ältere Antwort hat es nicht, die Anzeige liest es nicht.
+   */
+  id?: number | null;
   job: string;
   begonnen_am: string;
   beendet_am: string;
@@ -144,8 +150,8 @@ export interface CronJobStand {
   /** stolperdraht_quittiert_bis in Europe/Berlin, z. B. "21.11.2026 00:00". */
   stolperdraht_quittiert_bis_berlin?: string | null;
   /**
-   * Jüngste gelesene Zeile dieses Jobs (nach begonnen_am; GET /api/status liest die zuletzt
-   * eingetragenen, Prüfbefund D1); null = keine Zeile oder nicht lesbar.
+   * Zuletzt eingetragene gelesene Zeile dieses Jobs (DB-Uhr, bei Gleichstand id — wie GET /api/status
+   * liest; Prüfbefunde D1, r3-logik-1); null = keine Zeile oder nicht lesbar.
    */
   letzter_lauf: LaufNachweisLesung | null;
   /**
