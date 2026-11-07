@@ -1159,6 +1159,38 @@ test("Totmann: kaputter Plan ist ein Fehler der Messung, kein stiller Ersatzwert
   assert.equal(bewerteTotmann(TOTMANN_PLAN, [], MO_1004, null, "2026-11-20").wert.nachweis_seit, "2026-11-20");
 });
 
+test("Totmann §2.6 (M05b): aktiv entscheidet, nicht aus_seit — aktiviert mit stehengebliebenem aus_seit → rot 'überfällig', nicht bernstein 'aus'", () => {
+  // Die Plan-Prüfung (pruefePlanJob) verlangt für aktiv: true kein aus_seit null; der Typ sagt nur
+  // „gesetzt, wenn aktiv false ist" (lib/totmann.ts). Setzt der Aktivierungs-PR (§2.6) aktiv,
+  // aktiv_seit und zeitzone_beleg und lässt aus_seit und grund stehen, ist der Job trotzdem aktiv:
+  // Ohne Lauf wird der Totmann am ersten Werktag rot — genau der Alarm, den §2.6 will. Fragte die
+  // Bewertung aus_seit statt aktiv, bliebe er bernstein „aus", und der erwartete Lauf hieße Stolperdraht.
+  const stehen = { ...aktiv(MORGEN), aus_seit: MORGEN.aus_seit, grund: MORGEN.grund };
+  assert.equal(stehen.aus_seit, "2026-07-30", "Voraussetzung: aus_seit wie im Plan");
+  const ohne = bewerteJob(stehen, [], MO_1004);
+  assert.deepEqual([ohne.lage, ohne.status], ["ueberfaellig", "fehler"]);
+  assert.equal(ohne.sollzeitpunkt, S_MO);
+  assert.equal(ohne.ueberfaellig_seit_berlin, "Mo 09.11. 08:03");
+  const ok = lauf(JOB_BRIEFING_MORGEN, "2026-11-09T07:03:05Z");
+  const mit = bewerteJob(stehen, [ok], MO_1004);
+  assert.deepEqual([mit.lage, mit.status], ["ok", "ok"]);
+  assert.equal(mit.stolperdraht_am, null, "der erwartete Lauf ist kein Stolperdraht");
+  assert.equal(mit.bewerteter_lauf.begonnen_am, ok.begonnen_am);
+  // Zeile „Crons" (Farbe des schlechtesten Jobs): rot. Der Hinweis zählt den Job, wie ausHinweis
+  // über aktiv entscheidet, nicht zu den abgeschalteten.
+  const b = bewerteTotmann([stehen, ABEND, AUTO], [], MO_1004, null, NACHWEIS_SEIT);
+  assert.equal(b.status, "fehler");
+  assert.deepEqual(
+    b.wert.jobs.map((j) => [j.lage, j.status]),
+    [
+      ["ueberfaellig", "fehler"],
+      ["aus", "warnung"],
+      ["aus", "warnung"],
+    ],
+  );
+  assert.equal(b.hinweis, "Briefing abends, Content Auto-Produce laut Plan aus seit 30.07.2026");
+});
+
 // ── Totmann: Ableitung der Schreiber (§2.2 Punkt 2) ──
 
 const VOLL = { fehler: null, abgeschnitten: false, stop_reason: "end_turn" };
