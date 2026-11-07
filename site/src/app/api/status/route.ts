@@ -77,7 +77,8 @@ const Q = {
   steinadel: "steinadel.de · /api/objekte/export (Server-Abruf)",
   anthropic: "Server-Umgebung · Anthropic-Schlüssel",
   // Stufe 2 (07.11.2026, Totmann): vorher fest "kein Lauf-Protokoll" (nicht gemessen).
-  crons: "Plan site/src/lib/totmann.ts · Supabase · lauf_nachweis (begonnen_am, ergebnis)",
+  // Nachmessung 07.11.2026: gelesen wird je Job nach eingetragen_am und id, nicht nach begonnen_am.
+  crons: "Plan site/src/lib/totmann.ts · Supabase · lauf_nachweis (je Job zuletzt eingetragen; begonnen_am, eingetragen_am, ergebnis)",
   riegel: "Agenten-Container · GP_EXTERNAL_POSTING",
   telegram: "kein Zustell-Protokoll",
 } as const;

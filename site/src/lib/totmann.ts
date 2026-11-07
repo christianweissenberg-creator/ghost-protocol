@@ -20,7 +20,11 @@
 // aktiv_seit heißen "erster Sollzeitpunkt steht aus"; ein fester Tag für alle Jobs (die frühere
 // NACHWEIS_SEIT-Regel) ließ jede spätere Aktivierung sofort rot werden (Prüfbefund Z1).
 
-/** Tabelle des Lauf-Nachweises (scripts/lauf_nachweis.sql). Nur die Service-Rolle liest und hängt an. */
+/**
+ * Tabelle des Lauf-Nachweises (scripts/lauf_nachweis.sql). Von den API-Rollen darf nur die Service-Rolle
+ * lesen und anhängen; anon und authenticated haben keine Rechte (gemessen am 07.11.2026, auch per REST).
+ * Supabase-interne Rollen (Eigner, Lese-Rollen der Plattform) sind davon nicht berührt.
+ */
 export const NACHWEIS_TABELLE = "lauf_nachweis";
 
 /**

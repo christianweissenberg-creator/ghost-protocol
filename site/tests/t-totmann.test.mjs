@@ -518,7 +518,7 @@ test("T-R16 auto-produce (Prüfbefund SR-2): Pipeline ohne bekannten Status → 
 
 // ═══ GET /api/status: Lesen und Bewerten ═══
 
-const Q_CRONS = "Plan site/src/lib/totmann.ts · Supabase · lauf_nachweis (begonnen_am, ergebnis)";
+const Q_CRONS = "Plan site/src/lib/totmann.ts · Supabase · lauf_nachweis (je Job zuletzt eingetragen; begonnen_am, eingetragen_am, ergebnis)";
 
 async function statusAbruf() {
   const res = await statusApi.GET();
