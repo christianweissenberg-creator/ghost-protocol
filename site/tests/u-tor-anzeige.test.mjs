@@ -14,6 +14,9 @@
 // "server-only" (sicherheit-1/-2), Kosten mit Modell je Lauf (ehrlichkeit-2), Wortlaut /metrics und
 // /messages (ehrlichkeit-1/-3), Vorjahr (K2), fremde Antwort an donna (K3); Zeitzone UTC (K1) steht
 // in tests/u-tor-zeitzone.test.mjs.
+// Nachprüfung Mutation 07.11.2026: Tests gegen 13 Mutanten, die die Suite überlebten (Namen mit
+// "Mutation Mxx"): M02, M05 (T1), M19, M21 (F1), M36, M42 (F2/Regel 5), M51, M60 (F3/F4), M65–M67
+// (F5), M80, M90 (F7). Testdaten dort sind Testannahmen, wo nicht "gemessen" dabeisteht.
 // Die ECHTEN .tsx-Dateien werden übersetzt und mit Attrappen geladen (tests/harness/tsx.mjs).
 // Testdaten mit "gemessen" stammen aus SELECTs auf agents und messages vom 07.11.2026.
 // Kein Netz: Es gibt keinen Abruf; fetch wird nicht gebraucht.
@@ -86,6 +89,140 @@ test("TOR-T1 /academy: Kopf zählt den Lehrplan (Agenten mit Modul), nicht die F
   const agenten = new Set(A.__intern.TRAINING_DATA.map((m) => m.agentId)).size;
   assert.match(text(kopf), new RegExp(`^Internes Weiterbildungsmodul — Lehrplan für ${agenten} Agenten, \\d+ Pflichtlektueren, \\d+ Pruefungsfragen$`));
   assert.match(String(kopf.props.title ?? ""), /nicht aus dem Agenten-Register/);
+});
+
+// Nachprüfung Mutation 07.11.2026 (M02): Der Regex oben kennt nur M, Mio., Mrd. und Millionen —
+// "Einwohner DE 84.000.000, AT 9.100.000, CH 8.800.000" blieb grün. Jetzt erkennt mengenAngabe
+// Tausendergruppen, lange Ziffernfolgen, Größenwörter und Bevölkerungswörter neben Ziffern; dazu
+// eine Inventur: Jede Kernkompetenz mit Ziffern ist einzeln eingestuft (Name, Norm, Parameter).
+
+/** Mengen- bzw. Bevölkerungsangabe (Weltdaten, Tor-Klasse D ohne Quelle) in üblicher Schreibweise. */
+const MENGEN_MUSTER = [
+  /\d{1,3}(?:[.,'\u2019\u00a0\u202f ]\d{3})+(?!\d)/, // 84.000.000 · 9,100,000 · 8'800'000 · 84 000 000
+  /\d{5,}/, // 84000000
+  /\d(?:[.,]\d+)?\s?(?:M|Mio\.?|Mrd\.?|Mn|Bn|bn|Tsd\.?|Tausend|Million|Millionen|Milliarde|Milliarden|million|billion|k)(?![A-Za-zÄÖÜäöüß])/, // 84M · 9 Mio. · 8,8 Millionen
+  /(?:Einwohner|Bevölkerung|Bevoelkerung|Einw\.|Marktgr(?:ö|oe)(?:ß|ss)e|Marktvolumen)[^.;]*\d|\d[^.;]*(?:Einwohner|Bevölkerung|Bevoelkerung|Einw\.)/i,
+];
+const mengenAngabe = (s) => MENGEN_MUSTER.some((m) => m.test(s));
+
+/** Alle Texte eines Lehrplan-Moduls, die die Seite zeigt: [Feld, Text]. */
+const lehrplanTexte = (m) => [
+  ...m.kernkompetenzen.map((t) => ["kernkompetenzen", t]),
+  ...m.pruefungsfragen.map((t) => ["pruefungsfragen", t]),
+  ...m.pflichtlektuere.flatMap((b) => [["pflichtlektuere", b.titel], ["pflichtlektuere", b.autor], ["pflichtlektuere", b.relevanz]]),
+  ...m.crossTraining.flatMap((c) => [["crossTraining", c.partner], ["crossTraining", c.thema]]),
+  ...m.lernpfad.flatMap((l) => [["lernpfad", l.stufe], ...l.kriterien.map((k) => ["lernpfad", k])]),
+  ["role", m.role],
+  ["agentName", m.agentName],
+];
+
+test("TOR-T1 /academy (Mutation M02): Einwohner- und Marktgrößen in jeder Schreibweise erkannt — keine im Lehrplan, keine im LOCALIZER-Tab", () => {
+  // Der Erkenner selbst: die Form vor dem Fix, die Form des Mutanten M02 und weitere Schreibweisen.
+  for (const s of ["DE 84M, AT 9M, CH 8.8M", "Einwohner DE 84.000.000, AT 9.100.000, CH 8.800.000", "DE 84000000", "CH 8'800'000", "CH 8\u2019800\u2019000", "DE 84\u202f000\u202f000", "AT 9\u00a0100\u00a0000", "AT 9 100 000", "DE 84 Mio.", "8,8 Millionen", "DE: 84 (Bevölkerung)"]) {
+    assert.ok(mengenAngabe(s), `nicht erkannt: ${s}`);
+  }
+  // Namen, Normen und Aufgabenparameter des Lehrplans sind keine Mengenangaben.
+  for (const s of ["OWASP Top 10", "EU AI Act (2024/1689) — 4 Risikoklassen", "AGB-Recht (§§305-310 BGB)", "3-2-1 Backup-Regel", "Rule of 40 — Growth% + Margin% >= 40%", "Definiere 3 OKRs fuer Q2 2026", "GILT-Framework — Globalization, I18n, L10n", "Headlines mit 4U's", "SaaS Metrics 2.0"]) {
+    assert.ok(!mengenAngabe(s), `fälschlich erkannt: ${s}`);
+  }
+  const lz = baumLaufzeit();
+  const A = academy(lz);
+  const treffer = A.__intern.TRAINING_DATA.flatMap((m) => lehrplanTexte(m).filter(([, t]) => mengenAngabe(String(t))).map(([feld, t]) => `${m.agentId}.${feld}: ${t}`));
+  assert.deepEqual(treffer, []);
+  // Gerendert: jede Kernkompetenz im LOCALIZER-Tab einzeln.
+  const kompetenzen = finde(lz.rendere(A.default, {}, ["localizer", "overview"]), (k) => k.type === "p" && k.props.className === "text-sm text-text-secondary").map(text);
+  assert.ok(kompetenzen.some((k) => k.startsWith("DACH-Marktintelligenz")), kompetenzen.join(" | "));
+  assert.deepEqual(kompetenzen.filter(mengenAngabe), []);
+});
+
+/** Kernkompetenzen mit Ziffern, je eingestuft (Gegenprüfer der Tor-Prüfung: Frameworknamen,
+ *  Paragraphen, Aufgabenparameter — keine zeitabhängigen Weltdaten). */
+const KERNKOMPETENZEN_MIT_ZIFFERN = {
+  "oracle: Scenario Planning (Shell-Methode) — 2x2 Unsicherheitsmatrix": "Methodenname",
+  "architect: 12-Factor App (Heroku) — Cloud-native Prinzipien": "Methodenname",
+  "architect: OWASP Top 10 — Web-Sicherheitsrisiken": "Name einer Liste",
+  "architect: C4-Modell (Simon Brown) — Context, Container, Component, Code": "Methodenname",
+  "treasurer: Rule of 40 — Growth% + Margin% >= 40%": "Faustregel (Definition)",
+  "publisher: Cialdini's 6 Principles of Persuasion": "Modellname",
+  "publisher: Eugene Schwartz 5 Awareness Levels": "Modellname",
+  "counsel: DSGVO Art. 5-83 — Datenschutz-Grundverordnung": "Normzitat",
+  "counsel: EU AI Act (2024/1689) — 4 Risikoklassen, Transparenzpflichten": "Normzitat",
+  "counsel: AGB-Recht (§§305-310 BGB) — Vertragsgestaltung": "Normzitat",
+  "merchant: Product-Market Fit (Sean Ellis 40% Test)": "Name eines Tests",
+  "guardian: 3-2-1 Backup-Regel — RPO/RTO Management": "Name einer Regel",
+  "concierge: SPACES Model (CMX) — 6 Community-Wertquellen": "Modellname",
+  "localizer: GILT-Framework — Globalization, I18n, L10n, Translation": "Abkürzungen",
+  "localizer: Du/Sie-Konventionen — B2C vs. B2B Tonalitaet": "Abkürzungen",
+};
+
+test("TOR-T1 /academy (Mutation M02): Inventur — jede Kernkompetenz mit Ziffern ist eingestuft, keine neue Zahl ohne Einstufung", () => {
+  const lz = baumLaufzeit();
+  const mitZiffern = academy(lz).__intern.TRAINING_DATA.flatMap((m) => m.kernkompetenzen.filter((k) => /\d/.test(k)).map((k) => `${m.agentId}: ${k}`));
+  // Neue oder geänderte Zeile mit Ziffern: Name, Norm oder Parameter → hier einstufen; Weltdaten →
+  // mit Quelle und Stand zeigen oder streichen (Tor-Klasse D).
+  assert.deepEqual(mitZiffern.sort(), Object.keys(KERNKOMPETENZEN_MIT_ZIFFERN).sort());
+});
+
+// Nachprüfung Mutation 07.11.2026 (M05): "Lehrplan für 14 Agenten" als Literal rendert heute dasselbe
+// wie die Zählung — nur der Quelltext unterscheidet beide. Der TypeScript-Parser prüft den Kopf.
+
+// ts.forEachChild bricht ab, sobald der Rückruf etwas Wahres liefert: Die Rückrufe unten liefern nichts.
+
+/** Bezeichner in einem Teilbaum. */
+function bezeichnerIn(k, aus = new Set()) {
+  if (ts.isIdentifier(k)) aus.add(k.text);
+  ts.forEachChild(k, (c) => void bezeichnerIn(c, aus));
+  return aus;
+}
+
+/** Literale mit Ziffern in einem Teilbaum (Zahl, Text, Vorlage). */
+function ziffernLiterale(k, sf, aus = []) {
+  if ((ts.isNumericLiteral(k) || ts.isStringLiteralLike(k) || ts.isTemplateHead(k) || ts.isTemplateMiddle(k) || ts.isTemplateTail(k)) && /\d/.test(k.text)) aus.push(k.getText(sf));
+  ts.forEachChild(k, (c) => void ziffernLiterale(c, sf, aus));
+  return aus;
+}
+
+test("TOR-T1 /academy (Mutation M05): Kopfzahlen im Quelltext aus TRAINING_DATA gezählt — kein Ziffern-Literal im Kopf, JSX-Texte mit Ziffern eingestuft", () => {
+  const sf = ts.createSourceFile("page.tsx", readFileSync(path.join(SITE, "src/app/academy/page.tsx"), "utf8"), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  const konstanten = new Map();
+  for (const s of sf.statements) {
+    if (!ts.isVariableStatement(s)) continue;
+    for (const d of s.declarationList.declarations) if (ts.isIdentifier(d.name) && d.initializer) konstanten.set(d.name.text, d.initializer);
+  }
+  const ausDaten = (name, gesehen = new Set()) => {
+    if (name === "TRAINING_DATA") return true;
+    if (gesehen.has(name) || !konstanten.has(name)) return false;
+    gesehen.add(name);
+    return [...bezeichnerIn(konstanten.get(name))].some((n) => ausDaten(n, gesehen));
+  };
+  const kopf = [];
+  const jsxTexte = [];
+  const besuche = (k) => {
+    if (ts.isJsxText(k)) {
+      const t = k.text.replace(/&#x?[0-9a-f]+;/gi, "").replace(/\s+/g, " ").trim();
+      if (/\d/.test(t)) jsxTexte.push(t);
+    }
+    if (ts.isJsxElement(k)) {
+      const klasse = k.openingElement.attributes.properties.find((a) => ts.isJsxAttribute(a) && a.name.getText(sf) === "className");
+      if (klasse?.initializer && ts.isStringLiteral(klasse.initializer) && klasse.initializer.text === "gp-kicker") kopf.push(k);
+    }
+    ts.forEachChild(k, besuche);
+  };
+  besuche(sf);
+  assert.equal(kopf.length, 1, "genau ein Kopf (gp-kicker)");
+  const ausdruecke = [];
+  for (const kind of kopf[0].children) {
+    if (ts.isJsxText(kind)) assert.doesNotMatch(kind.text, /\d/, `Ziffer als Text im Kopf: ${JSON.stringify(kind.text.trim())}`);
+    else if (ts.isJsxExpression(kind) && kind.expression) {
+      const quelle = kind.expression.getText(sf);
+      ausdruecke.push(quelle);
+      assert.deepEqual(ziffernLiterale(kind.expression, sf), [], `Literal im Kopf: {${quelle}}`);
+      assert.ok([...bezeichnerIn(kind.expression)].some((n) => ausDaten(n)), `{${quelle}} nicht aus TRAINING_DATA gezählt`);
+    } else assert.fail(`unerwartetes Kind im Kopf: ${ts.SyntaxKind[kind.kind]}`);
+  }
+  assert.equal(ausdruecke.length, 3, `Kopf mit drei gezählten Werten: ${ausdruecke.join(", ")}`);
+  // Übrige JSX-Texte mit Ziffern: Gliederung und Etiketten des Lehrplans (Klasse E), keine Messwerte.
+  assert.deepEqual(jsxTexte, ["07 / AUSBILDUNG", "Q2 2026 Curriculum", "Q2 2026 Zertifizierungsplan"]);
 });
 
 // ═══ TOR-T2 Systemzustand, Zeile „Crons" ═══
@@ -189,7 +326,23 @@ test("TOR-F1 Bus: 'heute' ist der Kalendertag in Europe/Berlin; anderes Jahr mit
   assert.equal(feedZeiten([nachricht("e", "kaputt")], MESSUNG)[0].text, "Zeit unbekannt");
 });
 
-test("TOR-F1 Command Center: reicht den Messzeitpunkt des Systemzustands (erzeugt_am) als Bezug an den Feed", () => {
+// Nachprüfung Mutation 07.11.2026 (M21): Alle Tests hatten timestamp = created_at oder timestamp null;
+// "created_at vor timestamp" blieb grün und hätte unter dem title "Feld messages.timestamp" die Zeit
+// aus created_at gezeigt. Testannahme (live gemessen 0 von 48 Zeilen mit timestamp ≠ created_at):
+// timestamp 29.07.2026, created_at 07.11.2026 am Tag der Messung.
+test("TOR-F1 Bus (Mutation M21): gezeigt wird das Feld, das der title nennt — timestamp vor created_at", () => {
+  const [z] = feedZeiten([nachricht("t", "2026-11-07T11:00:00.000Z", { timestamp: "2026-07-29T22:19:54.000Z" })], MESSUNG);
+  assert.deepEqual(z, { text: "30.07., 00:19:54", title: "30.07.2026 00:19:54 (Europe/Berlin) · Feld messages.timestamp" });
+  // Ohne timestamp: created_at, und der title nennt dieses Feld.
+  const [c] = feedZeiten([nachricht("c", "2026-07-28T06:46:42.000Z", { timestamp: null })], MESSUNG);
+  assert.deepEqual(c, { text: "28.07., 08:46:42", title: "28.07.2026 08:46:42 (Europe/Berlin) · Feld messages.created_at" });
+  // Unlesbarer timestamp neben lesbarem created_at: keine Zeit aus dem anderen Feld.
+  const [u] = feedZeiten([nachricht("u", "2026-11-07T11:00:00.000Z", { timestamp: "kaputt" })], MESSUNG);
+  assert.deepEqual(u, { text: "Zeit unbekannt", title: "Zeitpunkt fehlt oder ist unlesbar (messages.timestamp)" });
+});
+
+/** Command Center mit der gegebenen Lesung des Systemzustands; liefert die Props an den MessageFeed. */
+function commandCenterFeed(lesung) {
   const lz = baumLaufzeit();
   const gefangen = [];
   const C = ladeTsx("app/page.tsx", {
@@ -201,10 +354,7 @@ test("TOR-F1 Command Center: reicht den Messzeitpunkt des Systemzustands (erzeug
       useObjekte: () => ({ objekte: [], loading: false, error: null, fehlerArt: null }),
     },
     "@/lib/freigabe-regeln": regeln,
-    "@/lib/hooks-status": {
-      ...hooksStatus,
-      useSystemStatus: () => ({ status: { erzeugt_am: MESSUNG }, fehler: null, loading: false, geladenAm: MESSUNG, httpStatus: 200, neuLaden: async () => {} }),
-    },
+    "@/lib/hooks-status": { ...hooksStatus, useSystemStatus: () => lesung },
     "@/lib/types": types,
     "@/lib/auftrag-types": auftragTypes,
     "@/components/agents/AgentCard": { AgentCard: leer },
@@ -221,7 +371,28 @@ test("TOR-F1 Command Center: reicht den Messzeitpunkt des Systemzustands (erzeug
   });
   lz.rendere(C.default, {}, []);
   assert.equal(gefangen.length, 1, "Feed gerendert");
-  assert.equal(gefangen[0].bezugIso, MESSUNG);
+  return gefangen[0];
+}
+
+test("TOR-F1 Command Center: reicht den Messzeitpunkt des Systemzustands (erzeugt_am) als Bezug an den Feed", () => {
+  const p = commandCenterFeed({ status: { erzeugt_am: MESSUNG }, fehler: null, loading: false, geladenAm: MESSUNG, httpStatus: 200, neuLaden: async () => {} });
+  assert.equal(p.bezugIso, MESSUNG);
+});
+
+// Nachprüfung Mutation 07.11.2026 (M19): Der Test oben setzt geladenAm = erzeugt_am und keinen Fehler;
+// "Bezug = geladenAm" (Browseruhr beim Laden, bleibt bei Abruffehler stehen) blieb grün.
+test("TOR-F1 Command Center (Mutation M19): Bezug ist erzeugt_am des Servers, nicht die Ladezeit im Browser; bei Abruffehler keiner", () => {
+  // Testannahme: Der Server misst am 08.11.2026 00:30 Berlin, die Browseruhr geht nach (Laden um
+  // 07.11. 23:50 Berlin). Eine Nachricht vom 07.11. 23:00 Berlin ist nicht vom Tag der Messung.
+  const spaet = [nachricht("spaet", "2026-11-07T22:00:00.000Z")];
+  const ok = commandCenterFeed({ status: { erzeugt_am: "2026-11-07T23:30:00.000Z" }, fehler: null, loading: false, geladenAm: "2026-11-07T22:50:00.000Z", httpStatus: 200, neuLaden: async () => {} });
+  assert.equal(ok.bezugIso, "2026-11-07T23:30:00.000Z");
+  assert.equal(feedZeiten(spaet, ok.bezugIso)[0].text, "07.11., 23:00:00");
+  // Abruffehler: Die alte Messung und die alte Ladezeit stehen noch in der Lesung, gelten aber nicht
+  // als aktuell — kein Bezug, der Feed zeigt immer das Datum.
+  const fehler = commandCenterFeed({ status: { erzeugt_am: "2026-11-07T23:30:00.000Z" }, fehler: "HTTP 503", loading: false, geladenAm: "2026-11-07T23:30:05.000Z", httpStatus: 503, neuLaden: async () => {} });
+  assert.equal(fehler.bezugIso, null);
+  assert.equal(feedZeiten(spaet, fehler.bezugIso)[0].text, "07.11.2026, 23:00:00");
 });
 
 // ═══ TOR-F2 Modell je Agent ═══
@@ -296,6 +467,39 @@ test("TOR-F2 Agentenkarte: SENTINEL ohne Prompt heißt 'kein Dashboard-Prompt', 
   assert.match(html, /nicht aktivierbar/);
 });
 
+/** /agents mit den echten Agentenkarten (Register wie gemessen). */
+function agentsSeite(agents) {
+  const K = ladeTsx("components/agents/AgentCard.tsx", {
+    ...ECHT,
+    "next/link": { __esModule: true, default: Link },
+    "@/lib/types": types,
+    "@/lib/hooks": { useJetztIso: () => MESSUNG },
+    "@/lib/agent-modelle": modelle,
+  });
+  const S = ladeTsx("app/agents/page.tsx", {
+    ...ECHT,
+    "@/lib/hooks": { useAgents: () => ({ agents, ausgeblendet: 1, loading: false, error: null }) },
+    "@/lib/hooks-status": { useSystemStatus: () => ({ status: null, fehler: null, loading: false, geladenAm: null, httpStatus: null, neuLaden: async () => {} }) },
+    "@/components/agents/AgentCard": { AgentCard: K.AgentCard },
+    "@/lib/types": types,
+  });
+  return ent(renderToStaticMarkup(React.createElement(S.default)));
+}
+
+// Nachprüfung Mutation 07.11.2026 (M36): app/agents/page.tsx lud kein Test; die Unterzeile durfte
+// wieder "Modell … direkt aus dem Agenten-Register" behaupten, während die Karten darunter das
+// Dashboard-Modell zeigen.
+test("TOR-F2 /agents (Mutation M36): Unterzeile nennt dieselbe Modellquelle wie die Karten — Dashboard-Konfiguration, nicht das Register", () => {
+  const html = agentsSeite(AGENTEN);
+  const unterzeile = /<p class="gp-sub">([^<]*)<\/p>/.exec(html)?.[1] ?? "";
+  assert.ok(unterzeile.includes("Modell laut Dashboard-Konfiguration"), unterzeile);
+  assert.doesNotMatch(unterzeile, /Modell(?:(?!Dashboard-Konfiguration).)*Agenten-Register/, unterzeile);
+  // Die Karten darunter: 16 Einheiten, Modell aus der Dashboard-Konfiguration, Register nur markiert.
+  assert.equal((html.match(/data-modell="dashboard"/g) ?? []).length, 16);
+  assert.equal((html.match(new RegExp(`>Register: ${SONNET} — weicht ab<`, "g")) ?? []).length, 3, "AMPLIFIER, MERCHANT, SCRIBE");
+  assert.ok(html.includes(">16 Einheiten · 4 Tiers<"), html.slice(0, 600));
+});
+
 test("TOR-F2 Konfiguration: lib/agent-modelle.ts ist die Quelle von lib/agent-prompts.ts (gleiche Schlüssel, gleiche Modelle)", async () => {
   const { AGENT_PROMPTS } = await import("../src/lib/agent-prompts.ts");
   assert.deepEqual(Object.keys(modelle.AGENT_MODELLE).sort(), Object.keys(AGENT_PROMPTS).sort());
@@ -365,21 +569,58 @@ function srcDateien() {
   return alle;
 }
 
+// Nachprüfung Mutation 07.11.2026 (M42): import … from "@/lib/agent-prompts.js" (Endung .js) fiel
+// still aus dem Graphen — aufloesen kannte die Endungs-Ersetzung nicht; tsc --noEmit und eslint
+// ließen den Import durch (gemessen in einer Kopie). Jetzt löst der Wächter zuerst wie tsc auf
+// (tsconfig.json: paths "@/*", moduleResolution bundler, .js → .ts), danach über die Kandidaten
+// unten; ein lokaler Import, den keiner von beiden auflöst, ist im Client-Graph ein Fehler.
+// Nur die Compiler-Optionen werden gelesen (readDirectory leer: keine Dateisuche).
+const TS_OPTIONEN = ts.parseJsonConfigFileContent(
+  ts.readConfigFile(path.join(SITE, "tsconfig.json"), ts.sys.readFile).config,
+  { ...ts.sys, readDirectory: () => [] },
+  SITE,
+  undefined,
+  path.join(SITE, "tsconfig.json"),
+).options;
+const TS_AUFLOESUNG = ts.createModuleResolutionCache(SITE, (x) => x, TS_OPTIONEN);
+
+/** Lokal = Datei im Projekt (Alias "@/…" oder relativ), kein Paket. */
+const istLokalerImport = (spez) => spez.startsWith("@/") || spez === "." || spez === ".." || spez.startsWith("./") || spez.startsWith("../");
+
 function aufloesen(von, spez) {
+  const wieTsc = ts.resolveModuleName(spez, von, TS_OPTIONEN, ts.sys, TS_AUFLOESUNG).resolvedModule;
+  if (wieTsc && !wieTsc.isExternalLibraryImport) return path.resolve(wieTsc.resolvedFileName);
   const basis = spez.startsWith("@/") ? path.join(SRC, spez.slice(2)) : spez.startsWith(".") ? path.resolve(path.dirname(von), spez) : null;
   if (basis === null) return null;
-  for (const k of [basis, ...[".ts", ".tsx", ".js", ".jsx", ".mjs"].map((e) => basis + e), ...["index.ts", "index.tsx"].map((i) => path.join(basis, i))]) {
+  // Endungs-Ersetzung wie TypeScript und Bundler: "./x.js" darf "./x.ts" meinen.
+  const ohneJs = basis.replace(/\.(?:[cm]?js|jsx)$/, "");
+  const kandidaten = [
+    basis,
+    ...[".ts", ".tsx", ".js", ".jsx", ".mjs"].map((e) => basis + e),
+    ...(ohneJs === basis ? [] : [".ts", ".tsx", ".mts", ".cts"].map((e) => ohneJs + e)),
+    ...["index.ts", "index.tsx"].map((i) => path.join(basis, i)),
+  ];
+  for (const k of kandidaten) {
     if (existsSync(k) && statSync(k).isFile()) return k;
   }
   return null;
 }
 
+/** Laufzeit-Importe einer Quelle, die unter dem Pfad von liegt: Ziele, Dateien und offene lokale Importe. */
+function importeAus(quelle, name, von) {
+  const i = laufzeitImporte(quelle, name);
+  const aufgeloest = i.ziele.map((z) => [z, aufloesen(von, z)]);
+  return {
+    ...i,
+    dateien: aufgeloest.map(([, d]) => d).filter(Boolean),
+    // Lokale Importe ohne Datei: weder tsc noch die Kandidaten finden sie — der Wächter sähe nicht, wohin sie führen.
+    offen: aufgeloest.filter(([z, d]) => d === null && istLokalerImport(z)).map(([z]) => z),
+  };
+}
+
 const importCache = new Map();
 function importeVon(datei) {
-  if (!importCache.has(datei)) {
-    const i = laufzeitImporte(readFileSync(datei, "utf8"), path.relative(SITE, datei));
-    importCache.set(datei, { ...i, dateien: i.ziele.map((z) => aufloesen(datei, z)).filter(Boolean) });
-  }
+  if (!importCache.has(datei)) importCache.set(datei, importeAus(readFileSync(datei, "utf8"), path.relative(SITE, datei), datei));
   return importCache.get(datei);
 }
 
@@ -443,10 +684,35 @@ test("TOR-F2 Regel 5: lib/agent-modelle.ts importiert nichts; keine Client-Datei
     for (const d of graph) {
       assert.ok(!promptModule.has(d), `${path.relative(SITE, start)} erreicht ${path.relative(SITE, d)} (Prompt-Modul)`);
       assert.deepEqual(importeVon(d).unpruefbar, [], `${path.relative(SITE, start)}: nicht prüfbarer Import im Client-Graph`);
+      assert.deepEqual(importeVon(d).offen, [], `${path.relative(SITE, start)}: lokaler Import in ${path.relative(SITE, d)} nicht auflösbar`);
     }
   }
   // Gegenprobe: Die Karte erreicht die Modell-Zuordnung (der Graph folgt Importen wirklich).
   assert.ok(erreichbar(path.join(SRC, "components/agents/AgentCard.tsx")).has(path.join(SRC, "lib/agent-modelle.ts")));
+});
+
+test("TOR-F2 Regel 5 (Wächter, Mutation M42): Auflösung wie tsc — Endung .js trifft die .ts-Datei; ein lokaler Import ohne Datei ist offen", () => {
+  const sidebar = path.join(SRC, "components/layout/Sidebar.tsx");
+  for (const spez of ["@/lib/agent-prompts", "@/lib/agent-prompts.js", "../../lib/agent-prompts.js", "../../lib/agent-prompts"]) {
+    assert.equal(aufloesen(sidebar, spez), PROMPTS, spez);
+  }
+  assert.equal(aufloesen(sidebar, "./Sidebar.jsx"), sidebar);
+  assert.equal(aufloesen(sidebar, "@/lib/gibt-es-nicht"), null);
+  assert.equal(aufloesen(sidebar, "react"), null, "Pakete gehören nicht zum Graphen");
+  // Am Graphen: Eine Client-Datei neben der Sidebar mit genau dem Import des Mutanten erreicht ein
+  // Prompt-Modul; ein lokaler Import ohne Datei steht in offen (im Client-Graph ein Fehler).
+  const probe = importeAus(
+    '"use client";\nimport { AGENT_PROMPTS } from "@/lib/agent-prompts.js";\nimport "@/lib/gibt-es-nicht";\nimport Link from "next/link";',
+    "probe.tsx",
+    path.join(SRC, "components/layout/Probe.tsx"),
+  );
+  assert.equal(probe.client, true);
+  const promptModule = erreichbar(PROMPTS, PROMPT_IMPORT_ERLAUBT);
+  assert.ok(
+    probe.dateien.some((d) => [...erreichbar(d)].some((x) => promptModule.has(x))),
+    `Probe erreicht kein Prompt-Modul: ${probe.dateien.map((d) => path.relative(SITE, d)).join(", ")}`,
+  );
+  assert.deepEqual(probe.offen, ["@/lib/gibt-es-nicht"]);
 });
 
 function metricsSeite(agents) {
@@ -637,6 +903,23 @@ test("TOR-F3 /agents/[id] (Nachprüfung ehrlichkeit-2): Lauf-Modell ohne Tabelle
   assert.deepEqual(kostenZeile(ohneSumme), { wert: "nicht schätzbar", etikett: "kein Tabellenpreis für __proto__" });
 });
 
+// Nachprüfung Mutation 07.11.2026 (M51): Der Fall "mehr Tokens in den Läufen als in agents" prüfte nur
+// /^≈ /; ohne Math.max(0, …) zog der negative Rest Kosten ab (Sonde: "≈ $0,2836" statt "≈ $0,2961").
+test("TOR-F3 /agents/[id] (Mutation M51): Läufe über den Summen in agents — der Rest zählt 0, nie negativ; nie unter den Kosten der Läufe", () => {
+  // Läufe wie gemessen (publisher, Sonnet): 26.247 × 2 + 24.356 × 10 = 296.054 → 0,296054 USD.
+  const laeufe = laufNachrichten("publisher");
+  // Testannahme: Input-Summe in agents 20.000 (Rest −6.247), mit negativem Rest wären es 283.560 → "≈ $0,2836".
+  const ein = detail("publisher", { agent: agent(REGISTER[6], { ...VERBRAUCH.publisher, total_input_tokens: 20000 }), messages: laeufe });
+  assert.deepEqual(kostenZeile(ein), { wert: "≈ $0,2961", etikett: "Tokens × aktuelle Preistabelle · nicht jeder Lauf geprüft" });
+  // Testannahme: Output-Summe in agents 20.000 (Rest −4.356), mit negativem Rest wären es 252.494 → "≈ $0,2525".
+  const aus = detail("publisher", { agent: agent(REGISTER[6], { ...VERBRAUCH.publisher, total_output_tokens: 20000 }), messages: laeufe });
+  assert.deepEqual(kostenZeile(aus), { wert: "≈ $0,2961", etikett: "Tokens × aktuelle Preistabelle · nicht jeder Lauf geprüft" });
+  assert.ok(kostenTitel(aus).startsWith("Die geladenen Läufe (26.247 ein / 24.356 aus) passen nicht zu den Summen in agents (26.247 ein / 20.000 aus)."));
+  // Der Betrag liegt nie unter den Kosten der geladenen Läufe selbst (0,296054 USD, auf 4 Stellen abgerundet 0,2960).
+  const betrag = (w) => Number(w.replace(/^[≈≥] \$/, "").replace(",", "."));
+  for (const html of [ein, aus]) assert.ok(betrag(kostenZeile(html).wert) >= 0.296, kostenZeile(html).wert);
+});
+
 test("TOR-F4 /agents/[id]: gespeicherte, je Lauf gerundete Summe ist keine Untergrenze — Rückfall nur mit '≈' und Etikett", () => {
   // Ohne Tokens (oder ohne Dashboard-Modell) bleibt nur total_cost_usd: numeric(10,4), je Lauf gerundet.
   const ohneTokens = kostenZeile(detail("counsel", { agent: agent(REGISTER[7], { total_cost_usd: 0.1218 }) }));
@@ -647,6 +930,27 @@ test("TOR-F4 /agents/[id]: gespeicherte, je Lauf gerundete Summe ist keine Unter
   const html = detail("counsel", { agent: agent(REGISTER[7], VERBRAUCH.counsel), messages: laufNachrichten("counsel") });
   assert.ok(!html.includes("≥ $0,1218"));
   assert.match(html, /Gespeicherte Summe agents\.total_cost_usd: \$0,1218 — je Lauf mit der damals gültigen Preistabelle geschätzt/);
+});
+
+// Nachprüfung Mutation 07.11.2026 (M60): Kein Test las die Begründung des "≈" im title des Rückfalls.
+test("TOR-F4 /agents/[id] (Mutation M60): jeder Rückfall auf die gespeicherte Summe begründet das '≈' im title", () => {
+  const RUNDUNG = "≈ statt ≥: Die Rundung je Lauf kann die Summe um bis zu 0,00005 USD je Lauf über die Einzelschätzungen heben.";
+  const faelle = {
+    "Tokens fehlen": detail("counsel", { agent: agent(REGISTER[7], { total_cost_usd: 0.1218 }) }),
+    "kein Dashboard-Modell": detail("sentinel", { agent: agent(REGISTER[15], { total_input_tokens: 1000, total_output_tokens: 100, total_cost_usd: 0.0012 }) }),
+    "kein Tabellenpreis": detail("publisher", {
+      agent: agent(REGISTER[6], VERBRAUCH.publisher),
+      messages: laufNachrichten("publisher").map((m) => ({ ...m, metadata: { ...m.metadata, model: "__proto__" } })),
+    }),
+  };
+  for (const [fall, html] of Object.entries(faelle)) {
+    assert.deepEqual(kostenZeile(html).etikett, "gespeicherte Summe, Preistabelle je Lauf", fall);
+    assert.match(kostenZeile(html).wert, /^≈ \$0,\d{4}$/, fall);
+    const zeilen = kostenTitel(html).split("\n");
+    assert.equal(zeilen.length, 3, `${fall}: ${zeilen.join(" ⏎ ")}`);
+    assert.match(zeilen[1], /^Gespeicherte Summe agents\.total_cost_usd: \$0,\d{4} — /, fall);
+    assert.equal(zeilen[2], RUNDUNG, fall);
+  }
 });
 
 test("TOR-F7 /agents/donna: 'Modell letzter Lauf' zählt den Planungslauf (delegate-plan) mit Art und Quelle", () => {
@@ -688,6 +992,37 @@ test("TOR-F7 /agents/donna: 'Modell letzter Lauf' zählt den Planungslauf (deleg
   assert.ok(detail("donna", { agent: agent(REGISTER[1]), messages: [fehl] }).includes(`${SONNET} · Fehllauf der Planung`));
 });
 
+/** Block "Modell letzter Lauf" auf /agents/[id]: sichtbarer Wert und title. */
+function letzterLaufBlock(html) {
+  const m = /<div class="flex-1 min-w-\[140px\]" title="([^"]*)"><p class="[^"]*">Modell letzter Lauf<\/p><p class="text-sm font-medium break-words"[^>]*>([^<]*)<\/p>/.exec(html);
+  return { wert: m?.[2] ?? null, title: m?.[1] ?? null };
+}
+
+// Nachprüfung Mutation 07.11.2026 (M80): Kein Test hatte eine Lauf-Zeile ohne metadata.model (live 0
+// solcher Zeilen); ohne die Prüfung stand " · Planung" ohne Modell da.
+test("TOR-F7 /agents/[id] (Mutation M80): jüngste Lauf-Nachricht ohne Modell zählt nicht — das Modell kommt vom letzten Lauf mit Modell", () => {
+  // Testannahme: zwei jüngere Planungszeilen ohne bzw. mit leerem metadata.model, eine ältere mit Sonnet.
+  const zeile = (id, created_at, metadata) => ({ id, from_agent: "donna", to_agents: [], to_channels: [], message_type: "plan", content: { text: "Plan" }, metadata, created_at });
+  const leeresModell = zeile("p3", "2026-11-07T11:30:00.000Z", { source: "delegate-plan", model: "   " });
+  const ohneModell = zeile("p2", "2026-11-07T11:23:51.296Z", { source: "delegate-plan" });
+  const mitModell = zeile("p1", "2026-11-06T10:00:00.000Z", { source: "delegate-plan", model: SONNET });
+  const l = letzterLaufBlock(detail("donna", { agent: agent(REGISTER[1]), messages: [leeresModell, ohneModell, mitModell] }));
+  assert.equal(l.wert, `${SONNET} · Planung`);
+  assert.match(l.title, /^Quelle: metadata\.model der jüngsten Lauf-Nachricht dieses Agenten \(source delegate-plan\), /);
+  // Nur Zeilen ohne Modell: "kein Lauf …", kein Text ohne Modell.
+  assert.equal(letzterLaufBlock(detail("donna", { agent: agent(REGISTER[1]), messages: [leeresModell, ohneModell] })).wert, "kein Lauf in den neuesten 20 Nachrichten");
+});
+
+// Nachprüfung Mutation 07.11.2026 (M90): Der Lesefehler-Test prüfte nur die Kosten; reichte die Seite
+// den Fehler nicht an letzterLaufAnzeige, galt die alte Liste ("claude-opus-4-1 · Aktivierung" in der Sonde).
+test("TOR-F7 /agents/[id] (Mutation M90): Nachrichten nicht lesbar — 'Modell letzter Lauf' heißt 'nicht lesbar', auch neben einer alten Liste", () => {
+  const html = detail("publisher", { agent: agent(REGISTER[6], VERBRAUCH.publisher), messages: laufNachrichten("publisher"), messagesFehler: "HTTP 500" });
+  assert.deepEqual(letzterLaufBlock(html), { wert: "nicht lesbar", title: "Nachrichten nicht lesbar: HTTP 500" });
+  // Gegenprobe ohne Fehler: dieselbe Liste ergibt das Modell des jüngsten Laufs.
+  const ok = letzterLaufBlock(detail("publisher", { agent: agent(REGISTER[6], VERBRAUCH.publisher), messages: laufNachrichten("publisher") }));
+  assert.equal(ok.wert, `${SONNET} · Aktivierung`);
+});
+
 test("TOR-F2 /agents/[id]: Modell (Dashboard) neben dem Register, Abweichung markiert", () => {
   const html = detail("amplifier", { agent: agent(REGISTER[8]) });
   assert.ok(html.includes(`>Modell (Dashboard)</p><p class="text-sm font-medium break-words">${HAIKU}</p>`), html.slice(0, 2500));
@@ -698,7 +1033,8 @@ test("TOR-F2 /agents/[id]: Modell (Dashboard) neben dem Register, Abweichung mar
 
 // ═══ TOR-F5/F6 /messages ═══
 
-function messagesSeite(messages) {
+/** /messages mit den gegebenen Nachrichten; zustaende = Vorgaben für useState (filter, agentFilter). */
+function messagesSeite(messages, zustaende = []) {
   const lz = baumLaufzeit();
   const M = ladeTsx("app/messages/page.tsx", {
     ...lz.attrappen,
@@ -714,8 +1050,11 @@ function messagesSeite(messages) {
     "@/lib/kosten": kosten,
     "@/lib/types": types,
   });
-  return lz.rendere(M.default, {}, []);
+  return lz.rendere(M.default, {}, zustaende);
 }
+
+/** Inhalte der gelisteten Nachrichten in Listenfolge. */
+const listenInhalte = (baum) => finde(baum, (k) => k.type === "p" && /leading-relaxed break-words/.test(String(k.props.className ?? ""))).map(text);
 
 /** Zähler-Knöpfe: Bezeichnung → Zahl. */
 function zaehler(baum) {
@@ -764,6 +1103,51 @@ test("TOR-F5 /messages: Fehllauf und unbekannter Typ haben eigene Zähler, die S
   const t = text(baum);
   assert.ok(t.includes("· 2 Fehlläufe (bezahlt, ohne verwertbare Antwort) im Zähler Fehllauf, nicht als Antwort oder Plan gezählt"), t.slice(0, 900));
   assert.ok(!t.includes("nicht als Antwort gezählt"));
+});
+
+// Nachprüfung Mutation 07.11.2026 (M65, M66): Kein Test enthielt Nachrichten ausgeblendeter Agenten
+// (live 0 trader-Nachrichten); Zähler oder Summe über alle geladenen Nachrichten blieben grün.
+test("TOR-F5 /messages (Mutation M65/M66): Nachrichten ausgeblendeter Agenten zählen weder im Zähler noch in der Summe", () => {
+  // Testannahme: trader ist ausgeblendet (AUSGEBLENDETE_AGENTEN) — eine Nachricht von trader, eine nur an trader.
+  const baum = messagesSeite([
+    nachricht("n1", MESSUNG),
+    nachricht("n2", MESSUNG),
+    nachricht("t1", MESSUNG, { from_agent: "trader" }),
+    nachricht("t2", MESSUNG, { to_agents: ["trader"] }),
+  ]);
+  const z = zaehler(baum);
+  assert.deepEqual(z, { Aufgabe: 0, Antwort: 2, Broadcast: 0, Alarm: 0, Plan: 0, Planlauf: 0 });
+  assert.deepEqual(listenInhalte(baum), ["Antwort n1", "Antwort n2"]);
+  const t = text(baum);
+  assert.ok(t.includes("jede Nachricht in genau einem Zähler, Summe 2"), t.slice(0, 900));
+  assert.ok(t.includes("2 Nachrichten in den neuesten 100, im Browser gelesen"));
+  assert.ok(t.includes("· 2 von ausgeblendeten Agenten nicht angezeigt"));
+});
+
+// Nachprüfung Mutation 07.11.2026 (M67): Alle Tests renderten nur den Filter "all"; ein Filter nach
+// message_type statt nach Zähler blieb grün (Sonde: Fehllauf zeigte 0 statt 1 Nachricht).
+test("TOR-F5 /messages (Mutation M67): ein Zähler als Filter zeigt genau die Nachrichten, die er zählt", () => {
+  const liste = [
+    nachricht("a", MESSUNG),
+    nachricht("f", MESSUNG, { metadata: { source: "fehllauf", art: "aktivierung", cost_usd: 0.01, preis_stand: "2026-11-06" } }),
+    nachricht("p", MESSUNG, { message_type: "plan", metadata: { source: "delegate-plan" } }),
+    nachricht("pf", MESSUNG, { message_type: "plan", metadata: { source: "fehllauf", art: "planung", cost_usd: 0.02, preis_stand: "2026-11-06" } }),
+    nachricht("x", MESSUNG, { message_type: "heartbeat" }),
+  ];
+  const erwartet = {
+    response: ["Antwort", ["Antwort a"]],
+    fehllauf: ["Fehllauf", ["Antwort f", "Antwort pf"]],
+    plan: ["Plan", ["Antwort p"]],
+    andere: ["Andere Typen", ["Antwort x"]],
+  };
+  for (const [filter, [label, inhalte]] of Object.entries(erwartet)) {
+    const baum = messagesSeite(liste, [filter]);
+    assert.deepEqual(listenInhalte(baum), inhalte, `Filter ${filter}`);
+    assert.equal(zaehler(baum)[label], inhalte.length, `Zähler ${label}`);
+    assert.ok(text(baum).includes(`${inhalte.length} von 5 Nachrichten (Filter) in den neuesten 100, im Browser gelesen`), `Filter ${filter}`);
+  }
+  // Ohne Filter: alle fünf, jede in genau einem Zähler.
+  assert.equal(listenInhalte(messagesSeite(liste)).length, 5);
 });
 
 /** Metadaten-Chips (break-all) einer Seite. */
