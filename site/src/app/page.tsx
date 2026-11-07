@@ -727,7 +727,13 @@ export default function CommandCenter() {
               <div className="h-2 bg-surface-elevated rounded w-2/3" />
             </div>
           ) : (
-            <MessageFeed messages={messages} fehler={messagesError} serverAnzahl={busGesamt} realtime={realtime} />
+            <MessageFeed
+              messages={messages}
+              fehler={messagesError}
+              serverAnzahl={busGesamt}
+              realtime={realtime}
+              bezugIso={aktuell?.erzeugt_am ?? null}
+            />
           )}
         </div>
       </div>

@@ -501,7 +501,7 @@ const TRAINING_DATA: TrainingModule[] = [
     kernkompetenzen: [
       "GILT-Framework — Globalization, I18n, L10n, Translation",
       "Hofstede Cultural Dimensions — Unsicherheitsvermeidung, Individualismus",
-      "DACH-Marktintelligenz — DE 84M, AT 9M, CH 8.8M",
+      "DACH-Marktintelligenz — Marktgroessen von DE, AT und CH nur mit Quelle und Stand (amtliche Statistik)",
       "Transcreation — Botschaft uebertragen, nicht nur uebersetzen",
       "hreflang SEO — DACH-spezifische Suchmaschinenoptimierung",
       "Du/Sie-Konventionen — B2C vs. B2B Tonalitaet",
@@ -531,7 +531,10 @@ const TRAINING_DATA: TrainingModule[] = [
 // Stufe 1 (05.11.2026): Die Kopfzahlen ("16 Agents", "48+", "64+", "48") waren fest
 // eingetragen und schon vorher falsch (15 Module, 52 Fragen). Sie werden jetzt aus
 // TRAINING_DATA gezählt. Das unbenutzte TIER_LABELS ist entfernt.
-const ANZAHL_MODULE = TRAINING_DATA.length;
+// Tor-Prüfung 07.11.2026 (T1): Die Einwohnerzahlen im LOCALIZER-Modul ("DE 84M, AT 9M, CH 8.8M")
+// standen ohne Quelle und Stand da — gestrichen, keine Ersatzzahlen. Der Kopf zählte Module und
+// hieß "Agents"; jetzt "Lehrplan für N Agenten" (verschiedene agentId), nicht die Flotte.
+const ANZAHL_AGENTEN_MIT_MODUL = new Set(TRAINING_DATA.map((m) => m.agentId)).size;
 const ANZAHL_LEKTUERE = TRAINING_DATA.reduce((n, m) => n + m.pflichtlektuere.length, 0);
 const ANZAHL_FRAGEN = TRAINING_DATA.reduce((n, m) => n + m.pruefungsfragen.length, 0);
 const ANZAHL_CROSS = TRAINING_DATA.reduce((n, m) => n + m.crossTraining.length, 0);
@@ -547,8 +550,11 @@ export default function AcademyPage() {
       {/* Header */}
       <div className="gp-masthead">
         <div className="gp-index-row"><span className="gp-index">07 / AUSBILDUNG</span><span className="gp-index-rule" /></div>
-        <p className="gp-kicker">
-          Internes Weiterbildungsmodul — {ANZAHL_MODULE} Agents, {ANZAHL_LEKTUERE} Pflichtlektueren, {ANZAHL_FRAGEN} Pruefungsfragen
+        <p
+          className="gp-kicker"
+          title="Gezählt aus dem Lehrplan dieser Seite (Agenten mit eigenem Modul), nicht aus dem Agenten-Register"
+        >
+          Internes Weiterbildungsmodul — Lehrplan für {ANZAHL_AGENTEN_MIT_MODUL} Agenten, {ANZAHL_LEKTUERE} Pflichtlektueren, {ANZAHL_FRAGEN} Pruefungsfragen
         </p>
         <h1 className="gp-wordmark">Aca<em>demy</em></h1>
         <div className="mt-3 flex gap-4 text-xs">

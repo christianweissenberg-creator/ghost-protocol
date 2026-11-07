@@ -15,20 +15,29 @@
 // Command Center und /messages) werden weder gezeigt noch gezählt; ihre Zahl steht dabei.
 // Leertexte sagen, was die Abfrage im Browser lieferte, nicht, was in der Tabelle steht. Eine
 // Fehlerantwort der Aktivierung zeigt Kosten und Protokollfehler (werteAktivierungAus).
+// Tor-Prüfung 07.11.2026: Modell des Dashboard-Aufrufs aus lib/agent-modelle.ts neben dem Register,
+// eine Abweichung sichtbar (F2). Kosten aus den Tokens × aktuelle Preistabelle statt der
+// gespeicherten Summe: Juli-Läufe waren mit der alten Tabelle (Sonnet 3/15) geschätzt, und die
+// Spalte rundet je Lauf auf 4 Stellen (F3, F4; kostenUntergrenzeAnzeige in lib/types.ts).
+// "Modell letzter Lauf" zählt auch Planungen und Fehlläufe, mit Art (F7, letzterLaufAnzeige).
 
 import { useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { DETAIL_NACHRICHTEN_GRENZE, anzeigeFehler, istGueltigeAgentId, useAgentDetail, useJetztIso } from "@/lib/hooks";
 import { maskiereGeschuetzteNamen } from "@/lib/freigabe-regeln";
-import { PREIS_STAND_AB } from "@/lib/kosten";
+import { PREIS_QUELLE, PREIS_STAND_AB, preisJeMillion } from "@/lib/kosten";
+// Nur die Zuordnung Agent → Modell, keine System-Prompts (lib/agent-prompts.ts nie im Browser).
+import { dashboardModellFuer } from "@/lib/agent-modelle";
 import {
   aktivierungsAnzeige,
   datumZeit,
-  formatiereUsdUntergrenze,
   formatiereZahl,
   istSichtbareNachricht,
   istSichtbarerAgent,
+  kostenUntergrenzeAnzeige,
+  letzterLaufAnzeige,
+  modellAnzeige,
   registerEintragFuer,
   tierMetaFuer,
   werteAktivierungAus,
@@ -41,22 +50,18 @@ const ERGEBNIS_FARBE: Record<AktivierungsErgebnis["art"], string> = {
   fehler: "text-accent-rose",
 };
 
-/** Summe aus agents als Untergrenze ("≥"): Fehlläufe und nicht fortgeschriebene Läufe fehlen.
- *  0 oder fehlend ist keine Messung (DB-Default), sondern "nicht gemessen". Kosten werden für
- *  die Untergrenze abgerundet (formatiereUsdUntergrenze), Tokens sind ganze Zahlen. */
-function summeText(wert: unknown, art: "tokens" | "usd"): string {
+/** Token-Summe aus agents als Untergrenze ("≥"): Fehlläufe und nicht fortgeschriebene Läufe
+ *  fehlen. 0 oder fehlend ist keine Messung (DB-Default), sondern "nicht gemessen". */
+function tokenSummeText(wert: unknown): string {
   if (typeof wert !== "number" || !Number.isFinite(wert) || wert <= 0) return "nicht gemessen";
-  return art === "usd" ? formatiereUsdUntergrenze(wert, 4) : `≥ ${formatiereZahl(wert)}`;
+  return `≥ ${formatiereZahl(wert)}`;
 }
 
-/** "2026-11-06" → "06.11.2026" für den Kostentitel. */
-const PREIS_STAND_ANZEIGE = PREIS_STAND_AB.split("-").reverse().join(".");
-
 const VERBRAUCH_TITEL = [
-  "Summen in agents, fortgeschrieben von /api/agents/activate (Tokens laut Claude-Antwort × Listenpreis laut lib/kosten.ts).",
-  `Die Kostensumme enthält auch Beträge, die vor dem ${PREIS_STAND_ANZEIGE} mit der alten Preistabelle geschätzt wurden (Sonnet zu hoch, Haiku zu niedrig); nicht trennbar und nicht umgerechnet.`,
+  "Token-Summen in agents, fortgeschrieben von /api/agents/activate (Tokens laut Claude-Antwort).",
+  `Kosten: diese Tokens × Listenpreis des Dashboard-Modells laut lib/kosten.ts (${PREIS_QUELLE}) — auch für Läufe, die vor der Tabelle vom ${PREIS_STAND_AB.split("-").reverse().join(".")} mit der alten geschätzt wurden.`,
   "Untergrenze: Es fehlen Fehlläufe (HTTP 502: bezahlt, aber ohne verwertbare Antwort), Läufe ohne gemeldete Tokens und Läufe, deren Summen nicht fortgeschrieben wurden (gleichzeitige Änderung oder Schreibfehler).",
-  "Die Monatskosten aus /api/status zählen Fehlläufe mit; beide Zahlen können deshalb voneinander abweichen.",
+  "Die Monatskosten aus /api/status summieren die je Lauf gespeicherten Schätzungen und zählen Fehlläufe mit; beide Zahlen können deshalb voneinander abweichen.",
   "Maßgeblich ist die Anthropic-Rechnung.",
 ].join("\n");
 
@@ -182,21 +187,17 @@ export default function AgentDetailPage() {
   const persona = registry.persona && registry.persona !== agent.role ? registry.persona : null;
   const tierMeta = tierMetaFuer(agent.tier);
   const aktivierung = aktivierungsAnzeige(agent.last_heartbeat, jetzt, agent.status);
-  // Modell des letzten Laufs laut Bus-Nachricht (metadata.model) — das tatsächlich
-  // aufgerufene Modell; agents.llm_model ist der Registereintrag.
-  const letzterLauf = messagesFehler
-    ? null
-    : messages.find(
-        (m) =>
-          m.from_agent === agent.id &&
-          m.metadata?.source === "activation-api" &&
-          typeof m.metadata?.model === "string",
-      );
-  const letztesModell = messagesFehler
-    ? "nicht lesbar"
-    : letzterLauf
-      ? String(letzterLauf.metadata.model)
-      : `nicht in den neuesten ${DETAIL_NACHRICHTEN_GRENZE} Nachrichten`;
+  // Modell des Dashboard-Aufrufs (lib/agent-modelle.ts) gegen das Register (agents.llm_model).
+  const dashboardModell = dashboardModellFuer(agent.id);
+  const modell = modellAnzeige(dashboardModell, agent.llm_model);
+  // Modell des letzten Laufs laut Bus-Nachricht (metadata.model): Aktivierung, Planung oder Fehllauf.
+  const letzterLauf = letzterLaufAnzeige(messages, agent.id, DETAIL_NACHRICHTEN_GRENZE, messagesFehler);
+  const kosten = kostenUntergrenzeAnzeige(
+    agent,
+    dashboardModell,
+    dashboardModell === null ? null : preisJeMillion(dashboardModell),
+    PREIS_STAND_AB,
+  );
 
   return (
     <div className="p-8 max-w-[1200px]">
@@ -249,15 +250,18 @@ export default function AgentDetailPage() {
         <div className="flex flex-wrap gap-4 mt-6 pt-4 border-t border-border-subtle">
           <MetaBlock label="Tier" value={`T${String(agent.tier ?? "?")} — ${tierMeta.label}`} color={tierMeta.color} />
           <MetaBlock
-            label="Modell (Register)"
-            value={agent.llm_model || "nicht eingetragen"}
-            title="Quelle: agents.llm_model"
+            label="Modell (Dashboard)"
+            value={dashboardModell ?? "kein Dashboard-Prompt"}
+            title={modell.titel}
+            color={modell.ohnePrompt ? "var(--gp-amber)" : undefined}
           />
           <MetaBlock
-            label="Modell letzter Lauf"
-            value={letztesModell}
-            title="Quelle: metadata.model der jüngsten Aktivierungs-Nachricht (source activation-api) dieses Agenten"
+            label="Modell (Register)"
+            value={`${typeof agent.llm_model === "string" && agent.llm_model.trim() ? agent.llm_model : "nicht eingetragen"}${modell.abweichung ? " — weicht ab" : ""}`}
+            title={modell.titel}
+            color={modell.abweichung ? "var(--gp-amber)" : undefined}
           />
+          <MetaBlock label="Modell letzter Lauf" value={letzterLauf.text} title={letzterLauf.titel} />
           <MetaBlock label="Kanäle" value={agent.channels?.join(", ") || "—"} />
           <MetaBlock
             label="Letzte Aktivierung"
@@ -276,9 +280,14 @@ export default function AgentDetailPage() {
             geschätzt, nur Dashboard-Aktivierungen · Untergrenze: Fehlläufe fehlen
           </p>
           <div className="space-y-3" title={VERBRAUCH_TITEL}>
-            <StatRow label="Input-Tokens" value={summeText(agent.total_input_tokens, "tokens")} />
-            <StatRow label="Output-Tokens" value={summeText(agent.total_output_tokens, "tokens")} />
-            <StatRow label="Kosten (geschätzt)" value={summeText(agent.total_cost_usd, "usd")} color="#f59e0b" />
+            <StatRow label="Input-Tokens" value={tokenSummeText(agent.total_input_tokens)} />
+            <StatRow label="Output-Tokens" value={tokenSummeText(agent.total_output_tokens)} />
+            <div title={kosten.titel}>
+              <StatRow label="Kosten (geschätzt)" value={kosten.text} color="#f59e0b" />
+              <p className="text-[10px] text-text-muted mt-1 text-right" data-kosten-etikett>
+                {kosten.etikett}
+              </p>
+            </div>
           </div>
         </div>
 

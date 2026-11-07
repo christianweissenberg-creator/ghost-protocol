@@ -3,6 +3,7 @@
 import { maskiereGeschuetzteNamen } from "@/lib/freigabe-regeln";
 import {
   alsJsonObjekt,
+  busZeitAnzeige,
   formatiereUsd,
   istFehllaufNachricht,
   istSichtbarerAgent,
@@ -27,6 +28,10 @@ import type { Message, RealtimeZustand } from "@/lib/types";
 // /api/status als Gegenprobe; ist der Realtime-Kanal nicht verbunden, kann die Liste auch
 // veraltet sein, und das steht dabei.
 
+// Tor-Prüfung 07.11.2026 (F1): Die Zeit je Nachricht stand nur als HH:MM:SS da — Läufe vom
+// 30.07. lasen sich wie Aktivität der letzten Nacht. Jetzt mit Datum, wenn der Tag (Europe/Berlin)
+// nicht der Tag der Messung ist (busZeitAnzeige in lib/types.ts), voller Zeitpunkt im title.
+
 interface MessageFeedProps {
   messages: Message[];
   /** Lesefehler von useMessages; gesetzt heißt: Die Liste ist nicht gelesen, "leer" ist nicht belegt. */
@@ -35,6 +40,8 @@ interface MessageFeedProps {
   serverAnzahl?: number | null;
   /** Zustand des Realtime-Kanals von useMessages. */
   realtime?: RealtimeZustand;
+  /** Messzeitpunkt aus /api/status (erzeugt_am): Bezug für "heute"; fehlt er, steht immer das Datum da. */
+  bezugIso?: string | null;
 }
 
 const TYPE_COLORS: Record<string, string> = {
@@ -74,12 +81,6 @@ function textVon(m: Message): string {
   return nachrichtInhaltText(m.content);
 }
 
-function zeitVon(m: Message): string {
-  const t = Date.parse(m.timestamp ?? m.created_at ?? "");
-  if (!Number.isFinite(t)) return "Zeit unbekannt";
-  return new Date(t).toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-}
-
 function zahlOderNull(wert: unknown): number | null {
   return typeof wert === "number" && Number.isFinite(wert) ? wert : null;
 }
@@ -107,7 +108,7 @@ function fehllaufAngaben(m: Message): { zeile: string; titel: string } {
   };
 }
 
-export function MessageFeed({ messages, fehler = null, serverAnzahl = null, realtime }: MessageFeedProps) {
+export function MessageFeed({ messages, fehler = null, serverAnzahl = null, realtime, bezugIso = null }: MessageFeedProps) {
   const sichtbar = messages.filter(istSichtbareNachricht);
   const ausgeblendet = messages.length - sichtbar.length;
 
@@ -160,6 +161,7 @@ export function MessageFeed({ messages, fehler = null, serverAnzahl = null, real
         const typFarbe = TYPE_COLORS[msg.message_type] ?? "#666";
         const empfaenger = alsListe(msg.to_agents).filter((a) => istSichtbarerAgent({ id: a }));
         const kanaele = alsListe(msg.to_channels);
+        const zeit = busZeitAnzeige(msg, bezugIso);
         return (
           <div key={msg.id} className="p-3 hover:bg-surface-elevated/50 transition-colors animate-slide-up">
             <div className="flex items-center gap-2 mb-1">
@@ -186,8 +188,8 @@ export function MessageFeed({ messages, fehler = null, serverAnzahl = null, real
               <span className="text-xs text-text-secondary">
                 {empfaenger.join(", ") || kanaele.join(", ") || "—"}
               </span>
-              <span className="text-[10px] text-text-muted ml-auto font-mono">
-                {zeitVon(msg)}
+              <span className="text-[10px] text-text-muted ml-auto font-mono text-right" title={zeit.titel}>
+                {zeit.text}
               </span>
             </div>
             {fehllauf && (

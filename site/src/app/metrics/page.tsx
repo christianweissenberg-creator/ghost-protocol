@@ -10,14 +10,21 @@
 // Nachbesserung 06.11.2026: Icons nur über eigene Schlüssel (ein metric_type "__proto__" ließ
 // die Seite abstürzen). Eine leere Abfrage ist eine Aussage über den Browser-Lesezugriff, nicht
 // über die Tabelle: Für metrics gibt es keine Server-Zählung als Gegenprobe.
+// Tor-Prüfung 07.11.2026 (F2): Modellklassen, Modellliste und Preisbasis zählen das Modell, das
+// das Dashboard aufruft (lib/agent-modelle.ts — nur die Zuordnung, keine Prompts), nicht mehr
+// agents.llm_model. Das Register lieferte "Sonnet 10 · Haiku 6" (Seed bzw. Python-Pfad); laut
+// Dashboard-Konfiguration sind es 7 Sonnet, 8 Haiku und SENTINEL ohne Prompt. Abweichungen des
+// Registers stehen sichtbar da.
 
 import { useMetrics } from "@/lib/hooks-metrics";
 import { useAgents, useJetztIso } from "@/lib/hooks";
 import { useSystemStatus } from "@/lib/hooks-status";
 import { KPICard } from "@/components/ui/KPICard";
 import { AttributionPanel } from "@/components/ui/AttributionPanel";
-import { PREIS_QUELLE, basisModell, preisJeMillion } from "@/lib/kosten";
+import { PREIS_QUELLE, preisJeMillion } from "@/lib/kosten";
+import { dashboardModellFuer } from "@/lib/agent-modelle";
 import {
+  DASHBOARD_MODELL_QUELLE,
   agentenLeerHinweis,
   agentenZaehlung,
   aktivierungsAnzeige,
@@ -28,10 +35,13 @@ import {
   formatiereZahl,
   kostenMonatAnzeige,
   metrikEinheit,
+  modellAnzeige,
   modellKlasse,
+  modellKlassenText,
+  modellUebersicht,
   tierMetaFuer,
 } from "@/lib/types";
-import type { ModellKlasse } from "@/lib/types";
+import type { ModellGruppe } from "@/lib/types";
 
 const METRIC_ICONS: Record<string, string> = {
   api_cost: "💰",
@@ -41,12 +51,11 @@ const METRIC_ICONS: Record<string, string> = {
   error_count: "⚠",
 };
 
-const KLASSEN: readonly ModellKlasse[] = ["Sonnet", "Haiku", "andere"];
-
-const KLASSEN_FARBE: Record<ModellKlasse, { text: string; flaeche: string }> = {
+const KLASSEN_FARBE: Record<ModellGruppe, { text: string; flaeche: string }> = {
   Sonnet: { text: "#8b5cf6", flaeche: "rgba(139, 92, 246, 0.3)" },
   Haiku: { text: "#06b6d4", flaeche: "rgba(6, 182, 212, 0.3)" },
   andere: { text: "#8a8994", flaeche: "rgba(138, 137, 148, 0.25)" },
+  "ohne Prompt": { text: "#f59e0b", flaeche: "rgba(245, 158, 11, 0.18)" },
 };
 
 // Plan aus dem Projekt-Handbuch (CLAUDE.md, Abschnitt „Budget“), keine Messung.
@@ -56,7 +65,7 @@ const BUDGET_PLAN = {
   quelle: "Quelle: Budgetplan in CLAUDE.md (Abschnitt „Budget“). Plan, keine Messung.",
 };
 
-const PREIS_TITEL = `Listenpreis laut Tabelle (Schätzbasis) aus lib/kosten.ts.\n${PREIS_QUELLE}.\nModell laut Register (agents.llm_model); maßgeblich bleibt die Anthropic-Rechnung.`;
+const PREIS_TITEL = `Listenpreis laut Tabelle (Schätzbasis) aus lib/kosten.ts.\n${PREIS_QUELLE}.\nModell laut ${DASHBOARD_MODELL_QUELLE}: mit ihm rufen activate und delegate auf und schätzen die Kosten. Maßgeblich bleibt die Anthropic-Rechnung.`;
 
 export default function MetricsPage() {
   const {
@@ -77,18 +86,9 @@ export default function MetricsPage() {
   const registerLeerText = [registerLeer.text, registerLeer.zusatz].filter(Boolean).join(" ");
   const registerLeerStil = registerLeer.widerspruch ? { color: "var(--gp-amber)" } : undefined;
 
-  // Modellklassen einheitlich für Zählung, Verteilung und Tabelle (modellKlasse).
-  const klassenAnzahl = KLASSEN.map((klasse) => ({
-    klasse,
-    anzahl: agents.filter((a) => modellKlasse(a.llm_model) === klasse).length,
-  }));
-
-  // Modelle im Register mit Listenpreis laut Tabelle.
-  const modelle = new Map<string, number>();
-  for (const a of agents) {
-    const modell = typeof a.llm_model === "string" && a.llm_model.trim() ? basisModell(a.llm_model) : "";
-    modelle.set(modell, (modelle.get(modell) ?? 0) + 1);
-  }
+  // Modelle nach Dashboard-Konfiguration, einheitlich für Zählung, Verteilung und Tabelle;
+  // Abweichungen des Registers und Agenten ohne Prompt getrennt (modellUebersicht).
+  const uebersicht = modellUebersicht(agents, dashboardModellFuer);
 
   const kosten = kostenMonatAnzeige(sys.status, sys.fehler, sys.loading, sys.httpStatus);
 
@@ -97,7 +97,7 @@ export default function MetricsPage() {
     ? "Register wird gelesen"
     : agentsError
       ? "Agenten-Register nicht lesbar"
-      : klassenAnzahl.map((k) => `${k.klasse} ${k.anzahl}`).join(" · ");
+      : modellKlassenText(uebersicht);
 
   const metrikWert = metricsLoading ? "…" : metricsError ? "nicht lesbar" : formatiereZahl(metrics.length);
   const metrikUnterzeile = metricsLoading
@@ -133,7 +133,7 @@ export default function MetricsPage() {
             color="#f59e0b"
           />
         </div>
-        <div title="Quelle: Supabase-Tabelle agents, im Browser gelesen, ohne ausgeblendete Agenten. Klassen aus agents.llm_model.">
+        <div title={`Anzahl: Supabase-Tabelle agents, im Browser gelesen, ohne ausgeblendete Agenten. Klassen: Modell laut ${DASHBOARD_MODELL_QUELLE}, nicht agents.llm_model (Register).`}>
           <KPICard
             label="Agenten (Register, gelesen)"
             value={agentenWert}
@@ -152,10 +152,13 @@ export default function MetricsPage() {
         </div>
       </div>
 
-      {/* Modelle laut Register */}
+      {/* Modelle laut Dashboard-Konfiguration; Register nur als Abweichung */}
       <div className="card-ghost p-5 mb-6">
-        <h2 className="text-sm font-semibold font-[family-name:var(--font-outfit)] mb-4 uppercase tracking-wider text-text-muted">
-          Modelle laut Register
+        <h2
+          className="text-sm font-semibold font-[family-name:var(--font-outfit)] mb-4 uppercase tracking-wider text-text-muted"
+          title={`Quelle: ${DASHBOARD_MODELL_QUELLE} — das Modell, das das Dashboard aufruft`}
+        >
+          Modelle laut Dashboard-Konfiguration
         </h2>
         {agentsLoading ? (
           <div className="h-8 rounded-lg animate-pulse bg-surface-elevated" />
@@ -170,7 +173,7 @@ export default function MetricsPage() {
         ) : (
           <>
             <div className="flex gap-2 h-8 rounded-lg overflow-hidden">
-              {klassenAnzahl
+              {uebersicht.klassen
                 .filter((k) => k.anzahl > 0)
                 .map((k) => (
                   <div
@@ -187,14 +190,30 @@ export default function MetricsPage() {
                 ))}
             </div>
             <ul className="mt-4 space-y-1" title={PREIS_TITEL}>
-              {[...modelle].map(([modell, anzahl]) => (
-                <li key={modell || "leer"} className="text-[11px] text-text-secondary flex flex-wrap gap-x-2">
-                  <span className="font-mono">{modell || "kein Modell eingetragen"}</span>
+              {uebersicht.modelle.map(({ modell, anzahl }) => (
+                <li key={modell} className="text-[11px] text-text-secondary flex flex-wrap gap-x-2">
+                  <span className="font-mono">{modell}</span>
                   <span className="text-text-muted">{anzahl} {anzahl === 1 ? "Agent" : "Agenten"}</span>
-                  <span className="text-text-muted">· Listenpreis laut Tabelle (Schätzbasis): {formatierePreis(modell ? preisJeMillion(modell) : null)}</span>
+                  <span className="text-text-muted">· Listenpreis laut Tabelle (Schätzbasis): {formatierePreis(preisJeMillion(modell))}</span>
                 </li>
               ))}
+              {uebersicht.ohnePrompt.length > 0 && (
+                <li className="text-[11px] flex flex-wrap gap-x-2" style={{ color: "var(--gp-amber)" }} data-modell="ohne-prompt">
+                  <span>kein Dashboard-Prompt: {uebersicht.ohnePrompt.length} {uebersicht.ohnePrompt.length === 1 ? "Agent" : "Agenten"}</span>
+                  <span className="text-text-muted">
+                    · {uebersicht.ohnePrompt.map((a) => `${a.name} (Register: ${a.register ?? "nicht eingetragen"})`).join(", ")} — über das Dashboard nicht aktivierbar
+                  </span>
+                </li>
+              )}
             </ul>
+            {uebersicht.abweichend.length > 0 && (
+              <p className="text-[10px] mt-2" style={{ color: "var(--gp-amber)" }} data-modell="abweichung">
+                Register (agents.llm_model) weicht bei {uebersicht.abweichend.length}{" "}
+                {uebersicht.abweichend.length === 1 ? "Agent" : "Agenten"} ab:{" "}
+                {uebersicht.abweichend.map((a) => `${a.name} (Register ${a.register}, Dashboard ${a.dashboard})`).join(", ")} — Seed, Python-Pfad
+                oder älterer Lauf; aufgerufen wird das Dashboard-Modell.
+              </p>
+            )}
             <p className="text-[10px] text-text-muted mt-2">Preisquelle: {PREIS_QUELLE}.</p>
           </>
         )}
@@ -291,17 +310,24 @@ export default function MetricsPage() {
                 <tr className="border-b border-border text-text-muted">
                   <th className="text-left py-2 font-medium">Agent</th>
                   <th className="text-left py-2 font-medium">Tier</th>
-                  <th className="text-left py-2 font-medium">Modell (Register)</th>
+                  <th className="text-left py-2 font-medium" title={`Quelle: ${DASHBOARD_MODELL_QUELLE}`}>
+                    Modell (Dashboard)
+                  </th>
                   <th className="text-right py-2 font-medium" title={PREIS_TITEL}>
                     Listenpreis laut Tabelle (Schätzbasis)
+                  </th>
+                  <th className="text-left py-2 pl-3 font-medium" title="agents.llm_model: Seed, Python-Pfad oder letzter Dashboard-Lauf">
+                    Register
                   </th>
                   <th className="text-right py-2 font-medium">Letzte Aktivierung</th>
                 </tr>
               </thead>
               <tbody>
                 {agents.map((agent) => {
-                  const klasse = modellKlasse(agent.llm_model);
-                  const preis = typeof agent.llm_model === "string" ? preisJeMillion(agent.llm_model) : null;
+                  const dashboard = dashboardModellFuer(agent.id);
+                  const modell = modellAnzeige(dashboard, agent.llm_model);
+                  const klasse: ModellGruppe = dashboard === null ? "ohne Prompt" : modellKlasse(dashboard);
+                  const preis = dashboard === null ? null : preisJeMillion(dashboard);
                   const aktivierung = aktivierungsAnzeige(agent.last_heartbeat, jetzt, agent.status);
                   return (
                     <tr key={agent.id} className="border-b border-border-subtle hover:bg-surface-elevated/30">
@@ -309,7 +335,7 @@ export default function MetricsPage() {
                       <td className="py-2 text-text-muted">
                         Tier {String(agent.tier ?? "?")} — {tierMetaFuer(agent.tier).label}
                       </td>
-                      <td className="py-2">
+                      <td className="py-2" title={modell.titel}>
                         <span
                           className="text-[10px] px-1.5 py-0.5 rounded font-mono mr-2"
                           style={{
@@ -319,10 +345,18 @@ export default function MetricsPage() {
                         >
                           {klasse}
                         </span>
-                        <span className="font-mono text-text-muted">{agent.llm_model || "nicht eingetragen"}</span>
+                        <span className="font-mono text-text-muted">{dashboard ?? "kein Dashboard-Prompt"}</span>
                       </td>
                       <td className="py-2 text-right font-mono text-text-secondary" title={PREIS_TITEL}>
-                        {formatierePreis(preis)}
+                        {dashboard === null ? "kein Dashboard-Aufruf" : formatierePreis(preis)}
+                      </td>
+                      <td
+                        className="py-2 pl-3 font-mono"
+                        style={{ color: modell.abweichung ? "var(--gp-amber)" : "var(--gp-ink-3)" }}
+                        title={modell.titel}
+                      >
+                        {typeof agent.llm_model === "string" && agent.llm_model.trim() ? agent.llm_model : "nicht eingetragen"}
+                        {modell.abweichung ? " — weicht ab" : ""}
                       </td>
                       <td className="py-2 text-right text-text-muted" title={aktivierung.titel}>
                         {aktivierung.text}

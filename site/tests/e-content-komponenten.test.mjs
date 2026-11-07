@@ -1199,3 +1199,55 @@ test("Nachprüfung: freigabeLage je Eintrag gemerkt — gleicher Eintrag gleiche
   assert.equal(neu.nameImText, true);
   assert.equal(neu.pruefung.freigebbar, false);
 });
+
+// ═══ Tor-Prüfung 07.11.2026 (F8): "Bereit zum Posten" nur mit Betreiber-Vermerk ═══
+// Gemessen per SQL am 07.11.2026: content #2 hat Status freigegeben ohne metadata.freigabe
+// (freigegeben am 27.07.2026, vor Stufe 1). Die Kachel sagte trotzdem "Bereit zum Posten".
+
+const VERMERK = {
+  aktion: "freigeben",
+  am: "2026-11-06T08:00:00Z",
+  durch: "betreiber-session",
+  counsel_urteil: "FREIGABE",
+  counsel_zeile: "URTEIL: FREIGABE-EMPFEHLUNG",
+  text_sha256: "0".repeat(64),
+  text_zeichen: 75,
+};
+
+test("TOR-F8 Kachel Freigegeben: ohne Betreiber-Vermerk nicht 'bereit zum Posten', sondern sichtbar als Altbestand", async () => {
+  const sim = baueSimulation({
+    suche: "tab=content",
+    zeilen: [zeile(2, { status: "freigegeben" }), zeile(21, { status: "freigegeben", extra: { freigabe: VERMERK } })],
+  });
+  const baum = await sim.start();
+  const kachel = text(finde(baum, (k) => k.props?.["data-kpi"] === "Freigegeben")[0]);
+  assert.equal(
+    kachel,
+    "Freigegeben: 2 · 1 bereit zum Posten (mit Betreiber-Vermerk) · 1 freigegeben ohne Betreiber-Vermerk (Altbestand) · in den letzten 50",
+  );
+  // Am Eintrag selbst: nur #2 trägt den Hinweis, sichtbar in der Kopfzeile (nicht erst aufgeklappt).
+  const hinweise = finde(baum, (k) => k.type === "span" && text(k) === "ohne Betreiber-Vermerk (Altbestand)");
+  assert.equal(hinweise.length, 1);
+  const karte2 = finde(
+    baum,
+    (k) => k.type === "div" && String(k.props.className ?? "").startsWith("card-ghost p-4") && finde(k, (h) => h.type === "h3" && text(h) === "Eintrag 2").length === 1,
+  )[0];
+  assert.equal(finde(karte2, (k) => k.type === "span" && text(k) === "ohne Betreiber-Vermerk (Altbestand)").length, 1);
+});
+
+test("TOR-F8 Kachel Freigegeben: nur Einträge mit Vermerk → kein Altbestand-Teil; ohne gelesene Liste keine Aussage", async () => {
+  const mit = baueSimulation({ suche: "tab=content", zeilen: [zeile(21, { status: "freigegeben", extra: { freigabe: VERMERK } })] });
+  const kachel = text(finde(await mit.start(), (k) => k.props?.["data-kpi"] === "Freigegeben")[0]);
+  assert.equal(kachel, "Freigegeben: 1 · 1 bereit zum Posten (mit Betreiber-Vermerk) · in den letzten 50");
+  // Ein abgelehnter Vermerk (aktion ablehnen) ist kein Freigabe-Vermerk.
+  const falsch = baueSimulation({ suche: "tab=content", zeilen: [zeile(22, { status: "freigegeben", extra: { freigabe: { aktion: "ablehnen" } } })] });
+  const k2 = text(finde(await falsch.start(), (k) => k.props?.["data-kpi"] === "Freigegeben")[0]);
+  assert.equal(k2, "Freigegeben: 1 · 0 bereit zum Posten (mit Betreiber-Vermerk) · 1 freigegeben ohne Betreiber-Vermerk (Altbestand) · in den letzten 50");
+  // Solange die Liste lädt, keine Aussage über "bereit" (vorher stand der Untertitel immer da).
+  const laedt = baueSimulation({ suche: "tab=content", zeilen: [zeile(2, { status: "freigegeben" })] });
+  const k3 = text(finde(laedt.rendere(), (k) => k.props?.["data-kpi"] === "Freigegeben")[0]);
+  assert.equal(k3, "Freigegeben: lädt · Status freigegeben · in den letzten 50");
+  // Freigabe-Regel unverändert: Kopieren hängt weiter an pruefeFreigabe, nicht am Vermerk.
+  const lage = A.freigabeLage(zeile(2, { status: "freigegeben" }));
+  assert.equal(lage.pruefung.freigebbar, true);
+});

@@ -9,12 +9,18 @@
 // gezählt (istSichtbareNachricht, dieselbe Regel wie im Command Center). Eine leere Liste ist
 // eine Aussage über die Abfrage im Browser, nicht über die Tabelle; Gegenprobe ist die Zählung
 // über /api/status. Farben nur über eigene Schlüssel ("__proto__" aus den Daten trifft nichts).
+// Tor-Prüfung 07.11.2026: Jede Nachricht zählt in genau einem Zähler (busZaehlerVon) — vorher
+// fehlten plan und plan_run, die Zähler ergaben 46 neben "48 Nachrichten" (F5). cost_usd
+// einheitlich formatiert, mit der Preistabelle, wenn es nicht die aktuelle ist (F6).
 
 import { useMessages, useAgents } from "@/lib/hooks";
 import { useSystemStatus } from "@/lib/hooks-status";
 import { CommandPanel } from "@/components/ui/CommandPanel";
 import { maskiereGeschuetzteNamen } from "@/lib/freigabe-regeln";
+import { PREIS_STAND_AB } from "@/lib/kosten";
 import {
+  BUS_ZAEHLER,
+  busZaehlerVon,
   busZaehlung,
   eigenerEintrag,
   formatiereZahl,
@@ -28,25 +34,43 @@ import {
   realtimeAnzeige,
   sichtbareEmpfaenger,
 } from "@/lib/types";
-import type { Message } from "@/lib/types";
+import type { BusZaehler, Message } from "@/lib/types";
 import { useState } from "react";
 
 const NACHRICHTEN_GRENZE = 100;
 
-const TYPEN = ["task", "response", "broadcast", "alert"] as const;
+/** Immer gezeigte Zähler; "fehllauf" und "andere" nur, wenn belegt oder als Filter gewählt. */
+const IMMER_GEZEIGT: readonly BusZaehler[] = ["task", "response", "broadcast", "alert", "plan", "plan_run"];
 
 const TYPE_COLORS: Record<string, string> = {
   task: "#06b6d4",
   response: "#22c55e",
   broadcast: "#8b5cf6",
   alert: "#ff3366",
+  plan: "#f59e0b",
+  plan_run: "#c9a86a",
 };
 
-const TYPE_LABELS: Record<string, string> = {
+const ZAEHLER_FARBE: Record<BusZaehler, string> = {
+  task: "#06b6d4",
+  response: "#22c55e",
+  broadcast: "#8b5cf6",
+  alert: "#ff3366",
+  plan: "#f59e0b",
+  plan_run: "#c9a86a",
+  fehllauf: "#ff4d6a",
+  andere: "#8a8994",
+};
+
+const ZAEHLER_LABEL: Record<BusZaehler, string> = {
   task: "Aufgabe",
   response: "Antwort",
   broadcast: "Broadcast",
   alert: "Alarm",
+  plan: "Plan",
+  plan_run: "Planlauf",
+  fehllauf: "Fehllauf",
+  andere: "Andere Typen",
 };
 
 // Gegencheck 06.11.2026: Inhalt und Metadaten dürfen JSON-Text sein (Python-Agenten bis
@@ -55,11 +79,6 @@ const TYPE_LABELS: Record<string, string> = {
 // zählen nicht als Antwort und tragen ein eigenes Etikett — wie im Command Center.
 function nachrichtText(msg: Message): string {
   return nachrichtInhaltText(msg.content);
-}
-
-/** Typ für Zähler und Filter: ein Fehllauf ist keine Antwort. */
-function zaehltAlsTyp(msg: Message, typ: string): boolean {
-  return msg.message_type === typ && !(typ === "response" && istFehllaufNachricht(msg));
 }
 
 function nachrichtenWort(n: number): string {
@@ -81,7 +100,7 @@ export default function MessagesPage() {
   const filterAktiv = filter !== "all" || agentFilter !== "all";
 
   const filtered = sichtbar.filter((msg) => {
-    if (filter !== "all" && !zaehltAlsTyp(msg, filter)) return false;
+    if (filter !== "all" && busZaehlerVon(msg) !== filter) return false;
     if (
       agentFilter !== "all" &&
       msg.from_agent !== agentFilter &&
@@ -91,11 +110,15 @@ export default function MessagesPage() {
     return true;
   });
 
-  // Nur die vier bekannten Typen, Vergleich mit === (kein Schlüssel aus den Daten).
+  // Jede Nachricht in genau einem Zähler (busZaehlerVon); die Summe ist sichtbar.length.
   const typeCounts = Object.fromEntries(
-    TYPEN.map((typ) => [typ, sichtbar.filter((m) => zaehltAlsTyp(m, typ)).length]),
-  ) as Record<(typeof TYPEN)[number], number>;
-  const fehllaeufe = sichtbar.filter(istFehllaufNachricht).length;
+    BUS_ZAEHLER.map((z) => [z, sichtbar.filter((m) => busZaehlerVon(m) === z).length]),
+  ) as Record<BusZaehler, number>;
+  const gezeigteZaehler = BUS_ZAEHLER.filter(
+    (z) => IMMER_GEZEIGT.includes(z) || (!loading && !error && typeCounts[z] > 0) || filter === z,
+  );
+  const fehllaeufe = typeCounts.fehllauf;
+  const andereTypen = [...new Set(sichtbar.filter((m) => busZaehlerVon(m) === "andere").map((m) => String(m.message_type ?? "")))];
 
   const server = busZaehlung(sys.status, sys.fehler);
 
@@ -133,7 +156,7 @@ export default function MessagesPage() {
 
       {/* Stats Row — Zähler in den neuesten 100 */}
       <div className="flex flex-wrap gap-3 mb-2">
-        {TYPEN.map((type) => (
+        {gezeigteZaehler.map((type) => (
           <button
             key={type}
             onClick={() => setFilter(filter === type ? "all" : type)}
@@ -141,23 +164,25 @@ export default function MessagesPage() {
               filter === type ? "ring-1" : ""
             }`}
             style={{
-              borderColor: filter === type ? TYPE_COLORS[type] : undefined,
-              boxShadow: filter === type ? `0 0 0 1px ${TYPE_COLORS[type]}` : undefined,
+              borderColor: filter === type ? ZAEHLER_FARBE[type] : undefined,
+              boxShadow: filter === type ? `0 0 0 1px ${ZAEHLER_FARBE[type]}` : undefined,
             }}
             title={
               error
                 ? `Nachrichten nicht lesbar: ${error}`
-                : `Anzahl unter den im Browser gelesenen neuesten ${NACHRICHTEN_GRENZE} Nachrichten, ohne ausgeblendete Agenten`
+                : `Anzahl unter den im Browser gelesenen neuesten ${NACHRICHTEN_GRENZE} Nachrichten, ohne ausgeblendete Agenten${
+                    type === "andere" && andereTypen.length > 0 ? ` · Typen: ${maskiereGeschuetzteNamen(andereTypen.join(", "))}` : ""
+                  }${type === "fehllauf" ? " · bezahlt, ohne verwertbare Antwort (metadata.source fehllauf), gleich welcher Typ" : ""}`
             }
           >
             <div
               className="w-2 h-2 rounded-full"
-              style={{ background: TYPE_COLORS[type] }}
+              style={{ background: ZAEHLER_FARBE[type] }}
             />
-            <span className="text-xs text-text-secondary">{TYPE_LABELS[type]}</span>
+            <span className="text-xs text-text-secondary">{ZAEHLER_LABEL[type]}</span>
             <span
               className={`font-bold font-[family-name:var(--font-outfit)] ${error ? "text-[10px]" : "text-sm"}`}
-              style={{ color: TYPE_COLORS[type] }}
+              style={{ color: ZAEHLER_FARBE[type] }}
             >
               {loading ? "…" : error ? "nicht lesbar" : typeCounts[type]}
             </span>
@@ -190,6 +215,9 @@ export default function MessagesPage() {
       <p className="text-[10px] text-text-muted mb-6">
         Zähler: in den neuesten {NACHRICHTEN_GRENZE} Nachrichten der Tabelle messages, im Browser gelesen, ohne
         ausgeblendete Agenten
+        {!loading && !error
+          ? ` · jede Nachricht in genau einem Zähler, Summe ${formatiereZahl(sichtbar.length)}`
+          : ""}
         {!loading && !error && fehllaeufe > 0
           ? ` · ${formatiereZahl(fehllaeufe)} ${fehllaeufe === 1 ? "Fehllauf" : "Fehlläufe"} (bezahlt, ohne verwertbare Antwort) nicht als Antwort gezählt`
           : ""}
@@ -320,7 +348,7 @@ export default function MessagesPage() {
                       key={key}
                       className="text-[9px] px-1.5 py-0.5 rounded bg-surface-elevated text-text-muted font-mono break-all"
                     >
-                      {maskiereGeschuetzteNamen(metaWertText(key, val))}
+                      {maskiereGeschuetzteNamen(metaWertText(key, val, { meta: msg.metadata, preisStandAb: PREIS_STAND_AB }))}
                     </span>
                   ))}
                 </div>
