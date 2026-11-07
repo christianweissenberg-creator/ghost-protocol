@@ -1399,9 +1399,12 @@ const ANWEISUNGEN_NACH_TABELLE = [
   "GRANT USAGE ON SEQUENCE public.lauf_nachweis_id_seq TO service_role",
 ];
 
-test("T-S1 scripts/lauf_nachweis.sql (Prüfbefunde B2, oeffentlich-1, oeffentlich-3): Entwurf-Kopf, keine CHECK-Bedingung gegen die DB-Uhr, Rechteblock als exakte, geordnete Liste", () => {
+test("T-S1 scripts/lauf_nachweis.sql (Prüfbefunde B2, oeffentlich-1, oeffentlich-3): Kopf mit Ausführungsvermerk, keine CHECK-Bedingung gegen die DB-Uhr, Rechteblock als exakte, geordnete Liste", () => {
   const sql = readFileSync(SQL_DATEI, "utf8");
-  assert.match(sql, /ENTWURF, NICHT AUSGEFÜHRT\. Ausführung nur nach Inhaberentscheid/);
+  // Am 07.11.2026 ausgeführt: Der Kopf nennt die Migration, damit niemand eine geänderte Fassung
+  // erneut ausführt, statt eine neue Migration anzulegen.
+  assert.match(sql, /AUSGEFÜHRT am 07\.11\.2026 nach Inhaberentscheid \(Supabase-Migration create_lauf_nachweis_totmann,\n-- Version 20261107094750,/);
+  assert.doesNotMatch(sql, /ENTWURF, NICHT AUSGEFÜHRT/);
   const code = ohneKommentare(sql);
   const checks = checkAusdruecke(code);
   assert.equal(checks.length, 6, checks.join(" | "));

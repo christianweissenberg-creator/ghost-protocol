@@ -45,7 +45,7 @@ export interface KostenWert {
 
 // ── Totmann für Crons und Agenten (Objekt-Studio Stufe 2, Rest aus Stufe 1) ──
 // Spezifikation: docs/intern/objekt-studio-stufe-2.md §2.2–2.4. Plan: lib/totmann.ts; Bewertung:
-// bewerteTotmann() in lib/status-server.ts; Tabelle: scripts/lauf_nachweis.sql (Entwurf).
+// bewerteTotmann() in lib/status-server.ts; Tabelle: scripts/lauf_nachweis.sql (ausgeführt am 07.11.2026).
 
 /** Ergebnis eines Laufs; dieselben Werte wie der CHECK auf lauf_nachweis.ergebnis. */
 export type LaufErgebnis = "ok" | "teilweise" | "fehler" | "uebersprungen";

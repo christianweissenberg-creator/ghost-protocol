@@ -5,7 +5,7 @@
 // /api/cron/briefing und /api/content/auto-produce nehmen die Job-Namen, und die Tests laden sie
 // direkt (tests/b-status-server.test.mjs). Die Bewertung liegt in lib/status-server.ts
 // (letzterSollzeitpunkt, bewerteJob, bewerteTotmann), das SQL der Tabelle in
-// scripts/lauf_nachweis.sql (Entwurf, nicht ausgeführt).
+// scripts/lauf_nachweis.sql (ausgeführt am 07.11.2026).
 //
 // Zeitzone offen: Für die curl-Jobs gibt es nur den Kommentar „CET" (setup-vps-crons.sh:20).
 // crontab:3 („Alle Zeiten in UTC") gilt für die Python-Jobs des DONNA-Schedulers und ist
@@ -26,8 +26,9 @@ export const NACHWEIS_TABELLE = "lauf_nachweis";
 /**
  * Tag (JJJJ-MM-TT, Europe/Berlin), seit dem lauf_nachweis in Produktion besteht und der Schreiber
  * deployt ist — der spätere von Deploy und Ausführung von scripts/lauf_nachweis.sql (§2.2 Punkt 3:
- * "<Deploy-Datum>"). null, solange das nicht festgehalten ist: Stufe 1 ist gemergt, aber nicht
- * deployt, und das SQL ist ein Inhaberentscheid. Nach Deploy und SQL in einem eigenen Commit setzen.
+ * "<Deploy-Datum>"). null, solange das nicht festgehalten ist: Das SQL ist seit 07.11.2026
+ * ausgeführt (Migration 20261107094750), der Schreiber aber noch nicht deployt. Nach dem Deploy in
+ * einem eigenen Commit setzen.
  * Nur für den Tooltip „Nachweis-Tabelle seit …: kein Lauf" (§2.4). Prüfbefund B1: Vorher stand hier
  * der Tag, an dem der Code entstand (07.11.2026), und der Tooltip behauptete ein Beobachtungsfenster,
  * in dem es weder Tabelle noch Schreiber gab. Das Urteil über aktive Jobs hängt an aktiv_seit.

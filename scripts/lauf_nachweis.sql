@@ -1,8 +1,9 @@
 -- ============================================
 -- GHOST PROTOCOL — Totmann: Tabelle lauf_nachweis
 -- ============================================
--- ENTWURF, NICHT AUSGEFÜHRT. Ausführung nur nach Inhaberentscheid: vom Inhaber im
--- Supabase-SQL-Editor oder von einer Sitzung mit ausdrücklichem Okay, Block für Block.
+-- AUSGEFÜHRT am 07.11.2026 nach Inhaberentscheid (Supabase-Migration create_lauf_nachweis_totmann,
+-- Version 20261107094750, Zeilen ab CREATE TABLE wortgleich). Jede spätere Änderung nur als neue
+-- Migration nach Inhaberentscheid, nicht durch erneutes Ausführen einer geänderten Fassung.
 -- Die Rollenzeilen sind Supabase-spezifisch.
 --
 -- Quelle: docs/intern/objekt-studio-stufe-2.md §5.5 (b) (Entwurf E-totmann, Uhren korrigiert)

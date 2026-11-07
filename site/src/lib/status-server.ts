@@ -881,7 +881,7 @@ export function werteKostenAus(
 
 // ── Totmann für Crons und Agenten (Objekt-Studio Stufe 2, Rest aus Stufe 1) ───────────────────
 // Spezifikation: docs/intern/objekt-studio-stufe-2.md §2.2–2.5. Der Plan steht in lib/totmann.ts,
-// die Tabelle in scripts/lauf_nachweis.sql (Entwurf, nicht ausgeführt). Die Schreiber
+// die Tabelle in scripts/lauf_nachweis.sql (ausgeführt am 07.11.2026). Die Schreiber
 // (api/cron/briefing, api/content/auto-produce) hängen nach bestandener Secret-Prüfung genau eine
 // Zeile an; GET /api/status liest je Job die zuletzt eingetragene Zeile (für aktive Jobs die zuletzt
 // eingetragenen ZEILEN_JE_AKTIVEM_JOB) und, für aktive Jobs, die zuletzt eingetragene mit einem
