@@ -7,6 +7,9 @@
 // Alle Schlüssel hier sind erfundene Testwerte.
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   ANTHROPIC_SCHLUESSEL,
   EXPORT_TOKEN,
@@ -17,6 +20,7 @@ import {
   QUELLE_FEHLLAUF,
   STATUS_RANG,
   SUMMEN_SPALTEN,
+  UHR_TOLERANZ_MS,
   VORLAUF_MS,
   abschneideStatus,
   ausnahmeNachweis,
@@ -46,6 +50,9 @@ import {
   NACHWEIS_TABELLE,
   TOTMANN_PLAN,
 } from "../src/lib/totmann.ts";
+
+/** Wurzel des Repos (site/..), für scripts/setup-vps-crons.sh. */
+const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 
 const SCHLUESSEL = "sk-ant-api03-TESTabcdefghijklmnopqrstuvwxyz0123456789";
 const SERVICE = "eyJtestHeaderAAAAAAAA.eyJwYXlsb2FkBBBBBBBBBBBB.c2lnbmF0dXJlCCCCCCCCCC";
@@ -609,19 +616,25 @@ test("werteKostenAus: ohne Gesamtzahl → Hinweis, laeufe_monat = geladene Zeile
 
 // ═══ Totmann für Crons und Agenten (Objekt-Studio Stufe 2, §2.3 und §2.5) ═══
 // Im November gilt MEZ (UTC+1): Mo 09.11.2026 08:03 Berlin = 07:03 UTC, 09:07 = 08:07 UTC,
-// 18:03 = 17:03 UTC. NACHWEIS_SEIT 2026-11-07 beginnt am 06.11. um 23:00 UTC.
+// 18:03 = 17:03 UTC. AKTIV_AB (Sa 07.11.2026 00:00 Berlin) ist der 06.11. 23:00 UTC.
+// Nachbesserung 07.11.2026 (Prüfbefunde Z1–Z8, B1–B11, SR-1–SR-8): Fälle je Befund unten.
 
 const MORGEN = TOTMANN_PLAN.find((j) => j.job === JOB_BRIEFING_MORGEN);
 const ABEND = TOTMANN_PLAN.find((j) => j.job === JOB_BRIEFING_ABEND);
 const AUTO = TOTMANN_PLAN.find((j) => j.job === JOB_AUTO_PRODUCE);
+/** Messbeginn der Tests (aktiv_seit), Sa 07.11.2026 00:00 Berlin. */
+const AKTIV_AB = "2026-11-07T00:00:00+01:00";
+/** Messbeginn für Fälle, deren Sollzeitpunkt früher liegt (Sommerzeit-Tage). */
+const FRUEH_AB = "2026-01-01T00:00:00+01:00";
 /** Plan-Job als aktiv (so, wie er nach §2.6 einmal laufen soll); die Konstante bleibt aus. */
-const aktiv = (job) => ({ ...job, aktiv: true, aus_seit: null, grund: null });
-const AKTIV_PLAN = TOTMANN_PLAN.map(aktiv);
-/** Zeile wie aus lauf_nachweis gelesen; beendet_am eine Minute nach begonnen_am. */
+const aktiv = (job, seit = AKTIV_AB) => ({ ...job, aktiv: true, aktiv_seit: seit, zeitzone_beleg: "Testannahme", aus_seit: null, grund: null });
+const AKTIV_PLAN = TOTMANN_PLAN.map((j) => aktiv(j));
+/** Zeile wie aus lauf_nachweis gelesen; beendet_am 1 min nach begonnen_am, eingetragen_am (DB-Uhr) 1 s danach. */
 const lauf = (job, begonnen, ergebnis = "ok", extra = {}) => ({
   job,
   begonnen_am: new Date(begonnen).toISOString(),
   beendet_am: new Date(Date.parse(begonnen) + 60_000).toISOString(),
+  eingetragen_am: new Date(Date.parse(begonnen) + 61_000).toISOString(),
   ergebnis,
   http_status: 200,
   teilergebnisse: [],
@@ -630,54 +643,84 @@ const lauf = (job, begonnen, ergebnis = "ok", extra = {}) => ({
 });
 const MO_1004 = new Date("2026-11-09T09:04:00Z"); // Mo 09.11.2026 10:04 Berlin
 const S_MO = "2026-11-09T07:03:00.000Z"; // Mo 09.11.2026 08:03 Berlin
-/** nachweisSeit für Fälle, deren Sollzeitpunkt vor NACHWEIS_SEIT liegt (Sommerzeit-Tage). */
-const FRUEHER = "2026-01-01";
 const iso = (d) => (d === null ? null : d.toISOString());
+const ALLE_AUS = "alle 3 Jobs laut Plan aus seit 30.07.2026";
 
-test("Totmann: Plan wie setup-vps-crons.sh:21/:24/:27 — Mo–Fr, Europe/Berlin, Karenz 2 h, alle aus seit 30.07.2026", () => {
+/** Wochentage eines crontab-Felds ("1-5", "1,3"), wie Date.getDay(). */
+function cronTage(feld) {
+  return feld.split(",").flatMap((teil) => {
+    const [von, bis] = teil.split("-").map(Number);
+    return bis === undefined ? [von] : Array.from({ length: bis - von + 1 }, (_, i) => von + i);
+  });
+}
+
+test("Totmann: Plan wie scripts/setup-vps-crons.sh:21/:24/:27 (aus der Datei gelesen) — Mo–Fr, Karenz 2 h, alle aus seit 30.07.2026", () => {
+  // Prüfbefund B11: vorher nur gegen eine Literal-Kopie verglichen. Gelesen werden nur Minute,
+  // Stunde und Wochentag am Zeilenanfang; der Rest der Zeile (dort steht ein Secret-Parameter)
+  // wird weder verglichen noch in einer Meldung ausgegeben. Z_SETUP_VPS_CRONS prüft eine Kopie.
+  const datei = process.env.Z_SETUP_VPS_CRONS ?? path.join(REPO, "scripts", "setup-vps-crons.sh");
+  const zeilen = readFileSync(datei, "utf8").split("\n");
+  for (const j of TOTMANN_PLAN) {
+    const nr = Number(/setup-vps-crons\.sh:(\d+)$/.exec(j.fundstelle)?.[1]);
+    const m = /^(\d{1,2}) (\d{1,2}) \* \* ([0-9,-]+) /.exec(zeilen[nr - 1] ?? "");
+    assert.ok(m !== null, `${j.job}: setup-vps-crons.sh:${nr} beginnt nicht mit "Minute Stunde * * Wochentage"`);
+    assert.equal(`${m[2].padStart(2, "0")}:${m[1].padStart(2, "0")}`, j.uhrzeit, `${j.job}: Uhrzeit laut setup-vps-crons.sh:${nr}`);
+    assert.deepEqual(cronTage(m[3]), [...j.wochentage], `${j.job}: Wochentage laut setup-vps-crons.sh:${nr}`);
+  }
+  assert.deepEqual(TOTMANN_PLAN.map((j) => /setup-vps-crons\.sh:(\d+)$/.exec(j.fundstelle)?.[1]), ["21", "24", "27"]);
   assert.deepEqual(
-    TOTMANN_PLAN.map((j) => [j.job, j.uhrzeit, [...j.wochentage], j.zeitzone, j.karenz_h, j.aktiv, j.aus_seit]),
+    TOTMANN_PLAN.map((j) => [j.job, j.zeitzone, j.zeitzone_beleg, j.karenz_h, j.aktiv, j.aktiv_seit, j.aus_seit, j.stolperdraht_quittiert_bis]),
     [
-      ["briefing-morgen", "08:03", [1, 2, 3, 4, 5], "Europe/Berlin", 2, false, "2026-07-30"],
-      ["briefing-abend", "18:03", [1, 2, 3, 4, 5], "Europe/Berlin", 2, false, "2026-07-30"],
-      ["content-auto-produce", "09:07", [1, 2, 3, 4, 5], "Europe/Berlin", 2, false, "2026-07-30"],
+      ["briefing-morgen", "Europe/Berlin", null, 2, false, null, "2026-07-30", null],
+      ["briefing-abend", "Europe/Berlin", null, 2, false, null, "2026-07-30", null],
+      ["content-auto-produce", "Europe/Berlin", null, 2, false, null, "2026-07-30", null],
     ],
   );
-  assert.deepEqual(TOTMANN_PLAN.map((j) => /setup-vps-crons\.sh:(\d+)$/.exec(j.fundstelle)?.[1]), ["21", "24", "27"]);
   for (const j of TOTMANN_PLAN) {
     assert.match(j.fundstelle, /^GG\/decisions_log\.md Abschnitt 30\.07\.2026; /);
     assert.equal(j.grund, "Crons abgeschaltet (Betreiber-Entscheid)");
   }
-  assert.equal(NACHWEIS_SEIT, "2026-11-07");
+  // Prüfbefund B1: kein Beobachtungsfenster, solange Deploy und SQL nicht festgehalten sind.
+  assert.equal(NACHWEIS_SEIT, null);
   assert.equal(NACHWEIS_TABELLE, "lauf_nachweis");
   assert.equal(JOB_AUTO_PRODUCE_PROBE, "content-auto-produce-probe");
   assert.ok(!TOTMANN_PLAN.some((j) => j.job === JOB_AUTO_PRODUCE_PROBE), "die Probe steht in keinem Plan");
 });
 
-test("Totmann §2.5: alle Jobs aus → bernstein, je Job 'aus' ohne Sollzeitpunkt", () => {
+test("Totmann §2.5: alle Jobs aus → bernstein, je Job 'aus' ohne Sollzeitpunkt; Hinweis und Plan-Zeile nennen Setzungen", () => {
   const b = bewerteTotmann(TOTMANN_PLAN, [], MO_1004, null, NACHWEIS_SEIT);
   assert.equal(b.status, "warnung");
   assert.deepEqual(
-    b.wert.jobs.map((j) => [j.job, j.lage, j.status, j.sollzeitpunkt, j.letzter_lauf]),
+    b.wert.jobs.map((j) => [j.job, j.lage, j.status, j.sollzeitpunkt, j.letzter_lauf, j.stolperdraht_am, j.ueberfaellig_seit]),
     [
-      ["briefing-morgen", "aus", "warnung", null, null],
-      ["briefing-abend", "aus", "warnung", null, null],
-      ["content-auto-produce", "aus", "warnung", null, null],
+      ["briefing-morgen", "aus", "warnung", null, null, null, null],
+      ["briefing-abend", "aus", "warnung", null, null, null, null],
+      ["content-auto-produce", "aus", "warnung", null, null, null, null],
     ],
   );
   assert.equal(b.wert.lesefehler, null);
-  assert.equal(b.wert.nachweis_seit, "2026-11-07");
-  assert.equal(b.hinweis, undefined, "kein Zeitzonen-Hinweis, solange kein Job aktiv ist");
-  assert.equal(b.wert.jobs[0].plan, "Mo–Fr 08:03 (Europe/Berlin), Karenz 2 h");
+  assert.equal(b.wert.nachweis_seit, null);
+  // Prüfbefund B7: Der Grund steht auch in hinweis — den liest ein Client von vor dem Totmann.
+  assert.equal(b.hinweis, ALLE_AUS);
+  // Prüfbefund B10: Zeitzone und Karenz heißen Setzung, auch solange kein Job aktiv ist.
+  assert.equal(b.wert.jobs[0].plan, "Mo–Fr 08:03 Europe/Berlin (angenommen, VPS-Zeitzone nicht gemessen), Karenz 2 h (Setzung)");
   assert.equal(b.wert.jobs[0].fundstelle, MORGEN.fundstelle);
+  const gemessen = bewerteJob({ ...aktiv(MORGEN), zeitzone: "UTC", zeitzone_beleg: "timedatectl, 12.01.2027" }, [], MO_1004);
+  assert.equal(gemessen.plan, "Mo–Fr 08:03 UTC (gemessen: timedatectl, 12.01.2027), Karenz 2 h (Setzung)");
+  const einer = bewerteTotmann([aktiv(MORGEN), ABEND, AUTO], [], MO_1004, null, NACHWEIS_SEIT);
+  assert.equal(einer.hinweis, "Briefing abends, Content Auto-Produce laut Plan aus seit 30.07.2026");
+  assert.equal(bewerteTotmann(AKTIV_PLAN, [], MO_1004, null, NACHWEIS_SEIT).hinweis, undefined);
 });
 
-test("Totmann §2.5: aus, mit späterem Nachweis → rot 'läuft, obwohl als aus geführt' (Stolperdraht)", () => {
+test("Totmann §2.5: aus, mit späterem Nachweis → rot, Stolperdraht mit Zeitpunkt des Laufs", () => {
   const b = bewerteTotmann(TOTMANN_PLAN, [lauf(JOB_BRIEFING_ABEND, "2026-11-09T17:03:00Z")], new Date("2026-11-09T20:00:00Z"), null, NACHWEIS_SEIT);
   assert.equal(b.status, "fehler");
   assert.deepEqual(b.wert.jobs.map((j) => j.lage), ["aus", "laeuft_obwohl_aus", "aus"]);
   assert.equal(b.wert.jobs[1].status, "fehler");
   assert.equal(b.wert.jobs[1].letzter_lauf.begonnen_am, "2026-11-09T17:03:00.000Z");
+  assert.equal(b.wert.jobs[1].stolperdraht_am, "2026-11-09T17:03:00.000Z");
+  assert.equal(b.wert.jobs[1].stolperdraht_am_berlin, "09.11.2026 18:03");
+  assert.equal(b.wert.jobs[1].hinweis, null);
   // Auch ein Lauf mit Ergebnis "fehler" ist ein Lauf: Der Stolperdraht fragt nicht nach dem Ergebnis.
   const fehler = bewerteTotmann(TOTMANN_PLAN, [lauf(JOB_AUTO_PRODUCE, "2026-11-09T08:07:00Z", "fehler")], MO_1004, null, NACHWEIS_SEIT);
   assert.equal(fehler.wert.jobs[2].lage, "laeuft_obwohl_aus");
@@ -685,34 +728,38 @@ test("Totmann §2.5: aus, mit späterem Nachweis → rot 'läuft, obwohl als aus
 
 test("Totmann (Setzung): 'nach aus_seit' heißt ab dem Folgetag 00:00 Europe/Berlin", () => {
   // 30.07.2026 ist MESZ (UTC+2): 31.07. 00:00 Berlin = 30.07. 22:00 UTC.
-  const amTag = bewerteJob(MORGEN, lauf(JOB_BRIEFING_MORGEN, "2026-07-30T21:59:59.999Z"), MO_1004, NACHWEIS_SEIT);
+  const amTag = bewerteJob(MORGEN, [lauf(JOB_BRIEFING_MORGEN, "2026-07-30T21:59:59.999Z")], MO_1004);
   assert.equal(amTag.lage, "aus", "30.07. 23:59:59 Berlin gehört noch zum Tag aus_seit");
-  const danach = bewerteJob(MORGEN, lauf(JOB_BRIEFING_MORGEN, "2026-07-30T22:00:00Z"), MO_1004, NACHWEIS_SEIT);
+  const danach = bewerteJob(MORGEN, [lauf(JOB_BRIEFING_MORGEN, "2026-07-30T22:00:00Z")], MO_1004);
   assert.equal(danach.lage, "laeuft_obwohl_aus", "31.07. 00:00 Berlin");
   assert.equal(danach.status, "fehler");
 });
 
 test("Totmann §2.5: Mo 10:04 ohne Lauf → rot 'überfällig' seit Mo 08:03", () => {
-  const j = bewerteJob(aktiv(MORGEN), null, MO_1004, NACHWEIS_SEIT);
+  const j = bewerteJob(aktiv(MORGEN), [], MO_1004);
   assert.equal(j.lage, "ueberfaellig");
   assert.equal(j.status, "fehler");
   assert.equal(j.sollzeitpunkt, S_MO);
   assert.equal(j.sollzeitpunkt_berlin, "Mo 09.11. 08:03");
+  assert.equal(j.ueberfaellig_seit, S_MO);
+  assert.equal(j.ueberfaellig_seit_berlin, "Mo 09.11. 08:03");
   assert.equal(j.letzter_lauf, null);
   // Ein Lauf vom Freitag zählt nicht für den Montag; er bleibt als letzter Lauf sichtbar.
-  const alt = bewerteJob(aktiv(MORGEN), lauf(JOB_BRIEFING_MORGEN, "2026-11-06T07:03:10Z"), MO_1004, NACHWEIS_SEIT);
+  const alt = bewerteJob(aktiv(MORGEN, FRUEH_AB), [lauf(JOB_BRIEFING_MORGEN, "2026-11-06T07:03:10Z")], MO_1004);
   assert.equal(alt.lage, "ueberfaellig");
   assert.equal(alt.letzter_lauf.begonnen_am, "2026-11-06T07:03:10.000Z");
+  assert.equal(alt.ueberfaellig_seit_berlin, "Mo 09.11. 08:03", "nach dem Freitag ist Montag der erste verpasste");
 });
 
 test("Totmann §2.5: Mo 08:03 mit 'ok' → grün (auch noch vor Ablauf der Karenz)", () => {
   const ok = lauf(JOB_BRIEFING_MORGEN, "2026-11-09T07:03:05Z");
-  const j = bewerteJob(aktiv(MORGEN), ok, MO_1004, NACHWEIS_SEIT);
+  const j = bewerteJob(aktiv(MORGEN), [ok], MO_1004);
   assert.equal(j.lage, "ok");
   assert.equal(j.status, "ok");
   assert.equal(j.sollzeitpunkt, S_MO);
+  assert.equal(j.bewerteter_lauf.begonnen_am, ok.begonnen_am);
   // Mo 08:30 Berlin: S ist noch Freitag 08:03 (Montag + 2 h liegt nach jetzt); der Montagslauf erfüllt ihn.
-  const frueh = bewerteJob(aktiv(MORGEN), ok, new Date("2026-11-09T07:30:00Z"), FRUEHER);
+  const frueh = bewerteJob(aktiv(MORGEN, FRUEH_AB), [ok], new Date("2026-11-09T07:30:00Z"));
   assert.equal(frueh.sollzeitpunkt, "2026-11-06T07:03:00.000Z");
   assert.equal(frueh.lage, "ok");
 });
@@ -721,12 +768,12 @@ test("Totmann §2.5: Samstag, Freitag war 'ok' → grün, kein Wochenend-Fehlala
   const fr = lauf(JOB_BRIEFING_MORGEN, "2026-11-13T07:03:10Z");
   // Sa 12:00, So 23:00, Mo 08:00 Berlin (der Montags-Sollzeitpunkt ist erst ab 10:03 fällig).
   for (const jetzt of ["2026-11-14T11:00:00Z", "2026-11-15T22:00:00Z", "2026-11-16T07:00:00Z"]) {
-    const j = bewerteJob(aktiv(MORGEN), fr, new Date(jetzt), NACHWEIS_SEIT);
+    const j = bewerteJob(aktiv(MORGEN), [fr], new Date(jetzt));
     assert.equal(j.sollzeitpunkt, "2026-11-13T07:03:00.000Z", jetzt);
     assert.equal(j.lage, "ok", jetzt);
   }
-  const ohne = bewerteJob(aktiv(MORGEN), null, new Date("2026-11-14T11:00:00Z"), NACHWEIS_SEIT);
-  assert.equal(ohne.sollzeitpunkt_berlin, "Fr 13.11. 08:03", "überfällig seit Freitag, nicht seit Samstag");
+  const ohne = bewerteJob(aktiv(MORGEN), [], new Date("2026-11-14T11:00:00Z"));
+  assert.equal(ohne.sollzeitpunkt_berlin, "Fr 13.11. 08:03", "S ist Freitag, nicht Samstag");
 });
 
 for (const [ergebnis, lage, status] of [
@@ -736,7 +783,7 @@ for (const [ergebnis, lage, status] of [
   ["ok", "ok", "ok"],
 ]) {
   test(`Totmann §2.5: Lauf ab S − 10 min mit Ergebnis '${ergebnis}' → ${lage} (${status})`, () => {
-    const j = bewerteJob(aktiv(MORGEN), lauf(JOB_BRIEFING_MORGEN, "2026-11-09T07:03:05Z", ergebnis), MO_1004, NACHWEIS_SEIT);
+    const j = bewerteJob(aktiv(MORGEN), [lauf(JOB_BRIEFING_MORGEN, "2026-11-09T07:03:05Z", ergebnis)], MO_1004);
     assert.equal(j.lage, lage);
     assert.equal(j.status, status);
   });
@@ -749,15 +796,17 @@ test("Totmann §2.5: auto-produce mit HTTP 200 und status 'fehler' → Zeile 'fe
   assert.match(inhalt.hinweis, /^status fehler · Speicherfehler: content-Update/);
   const beginn = new Date("2026-11-09T08:07:00Z");
   const zeile = laufNachweisZeile(JOB_AUTO_PRODUCE, beginn, new Date(beginn.getTime() + 90_000), inhalt);
-  const j = bewerteJob(aktiv(AUTO), leseLaufNachweis(zeile), new Date("2026-11-09T10:08:00Z"), NACHWEIS_SEIT);
+  // eingetragen_am setzt die DB (DEFAULT now()); hier eine Sekunde nach beendet_am.
+  const gelesen = leseLaufNachweis({ ...zeile, eingetragen_am: new Date(beginn.getTime() + 91_000).toISOString() });
+  const j = bewerteJob(aktiv(AUTO), [gelesen], new Date("2026-11-09T10:08:00Z"));
   assert.equal(j.sollzeitpunkt, "2026-11-09T08:07:00.000Z");
   assert.equal(j.lage, "fehlgeschlagen");
   assert.equal(j.status, "fehler");
 });
 
 test("Totmann §2.5: Sommerzeitwechsel 29.03.2026 und 25.10.2026 — Sollzeitpunkt richtig berechnet", () => {
-  const morgen = aktiv(MORGEN);
-  const abend = aktiv(ABEND);
+  const morgen = aktiv(MORGEN, FRUEH_AB);
+  const abend = aktiv(ABEND, FRUEH_AB);
   const s = (job, jetzt) => iso(letzterSollzeitpunkt(job, new Date(jetzt)));
   // So 29.03.2026: ab 01:00 UTC MESZ (UTC+2). Mo 30.03. 08:03 MESZ = 06:03 UTC.
   assert.equal(s(morgen, "2026-03-30T08:04:00Z"), "2026-03-30T06:03:00.000Z", "Mo 10:04 MESZ");
@@ -771,10 +820,10 @@ test("Totmann §2.5: Sommerzeitwechsel 29.03.2026 und 25.10.2026 — Sollzeitpun
   assert.equal(s(morgen, "2026-10-25T12:00:00Z"), "2026-10-23T06:03:00.000Z", "Umstellungssonntag ohne Sollzeitpunkt");
   assert.equal(s(abend, "2026-10-26T19:04:00Z"), "2026-10-26T17:03:00.000Z", "Mo 18:03 MEZ");
   // Anzeige in Berliner Ortszeit, Urteil mit dem richtigen S.
-  const j = bewerteJob(morgen, null, new Date("2026-03-30T08:04:00Z"), FRUEHER);
+  const j = bewerteJob(morgen, [], new Date("2026-03-30T08:04:00Z"));
   assert.equal(j.sollzeitpunkt_berlin, "Mo 30.03. 08:03");
   assert.equal(j.lage, "ueberfaellig");
-  assert.equal(bewerteJob(morgen, null, new Date("2026-10-26T09:04:00Z"), FRUEHER).sollzeitpunkt_berlin, "Mo 26.10. 08:03");
+  assert.equal(bewerteJob(morgen, [], new Date("2026-10-26T09:04:00Z")).sollzeitpunkt_berlin, "Mo 26.10. 08:03");
 });
 
 test("Totmann §2.5: Lesefehler bei 'alle aus' → bernstein, bei 'einer aktiv' → rot", () => {
@@ -790,14 +839,14 @@ test("Totmann §2.5: Lesefehler bei 'alle aus' → bernstein, bei 'einer aktiv' 
     ],
   );
   assert.equal(aus.wert.lesefehler, grund);
-  assert.equal(aus.hinweis, `Nachweis nicht lesbar: ${grund}`);
+  assert.equal(aus.hinweis, `Nachweis nicht lesbar: ${grund} · ${ALLE_AUS}`);
   const einer = [aktiv(MORGEN), ABEND, AUTO];
   const rot = bewerteTotmann(einer, [lauf(JOB_BRIEFING_MORGEN, "2026-11-09T07:03:05Z")], MO_1004, grund, NACHWEIS_SEIT);
   assert.equal(rot.status, "fehler");
   assert.deepEqual(rot.wert.jobs.map((j) => j.status), ["fehler", "warnung", "warnung"]);
   assert.equal(rot.wert.jobs[0].letzter_lauf, null, "bei Lesefehler zählt keine Zeile");
   assert.equal(rot.wert.jobs[0].sollzeitpunkt, S_MO);
-  assert.match(rot.hinweis, /^Nachweis nicht lesbar: .* · Sollzeitpunkte in Europe\/Berlin gelesen; die Zeitzone des VPS ist nicht gemessen\.$/);
+  assert.equal(rot.hinweis, `Nachweis nicht lesbar: ${grund} · Briefing abends, Content Auto-Produce laut Plan aus seit 30.07.2026`);
 });
 
 test("Totmann §2.5: Probe-Zeilen (content-auto-produce-probe) zählen nicht — weder als Lauf noch als Stolperdraht", () => {
@@ -808,7 +857,7 @@ test("Totmann §2.5: Probe-Zeilen (content-auto-produce-probe) zählen nicht —
   assert.equal(b.wert.jobs[2].lage, "ueberfaellig");
   assert.equal(b.wert.jobs[2].letzter_lauf, null);
   assert.equal(b.status, "fehler");
-  assert.equal(bewerteJob(aktiv(AUTO), leseLaufNachweis(probe), jetzt, NACHWEIS_SEIT).lage, "ueberfaellig", "auch direkt übergeben nicht");
+  assert.equal(bewerteJob(aktiv(AUTO), [leseLaufNachweis(probe)], jetzt).lage, "ueberfaellig", "auch direkt übergeben nicht");
   const aus = bewerteTotmann(TOTMANN_PLAN, [probe], jetzt, null, NACHWEIS_SEIT);
   assert.equal(aus.status, "warnung", "eine Probe nach aus_seit löst den Stolperdraht nicht aus");
   assert.deepEqual(aus.wert.jobs.map((j) => j.lage), ["aus", "aus", "aus"]);
@@ -822,37 +871,62 @@ test("Totmann §2.3: Grenzen — S + Karenz ≤ jetzt und begonnen_am ≥ S − 
   assert.equal(iso(letzterSollzeitpunkt(job, new Date("2026-11-09T09:02:59.999Z"))), "2026-11-06T07:03:00.000Z", "1 ms vorher: Freitag");
   assert.equal(VORLAUF_MS, 600_000);
   const vorlauf = new Date(Date.parse(S_MO) - VORLAUF_MS).toISOString();
-  assert.equal(bewerteJob(job, lauf(JOB_BRIEFING_MORGEN, vorlauf), MO_1004, NACHWEIS_SEIT).lage, "ok", "genau S − 10 min zählt");
+  assert.equal(bewerteJob(job, [lauf(JOB_BRIEFING_MORGEN, vorlauf)], MO_1004).lage, "ok", "genau S − 10 min zählt");
   const zuFrueh = new Date(Date.parse(S_MO) - VORLAUF_MS - 1).toISOString();
-  assert.equal(bewerteJob(job, lauf(JOB_BRIEFING_MORGEN, zuFrueh), MO_1004, NACHWEIS_SEIT).lage, "ueberfaellig", "1 ms früher nicht");
+  assert.equal(bewerteJob(job, [lauf(JOB_BRIEFING_MORGEN, zuFrueh)], MO_1004).lage, "ueberfaellig", "1 ms früher nicht");
 });
 
-test("Totmann §2.3: aktiv, S liegt vor NACHWEIS_SEIT → nicht gemessen ('erster Sollzeitpunkt steht aus')", () => {
-  // Sa 07.11.2026 12:00 Berlin: jüngster S = Fr 06.11. 08:03, vor NACHWEIS_SEIT (07.11. 00:00 Berlin).
-  const j = bewerteJob(aktiv(MORGEN), null, new Date("2026-11-07T11:00:00Z"), NACHWEIS_SEIT);
+test("Totmann §2.3: aktiv, S liegt vor aktiv_seit → nicht gemessen ('erster Sollzeitpunkt steht aus')", () => {
+  // Sa 07.11.2026 12:00 Berlin: jüngster S = Fr 06.11. 08:03, vor aktiv_seit (07.11. 00:00 Berlin).
+  const j = bewerteJob(aktiv(MORGEN), [], new Date("2026-11-07T11:00:00Z"));
   assert.equal(j.lage, "erster_sollzeitpunkt_steht_aus");
   assert.equal(j.status, "nicht_gemessen");
   assert.equal(j.sollzeitpunkt, "2026-11-06T07:03:00.000Z");
-  // Ab Mo 09.11. 10:03 Berlin liegt S nach NACHWEIS_SEIT: dann wird geurteilt.
-  assert.equal(bewerteJob(aktiv(MORGEN), null, MO_1004, NACHWEIS_SEIT).lage, "ueberfaellig");
+  assert.equal(j.aktiv_seit, AKTIV_AB);
+  // Ab Mo 09.11. 10:03 Berlin liegt S nach aktiv_seit: dann wird geurteilt.
+  assert.equal(bewerteJob(aktiv(MORGEN), [], MO_1004).lage, "ueberfaellig");
   // Ohne Wochentage gibt es keinen Sollzeitpunkt.
-  const nie = bewerteJob({ ...aktiv(MORGEN), wochentage: [] }, null, MO_1004, NACHWEIS_SEIT);
+  const nie = bewerteJob({ ...aktiv(MORGEN), wochentage: [] }, [], MO_1004);
   assert.equal(nie.sollzeitpunkt, null);
   assert.equal(nie.status, "nicht_gemessen");
 });
 
+test("Totmann (Prüfbefund Z1): Messbeginn je Job — eine Aktivierung mitten am Tag ist erst 'nicht gemessen', nicht sofort rot", () => {
+  // Aktivierungs-PR deployt Di 12.01.2027 15:00 Berlin (14:00 UTC), der Crontab läuft ab dann. Vorher
+  // galt ein Tag für alle Jobs (NACHWEIS_SEIT 2026-11-07): Alle drei wären sofort rot "überfällig".
+  const seit = "2027-01-12T15:00:00+01:00";
+  const plan = TOTMANN_PLAN.map((j) => aktiv(j, seit));
+  const sofort = bewerteTotmann(plan, [], new Date("2027-01-12T14:00:00Z"), null, NACHWEIS_SEIT);
+  assert.deepEqual(sofort.wert.jobs.map((j) => j.lage), Array(3).fill("erster_sollzeitpunkt_steht_aus"));
+  assert.equal(sofort.status, "nicht_gemessen");
+  // Sa 16.01.2027 12:00, am selben Tag aktiviert: die Freitags-Sollzeitpunkte liegen davor.
+  const sa = bewerteTotmann(TOTMANN_PLAN.map((j) => aktiv(j, "2027-01-16T11:00:00+01:00")), [], new Date("2027-01-16T11:00:00Z"), null, NACHWEIS_SEIT);
+  assert.equal(sa.status, "nicht_gemessen");
+  // Mi 13.01. 10:04 ohne Zeile: Morgen (Mi 08:03) und Abend (Di 18:03) lagen nach der Aktivierung →
+  // rot; auto-produce (S = Di 09:07) lag davor → weiter nicht gemessen.
+  const mi = bewerteTotmann(plan, [], new Date("2027-01-13T09:04:00Z"), null, NACHWEIS_SEIT);
+  assert.deepEqual(mi.wert.jobs.map((j) => j.lage), ["ueberfaellig", "ueberfaellig", "erster_sollzeitpunkt_steht_aus"]);
+  assert.deepEqual(mi.wert.jobs.map((j) => j.ueberfaellig_seit_berlin), ["Mi 13.01. 08:03", "Di 12.01. 18:03", null]);
+  // Grenze: S genau am Messbeginn wird geurteilt, 1 ms später aktiviert nicht.
+  const genau = bewerteJob(aktiv(MORGEN, "2027-01-13T08:03:00+01:00"), [], new Date("2027-01-13T09:04:00Z"));
+  assert.equal(genau.lage, "ueberfaellig");
+  const danach = bewerteJob(aktiv(MORGEN, "2027-01-13T08:03:00.001+01:00"), [], new Date("2027-01-13T09:04:00Z"));
+  assert.equal(danach.lage, "erster_sollzeitpunkt_steht_aus");
+});
+
 test("Totmann §2.3: die Zeile trägt die Farbe des schlechtesten Jobs (fehler > warnung > nicht_gemessen > ok)", () => {
   assert.deepEqual(STATUS_RANG, { ok: 0, nicht_gemessen: 1, warnung: 2, fehler: 3 });
-  // Mo 20:00 Berlin, Nachweis ab 09.11.: Der Abend-Sollzeitpunkt (Fr 06.11. 18:03) liegt davor.
+  // Mo 20:00 Berlin, Abend aktiv seit 09.11.: Dessen Sollzeitpunkt (Fr 06.11. 18:03) liegt davor.
   const jetzt = new Date("2026-11-09T19:00:00Z");
+  const plan = [aktiv(MORGEN), aktiv(ABEND, "2026-11-09T00:00:00+01:00"), aktiv(AUTO)];
   const morgenOk = lauf(JOB_BRIEFING_MORGEN, "2026-11-09T07:03:05Z");
   const autoOk = lauf(JOB_AUTO_PRODUCE, "2026-11-09T08:07:05Z");
-  const grau = bewerteTotmann(AKTIV_PLAN, [morgenOk, autoOk], jetzt, null, "2026-11-09");
+  const grau = bewerteTotmann(plan, [morgenOk, autoOk], jetzt, null, NACHWEIS_SEIT);
   assert.deepEqual(grau.wert.jobs.map((j) => j.status), ["ok", "nicht_gemessen", "ok"]);
   assert.equal(grau.status, "nicht_gemessen");
-  const gelb = bewerteTotmann(AKTIV_PLAN, [{ ...morgenOk, ergebnis: "teilweise" }, autoOk], jetzt, null, "2026-11-09");
+  const gelb = bewerteTotmann(plan, [{ ...morgenOk, ergebnis: "teilweise" }, autoOk], jetzt, null, NACHWEIS_SEIT);
   assert.equal(gelb.status, "warnung");
-  const rot = bewerteTotmann(AKTIV_PLAN, [{ ...morgenOk, ergebnis: "teilweise" }, { ...autoOk, ergebnis: "fehler" }], jetzt, null, "2026-11-09");
+  const rot = bewerteTotmann(plan, [{ ...morgenOk, ergebnis: "teilweise" }, { ...autoOk, ergebnis: "fehler" }], jetzt, null, NACHWEIS_SEIT);
   assert.equal(rot.status, "fehler");
   // Mo 20:10 Berlin: alle drei Sollzeitpunkte des Tages fällig und erfüllt.
   const gruen = bewerteTotmann(AKTIV_PLAN, [morgenOk, autoOk, lauf(JOB_BRIEFING_ABEND, "2026-11-09T17:03:05Z")], new Date("2026-11-09T19:10:00Z"), null, NACHWEIS_SEIT);
@@ -870,7 +944,159 @@ test("Totmann: je Job zählt die jüngste Zeile (begonnen_am), unabhängig von d
     const b = bewerteTotmann(AKTIV_PLAN, laeufe, MO_1004, null, NACHWEIS_SEIT);
     assert.equal(b.wert.jobs[0].lage, "fehlgeschlagen");
     assert.equal(b.wert.jobs[0].letzter_lauf.begonnen_am, "2026-11-09T08:30:00.000Z");
+    assert.equal(b.wert.jobs[0].bewerteter_lauf.begonnen_am, "2026-11-09T08:30:00.000Z");
   }
+});
+
+test("Totmann (Prüfbefund Z5): ein späterer übersprungener Lauf überdeckt kein früheres Ergebnis zum selben Sollzeitpunkt", () => {
+  // Fr 20.11. 09:07 fehler, manueller Nachlauf Sa 21.11. 11:30 Berlin: "skipped, Wochenende"
+  // (api/content/auto-produce/route.ts). Sa 12:00 Berlin; S = Fr 20.11. 09:07.
+  const frFehler = lauf(JOB_AUTO_PRODUCE, "2026-11-20T08:07:00Z", "fehler");
+  const saSkip = lauf(JOB_AUTO_PRODUCE, "2026-11-21T10:30:00Z", "uebersprungen", { hinweis: "status skipped · Wochenende — kein Content geplant" });
+  const jetzt = new Date("2026-11-21T11:00:00Z");
+  for (const laeufe of [
+    [frFehler, saSkip],
+    [saSkip, frFehler],
+  ]) {
+    const j = bewerteJob(aktiv(AUTO), laeufe, jetzt);
+    assert.equal(j.sollzeitpunkt, "2026-11-20T08:07:00.000Z");
+    assert.equal(j.lage, "fehlgeschlagen");
+    assert.equal(j.status, "fehler");
+    assert.equal(j.letzter_lauf.begonnen_am, saSkip.begonnen_am, "letzter Lauf bleibt der jüngste");
+    assert.equal(j.bewerteter_lauf.begonnen_am, frFehler.begonnen_am, "bewertet wird der Freitagslauf");
+  }
+  const alle = bewerteTotmann(AKTIV_PLAN, [lauf(JOB_BRIEFING_MORGEN, "2026-11-20T07:03:05Z"), lauf(JOB_BRIEFING_ABEND, "2026-11-20T17:03:05Z"), frFehler, saSkip], jetzt, null, NACHWEIS_SEIT);
+  assert.equal(alle.status, "fehler");
+  assert.deepEqual(alle.wert.jobs.map((j) => j.lage), ["ok", "ok", "fehlgeschlagen"]);
+  // teilweise bleibt bernstein trotz späterem Skip.
+  assert.equal(bewerteJob(aktiv(AUTO), [{ ...frFehler, ergebnis: "teilweise" }, saSkip], jetzt).lage, "teilweise");
+  // Ein späterer ok-Nachlauf am Freitag heilt den Fehler; ein Skip danach ändert daran nichts.
+  const geheilt = bewerteJob(aktiv(AUTO), [frFehler, lauf(JOB_AUTO_PRODUCE, "2026-11-20T13:00:00Z", "ok"), saSkip], jetzt);
+  assert.equal(geheilt.lage, "ok");
+  assert.equal(geheilt.bewerteter_lauf.begonnen_am, "2026-11-20T13:00:00.000Z");
+  // Nur übersprungene Läufe ab S − 10 min: grün ("übersprungen"); ein Fehler vor dem Fenster zählt nicht.
+  const nurSkip = bewerteJob(aktiv(AUTO), [lauf(JOB_AUTO_PRODUCE, "2026-11-19T08:07:00Z", "fehler"), lauf(JOB_AUTO_PRODUCE, "2026-11-20T08:07:00Z", "uebersprungen")], jetzt);
+  assert.equal(nurSkip.lage, "ok");
+  assert.equal(nurSkip.bewerteter_lauf.ergebnis, "uebersprungen");
+});
+
+test("Totmann (Prüfbefunde Z2, SR-5): begonnen_am in der Zukunft oder App- gegen DB-Uhr verschoben → rot 'Zeitpunkt unplausibel'", () => {
+  // Vorher: eine einzige Zeile vom 01.03.2027 hielt einen aktiven Job bis 02.03.2027 grün.
+  const zukunft = lauf(JOB_BRIEFING_MORGEN, "2027-03-01T07:03:00Z");
+  for (const jetzt of ["2026-11-20T09:04:00Z", "2026-12-24T12:00:00Z", "2027-02-26T12:00:00Z"]) {
+    const b = bewerteTotmann([aktiv(MORGEN), ABEND, AUTO], [zukunft], new Date(jetzt), null, NACHWEIS_SEIT);
+    assert.equal(b.wert.jobs[0].lage, "zeit_unplausibel", jetzt);
+    assert.equal(b.wert.jobs[0].status, "fehler", jetzt);
+    assert.equal(b.status, "fehler", jetzt);
+    assert.equal(b.wert.jobs[0].hinweis, "begonnen_am 01.03.2027 08:03 liegt mehr als 10 min nach der Messzeit", jetzt);
+  }
+  // Grenze UHR_TOLERANZ_MS: genau 10 min nach der Messzeit ist plausibel, 1 ms mehr nicht.
+  assert.equal(UHR_TOLERANZ_MS, 600_000);
+  const grenze = new Date(MO_1004.getTime() + UHR_TOLERANZ_MS).toISOString();
+  assert.equal(bewerteJob(aktiv(MORGEN), [lauf(JOB_BRIEFING_MORGEN, grenze)], MO_1004).lage, "ok");
+  const drueber = new Date(MO_1004.getTime() + UHR_TOLERANZ_MS + 1).toISOString();
+  assert.equal(bewerteJob(aktiv(MORGEN), [lauf(JOB_BRIEFING_MORGEN, drueber)], MO_1004).lage, "zeit_unplausibel");
+  // App-Uhr der DB-Uhr 14 min voraus (eingetragen_am vor beendet_am): unplausibel, auch wenn
+  // begonnen_am selbst vor der Messzeit liegt — der Lauf hätte sonst für Mo 08:03 gezählt.
+  const voraus = lauf(JOB_BRIEFING_MORGEN, "2026-11-09T07:03:05Z", "ok", { eingetragen_am: "2026-11-09T06:50:00Z" });
+  const v = bewerteJob(aktiv(MORGEN), [voraus], MO_1004);
+  assert.equal(v.lage, "zeit_unplausibel");
+  assert.equal(v.hinweis, "App-Uhr (beendet_am) und DB-Uhr (eingetragen_am) weichen um mehr als 10 min ab");
+  // Ebenso 11 min nach (App-Uhr nachgehend); 9 min Abweichung sind geduldet.
+  assert.equal(bewerteJob(aktiv(MORGEN), [lauf(JOB_BRIEFING_MORGEN, "2026-11-09T07:03:05Z", "ok", { eingetragen_am: "2026-11-09T07:15:05Z" })], MO_1004).lage, "zeit_unplausibel");
+  assert.equal(bewerteJob(aktiv(MORGEN), [lauf(JOB_BRIEFING_MORGEN, "2026-11-09T07:03:05Z", "ok", { eingetragen_am: "2026-11-09T06:55:05Z" })], MO_1004).lage, "ok");
+  // Auch die ältere Zeile, die bewertet würde, muss plausibel sein (die Route liest zwei je Job).
+  const beide = bewerteJob(aktiv(MORGEN), [lauf(JOB_BRIEFING_MORGEN, "2026-11-09T07:03:05Z", "fehler", { eingetragen_am: "2026-11-09T06:00:00Z" }), lauf(JOB_BRIEFING_MORGEN, "2026-11-09T08:00:00Z", "uebersprungen")], MO_1004);
+  assert.equal(beide.lage, "zeit_unplausibel");
+  // Abgeschaltet: Die Zukunftszeile ist trotzdem ein Lauf nach aus_seit → Stolperdraht (rot).
+  assert.equal(bewerteTotmann(TOTMANN_PLAN, [zukunft], new Date("2026-11-20T09:04:00Z"), null, NACHWEIS_SEIT).wert.jobs[0].lage, "laeuft_obwohl_aus");
+});
+
+test("Totmann (Prüfbefund Z3): 'überfällig seit' nennt den ersten verpassten Sollzeitpunkt, nicht den jüngsten", () => {
+  const job = aktiv(MORGEN);
+  // Letzter Lauf Mo 16.11. 08:03 ok, jetzt Mo 23.11. 10:04: verpasst seit Di 17.11. 08:03.
+  const j = bewerteJob(job, [lauf(JOB_BRIEFING_MORGEN, "2026-11-16T07:03:05Z")], new Date("2026-11-23T09:04:00Z"));
+  assert.equal(j.lage, "ueberfaellig");
+  assert.equal(j.sollzeitpunkt_berlin, "Mo 23.11. 08:03", "S bleibt der jüngste fällige");
+  assert.equal(j.ueberfaellig_seit, "2026-11-17T07:03:00.000Z");
+  assert.equal(j.ueberfaellig_seit_berlin, "Di 17.11. 08:03");
+  // Nie gelaufen, aktiv seit Sa 07.11.: verpasst seit Mo 09.11. 08:03 (nicht seit Fr 27.11.).
+  assert.equal(bewerteJob(job, [], new Date("2026-11-27T09:04:00Z")).ueberfaellig_seit_berlin, "Mo 09.11. 08:03");
+  // Letzter Lauf am Freitag: verpasst seit Montag, das Wochenende hat keinen Sollzeitpunkt.
+  assert.equal(bewerteJob(job, [lauf(JOB_BRIEFING_MORGEN, "2026-11-13T07:03:10Z")], new Date("2026-11-16T09:04:00Z")).ueberfaellig_seit_berlin, "Mo 16.11. 08:03");
+  // Über den Wechsel auf MEZ: letzter Lauf Fr 23.10. 08:03 MESZ, jetzt Di 27.10. 10:04 MEZ → seit Mo 26.10. 08:03 MEZ.
+  const dst = bewerteJob(aktiv(MORGEN, FRUEH_AB), [lauf(JOB_BRIEFING_MORGEN, "2026-10-23T06:03:05Z")], new Date("2026-10-27T09:04:00Z"));
+  assert.equal(dst.ueberfaellig_seit, "2026-10-26T07:03:00.000Z");
+  // Ein Lauf an S − 10 min deckt S; der nächste verpasste ist der Folgetag.
+  const knapp = bewerteJob(job, [lauf(JOB_BRIEFING_MORGEN, "2026-11-16T06:53:00Z")], new Date("2026-11-18T09:04:00Z"));
+  assert.equal(knapp.ueberfaellig_seit_berlin, "Di 17.11. 08:03");
+});
+
+test("Totmann (Prüfbefunde Z4, SR-1, B4): teils unlesbare Zeile eines abgeschalteten Jobs löst den Stolperdraht trotzdem aus", () => {
+  const nachAus = lauf(JOB_BRIEFING_ABEND, "2026-11-20T17:03:00Z");
+  const jetzt = new Date("2026-11-20T20:00:00Z");
+  for (const [name, kaputt] of [
+    ["Teilergebnis mit fehler als Zahl", { ...nachAus, teilergebnisse: [{ agent: "strategist", ergebnis: "ok", fehler: 5 }] }],
+    ["Teilergebnis mit neuem Wert", { ...nachAus, teilergebnisse: [{ agent: "strategist", ergebnis: "abgebrochen", fehler: null }] }],
+    ["Teilergebnis ohne agent", { ...nachAus, teilergebnisse: [{ ergebnis: "ok" }] }],
+    ["http_status 0", { ...nachAus, http_status: 0 }],
+    ["eingetragen_am fehlt", { ...nachAus, eingetragen_am: null }],
+  ]) {
+    assert.equal(leseLaufNachweis(kaputt), null, name);
+    const b = bewerteTotmann(TOTMANN_PLAN, [kaputt], jetzt, null, NACHWEIS_SEIT);
+    assert.equal(b.status, "fehler", name);
+    assert.deepEqual(b.wert.jobs.map((j) => j.lage), ["aus", "laeuft_obwohl_aus", "aus"], name);
+    assert.equal(b.wert.jobs[1].stolperdraht_am_berlin, "20.11.2026 18:03", name);
+    assert.equal(b.wert.jobs[1].hinweis, "eine Zeile in lauf_nachweis ist teilweise unlesbar", name);
+    assert.match(b.hinweis, /Zeile in lauf_nachweis unlesbar \(briefing-abend\)/, name);
+  }
+  const ohneZeit = { ...nachAus, begonnen_am: "gestern", teilergebnisse: {} };
+  const b = bewerteTotmann(TOTMANN_PLAN, [ohneZeit], jetzt, null, NACHWEIS_SEIT);
+  assert.deepEqual(b.wert.jobs.map((j) => j.lage), ["aus", "nicht_lesbar", "aus"], "ohne lesbares begonnen_am: nicht lesbar");
+  assert.equal(b.status, "warnung");
+  const amTag = { ...lauf(JOB_BRIEFING_ABEND, "2026-07-30T16:03:00Z"), http_status: 0 };
+  assert.equal(bewerteTotmann(TOTMANN_PLAN, [amTag], jetzt, null, NACHWEIS_SEIT).wert.jobs[1].lage, "nicht_lesbar", "am Tag aus_seit kein Stolperdraht");
+  // Aktiver Job: eine unlesbare Zeile bleibt rot "nicht lesbar".
+  const aktivRot = bewerteTotmann([MORGEN, aktiv(ABEND), AUTO], [{ ...nachAus, http_status: 0 }], jetzt, null, NACHWEIS_SEIT);
+  assert.equal(aktivRot.wert.jobs[1].lage, "nicht_lesbar");
+  assert.equal(aktivRot.wert.jobs[1].status, "fehler");
+});
+
+test("Totmann (Prüfbefund Z6): Stolperdraht mit Zeitpunkt; im Plan quittierbar (stolperdraht_quittiert_bis)", () => {
+  const nachAus = lauf(JOB_BRIEFING_ABEND, "2026-11-20T17:03:00Z");
+  const spaet = new Date("2027-03-15T10:00:00Z");
+  const b = bewerteTotmann(TOTMANN_PLAN, [nachAus], spaet, null, NACHWEIS_SEIT);
+  assert.equal(b.wert.jobs[1].lage, "laeuft_obwohl_aus");
+  assert.equal(b.wert.jobs[1].stolperdraht_am_berlin, "20.11.2026 18:03", "Datum des Laufs, nicht 'läuft' im Präsens");
+  const quittiert = (bis) => TOTMANN_PLAN.map((j) => (j.job === JOB_BRIEFING_ABEND ? { ...j, stolperdraht_quittiert_bis: bis } : j));
+  const q = bewerteTotmann(quittiert("2026-11-21T00:00:00+01:00"), [nachAus], spaet, null, NACHWEIS_SEIT);
+  assert.deepEqual(q.wert.jobs.map((j) => j.lage), ["aus", "aus", "aus"]);
+  assert.equal(q.status, "warnung");
+  // Grenze: begonnen genau am Quittungszeitpunkt ist quittiert, 1 ms später nicht.
+  assert.equal(bewerteTotmann(quittiert("2026-11-20T18:03:00+01:00"), [nachAus], spaet, null, NACHWEIS_SEIT).wert.jobs[1].lage, "aus");
+  assert.equal(bewerteTotmann(quittiert("2026-11-20T18:02:59.999+01:00"), [nachAus], spaet, null, NACHWEIS_SEIT).wert.jobs[1].lage, "laeuft_obwohl_aus");
+  // Ein Lauf nach der Quittung löst ihn wieder aus.
+  const neu = lauf(JOB_BRIEFING_ABEND, "2026-11-23T17:03:00Z");
+  const wieder = bewerteTotmann(quittiert("2026-11-21T00:00:00+01:00"), [neu], spaet, null, NACHWEIS_SEIT);
+  assert.equal(wieder.wert.jobs[1].lage, "laeuft_obwohl_aus");
+  assert.equal(wieder.wert.jobs[1].stolperdraht_am_berlin, "23.11.2026 18:03");
+});
+
+test("Totmann (Prüfbefund Z8): Plan in UTC — Sollzeitpunkte ohne Sommerzeit", () => {
+  const utc = { ...aktiv(MORGEN, "2027-01-01T00:00:00Z"), zeitzone: "UTC" };
+  const s = (jetzt) => iso(letzterSollzeitpunkt(utc, new Date(jetzt)));
+  // Sommer: Mo 14.06.2027 08:03 UTC (10:03 Berlin), Grenze S + 2 h.
+  assert.equal(s("2027-06-14T10:03:00Z"), "2027-06-14T08:03:00.000Z");
+  assert.equal(s("2027-06-14T10:02:59.999Z"), "2027-06-11T08:03:00.000Z");
+  // Winter: Mo 11.01.2027 08:03 UTC (09:03 Berlin).
+  assert.equal(s("2027-01-11T10:03:00Z"), "2027-01-11T08:03:00.000Z");
+  // Der Lauf um 08:03:30 UTC ist pünktlich; mit dem Europe/Berlin-Plan läge er an der Karenzgrenze.
+  const j = bewerteJob(utc, [lauf(JOB_BRIEFING_MORGEN, "2027-06-14T08:03:30Z")], new Date("2027-06-14T10:05:00Z"));
+  assert.equal(j.lage, "ok");
+  assert.equal(j.sollzeitpunkt_berlin, "Mo 14.06. 10:03", "angezeigt in Berliner Ortszeit");
+  // Wochentage nach dem UTC-Kalender: Mo 00:00 UTC → der jüngste S ist Fr 23:30 UTC (Sa und So ohne).
+  const spaet = { ...utc, uhrzeit: "23:30", karenz_h: 0 };
+  assert.equal(iso(letzterSollzeitpunkt(spaet, new Date("2027-01-11T00:00:00Z"))), "2027-01-08T23:30:00.000Z", "Fr 23:30 UTC");
 });
 
 test("Totmann: leseLaufNachweis prüft jede Zeile; eine unlesbare Zeile macht ihren Job 'nicht lesbar'", () => {
@@ -881,11 +1107,12 @@ test("Totmann: leseLaufNachweis prüft jede Zeile; eine unlesbare Zeile macht ih
     ],
     hinweis: "1 von 2 Agenten vollständig",
   });
-  // Postgres liefert timestamptz mit Mikrosekunden; id und eingetragen_am liest der Totmann nicht.
+  // Postgres liefert timestamptz mit Mikrosekunden; die id liest der Totmann nicht.
   assert.deepEqual(leseLaufNachweis({ ...gut, id: 7, eingetragen_am: "2026-11-09T07:04:06.123456+00:00", begonnen_am: "2026-11-09T07:03:05.123456+00:00" }), {
     job: "briefing-morgen",
     begonnen_am: "2026-11-09T07:03:05.123Z",
     beendet_am: gut.beendet_am,
+    eingetragen_am: "2026-11-09T07:04:06.123Z",
     ergebnis: "teilweise",
     http_status: 200,
     teilergebnisse: gut.teilergebnisse,
@@ -894,6 +1121,8 @@ test("Totmann: leseLaufNachweis prüft jede Zeile; eine unlesbare Zeile macht ih
   for (const [name, kaputt] of [
     ["Ergebnis unbekannt", { ...gut, ergebnis: "gut" }],
     ["begonnen_am unlesbar", { ...gut, begonnen_am: "gestern" }],
+    ["beendet_am fehlt (NOT NULL)", { ...gut, beendet_am: null }],
+    ["eingetragen_am fehlt (NOT NULL)", { ...gut, eingetragen_am: undefined }],
     ["ohne job", { ...gut, job: null }],
     ["http_status außerhalb 100–599", { ...gut, http_status: 700 }],
     ["teilergebnisse kein Array", { ...gut, teilergebnisse: {} }],
@@ -907,16 +1136,27 @@ test("Totmann: leseLaufNachweis prüft jede Zeile; eine unlesbare Zeile macht ih
   assert.deepEqual(b.wert.jobs.map((j) => j.lage), ["nicht_lesbar", "aus", "aus"]);
   assert.equal(b.status, "warnung");
   assert.match(b.hinweis, /Zeile in lauf_nachweis unlesbar \(briefing-morgen\)/);
+  const ohneKennung = bewerteTotmann(TOTMANN_PLAN, [{ ...gut, job: 5 }], MO_1004, null, NACHWEIS_SEIT);
+  assert.deepEqual(ohneKennung.wert.jobs.map((j) => j.lage), ["nicht_lesbar", "nicht_lesbar", "nicht_lesbar"], "ohne lesbare Kennung alle Jobs");
 });
 
 test("Totmann: kaputter Plan ist ein Fehler der Messung, kein stiller Ersatzwert", () => {
   assert.throws(() => letzterSollzeitpunkt({ ...aktiv(MORGEN), uhrzeit: "8:03" }, MO_1004), /Uhrzeit unlesbar/);
-  assert.throws(() => letzterSollzeitpunkt({ ...aktiv(MORGEN), zeitzone: "UTC" }, MO_1004), /Zeitzone nicht unterstützt/);
+  assert.throws(() => letzterSollzeitpunkt({ ...aktiv(MORGEN), zeitzone: "America/New_York" }, MO_1004), /Zeitzone nicht unterstützt/);
   assert.throws(() => letzterSollzeitpunkt({ ...aktiv(MORGEN), job: "Briefing Morgen" }, MO_1004), /Job-Kennung ungültig/);
-  assert.throws(() => bewerteJob({ ...MORGEN, aus_seit: "30.07.2026" }, null, MO_1004, NACHWEIS_SEIT), /aus_seit unlesbar/);
+  assert.throws(() => bewerteJob({ ...MORGEN, aus_seit: "30.07.2026" }, [], MO_1004), /aus_seit unlesbar/);
+  // §2.6 im Code: aktiv nur mit Messbeginn (mit Zeitzone) und gemessener Zeitzone.
+  assert.throws(() => bewerteJob({ ...aktiv(MORGEN), aktiv_seit: null }, [], MO_1004), /aktiv_seit unlesbar/);
+  assert.throws(() => bewerteJob({ ...aktiv(MORGEN), aktiv_seit: "2027-01-18T00:00:00" }, [], MO_1004), /aktiv_seit unlesbar/);
+  assert.throws(() => bewerteJob({ ...aktiv(MORGEN), aktiv_seit: "2027-01-18" }, [], MO_1004), /aktiv_seit unlesbar/);
+  assert.throws(() => bewerteJob({ ...aktiv(MORGEN), zeitzone_beleg: null }, [], MO_1004), /aktiv ohne gemessene Zeitzone/);
+  assert.throws(() => bewerteJob({ ...aktiv(MORGEN), zeitzone_beleg: "  " }, [], MO_1004), /aktiv ohne gemessene Zeitzone/);
+  assert.throws(() => bewerteJob({ ...MORGEN, stolperdraht_quittiert_bis: "21.11.2026" }, [], MO_1004), /stolperdraht_quittiert_bis unlesbar/);
   assert.throws(() => bewerteTotmann(TOTMANN_PLAN, [], MO_1004, null, "07.11.2026"), /NACHWEIS_SEIT unlesbar/);
   assert.throws(() => bewerteTotmann([MORGEN, MORGEN], [], MO_1004, null, NACHWEIS_SEIT), /doppelt/);
   assert.throws(() => bewerteTotmann([], [], MO_1004, null, NACHWEIS_SEIT), /ohne Jobs/);
+  // NACHWEIS_SEIT, sobald festgehalten, steht im Wert (nur für den Tooltip).
+  assert.equal(bewerteTotmann(TOTMANN_PLAN, [], MO_1004, null, "2026-11-20").wert.nachweis_seit, "2026-11-20");
 });
 
 // ── Totmann: Ableitung der Schreiber (§2.2 Punkt 2) ──
@@ -965,7 +1205,11 @@ test("Totmann §2.2: Fehlertexte in teilergebnisse und hinweis laufen durch bere
 for (const [http, antwort, erwartet] of [
   [200, { status: "produced" }, "ok"],
   [200, { status: "skipped", grund: "Wochenende — kein Content geplant" }, "uebersprungen"],
-  [200, { status: "partial", pipeline: { completed: "4/5" } }, "teilweise"],
+  [200, { status: "partial", pipeline: { status: "partial", completed: "4/5" } }, "teilweise"],
+  // Prüfbefund SR-2: Die Route meldet jeden unbekannten Pipeline-Status als "partial".
+  [200, { status: "partial", pipeline: { status: null } }, "fehler"],
+  [200, { status: "partial", pipeline: { status: "running" } }, "fehler"],
+  [200, { status: "partial" }, "fehler"],
   [200, { status: "abgelehnt" }, "teilweise"],
   [200, { status: "fehler" }, "fehler"],
   [500, { status: "fehler", fehler: "CONTENT_LAUNCH_DATE ungültig" }, "fehler"],
@@ -986,7 +1230,9 @@ for (const [http, antwort, erwartet] of [
 test("Totmann §2.2: auto-produce — Hinweise und Teilergebnisse je Pipeline-Stufe", () => {
   assert.equal(autoProduceNachweis(200, { status: "skipped", grund: "kein Kalendereintrag" }, null).hinweis, "status skipped · kein Kalendereintrag");
   assert.equal(autoProduceNachweis(200, { status: "abgelehnt" }, null).hinweis, "status abgelehnt · COUNSEL hat abgelehnt");
-  assert.equal(autoProduceNachweis(200, { status: "partial", pipeline: { completed: "4/5" } }, null).hinweis, "status partial · Pipeline-Stufen 4/5");
+  assert.equal(autoProduceNachweis(200, { status: "partial", pipeline: { status: "partial", completed: "4/5" } }, null).hinweis, "status partial · Pipeline-Stufen 4/5");
+  assert.equal(autoProduceNachweis(200, { status: "partial", pipeline: { status: "running" } }, null).hinweis, "status partial · Pipeline-Status unbekannt (running)");
+  assert.equal(autoProduceNachweis(200, { status: "partial", pipeline: { status: null } }, null).hinweis, "status partial · Pipeline-Status fehlt");
   assert.equal(autoProduceNachweis(200, { status: "dry_run" }, null).hinweis, "status dry_run · Probe (?dry=true), nichts produziert");
   assert.equal(
     autoProduceNachweis(200, { status: "fehler", fehler: { stufe: "researcher", grund: "Claude-API-Fehler: HTTP 529" } }, null).hinweis,

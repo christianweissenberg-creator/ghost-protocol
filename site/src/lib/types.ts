@@ -1,7 +1,16 @@
 // Ghost Protocol Agent Types — matches Supabase schema
 
 import type { PreisJeMillion } from "./kosten";
-import type { CronJobStand, CronsWert, LaufErgebnis, MessStatus, Messwert, SystemStatus } from "./status-types";
+import type {
+  CronJobStand,
+  CronLage,
+  CronsWert,
+  LaufErgebnis,
+  LaufNachweisLesung,
+  MessStatus,
+  Messwert,
+  SystemStatus,
+} from "./status-types";
 
 export type AgentTier = 0 | 1 | 2 | 3;
 export type AgentStatus = "online" | "offline" | "error" | "maintenance" | "working";
@@ -281,8 +290,29 @@ export function messTitel(m: Messwert<unknown>, zusatz?: string): string {
 // vorZeit und datumZeit, Bezug ist der Messzeitpunkt erzeugt_am. Nie „kein Lauf seit 30.07.":
 // Die GitHub-Läufe bis 28.09.2026 haben nie einen Nachweis geschrieben (Spezifikation §2.4).
 
-/** Dieselbe Folge wie STATUS_RANG in lib/status-server.ts (Server-Datei, hier nicht importierbar). */
-const CRON_STATUS_RANG: Record<MessStatus, number> = { ok: 0, nicht_gemessen: 1, warnung: 2, fehler: 3 };
+/**
+ * Dieselbe Folge wie STATUS_RANG in lib/status-server.ts (Server-Datei, hier nicht importierbar).
+ * Exportiert, damit tests/t-totmann.test.mjs die Gleichheit beider prüft (Prüfbefund B5).
+ */
+export const CRON_STATUS_RANG: Readonly<Record<MessStatus, number>> = { ok: 0, nicht_gemessen: 1, warnung: 2, fehler: 3 };
+
+/**
+ * Vorrang im Zeilentext bei gleicher Farbe (Prüfbefunde Z7, B3): zuerst Lagen mit Laufergebnis oder
+ * Lauf-Mangel, dann "nicht lesbar" und "erster Sollzeitpunkt steht aus", zuletzt das gewollte "aus".
+ * Vorher nannte die Zeile den ersten Job in Plan-Reihenfolge — ein abgeschalteter Job (bernstein)
+ * verdrängte so den Teilausfall eines aktiven Jobs (ebenfalls bernstein) in den Tooltip.
+ */
+const LAGE_VORRANG: Readonly<Record<CronLage, number>> = {
+  fehlgeschlagen: 0,
+  ueberfaellig: 0,
+  laeuft_obwohl_aus: 0,
+  zeit_unplausibel: 0,
+  teilweise: 0,
+  ok: 0,
+  nicht_lesbar: 1,
+  erster_sollzeitpunkt_steht_aus: 1,
+  aus: 2,
+};
 
 const ERGEBNIS_TEXT: Record<LaufErgebnis, string> = {
   ok: "ok",
@@ -295,24 +325,59 @@ function cronRang(status: unknown): number {
   return typeof status === "string" && status in CRON_STATUS_RANG ? CRON_STATUS_RANG[status as MessStatus] : CRON_STATUS_RANG.fehler;
 }
 
-function istCronJob(x: unknown): x is CronJobStand {
-  if (typeof x !== "object" || x === null || Array.isArray(x)) return false;
-  const j = x as Record<string, unknown>;
-  const lauf = j.letzter_lauf;
-  const laufLesbar =
-    lauf === null ||
-    (typeof lauf === "object" &&
-      !Array.isArray(lauf) &&
-      typeof (lauf as Record<string, unknown>).begonnen_am === "string" &&
-      typeof (lauf as Record<string, unknown>).ergebnis === "string" &&
-      Array.isArray((lauf as Record<string, unknown>).teilergebnisse));
+function lageVorrang(lage: unknown): number {
+  return typeof lage === "string" && lage in LAGE_VORRANG ? LAGE_VORRANG[lage as CronLage] : 0;
+}
+
+function istSatz(x: unknown): x is Record<string, unknown> {
+  return typeof x === "object" && x !== null && !Array.isArray(x);
+}
+
+/** Text oder leer (null, fehlend) — ein Objekt im Text ergäbe "[object Object]". */
+function istTextOderLeer(x: unknown): boolean {
+  return x === null || x === undefined || typeof x === "string";
+}
+
+/**
+ * Eine Zeile aus lauf_nachweis, wie die Anzeige sie liest. Prüfbefund B8: Auch die Teilergebnisse
+ * werden geprüft — ein null-Element ließ cronsAnzeige vorher mitten im Rendern werfen.
+ */
+function istLaufLesung(x: unknown): boolean {
+  if (!istSatz(x)) return false;
   return (
-    typeof j.job === "string" &&
-    typeof j.bezeichnung === "string" &&
-    typeof j.lage === "string" &&
-    typeof j.status === "string" &&
-    typeof j.aktiv === "boolean" &&
-    laufLesbar
+    typeof x.begonnen_am === "string" &&
+    typeof x.ergebnis === "string" &&
+    istTextOderLeer(x.hinweis) &&
+    istTextOderLeer(x.eingetragen_am) &&
+    (x.http_status === null || x.http_status === undefined || typeof x.http_status === "number") &&
+    Array.isArray(x.teilergebnisse) &&
+    x.teilergebnisse.every((t) => istSatz(t) && typeof t.agent === "string" && typeof t.ergebnis === "string" && istTextOderLeer(t.fehler))
+  );
+}
+
+const CRON_TEXTFELDER = [
+  "plan",
+  "fundstelle",
+  "aktiv_seit",
+  "aus_seit",
+  "grund",
+  "sollzeitpunkt_berlin",
+  "ueberfaellig_seit_berlin",
+  "stolperdraht_am_berlin",
+  "hinweis",
+] as const;
+
+function istCronJob(x: unknown): x is CronJobStand {
+  if (!istSatz(x)) return false;
+  return (
+    typeof x.job === "string" &&
+    typeof x.bezeichnung === "string" &&
+    typeof x.lage === "string" &&
+    typeof x.status === "string" &&
+    typeof x.aktiv === "boolean" &&
+    (x.letzter_lauf === null || istLaufLesung(x.letzter_lauf)) &&
+    (x.bewerteter_lauf === null || x.bewerteter_lauf === undefined || istLaufLesung(x.bewerteter_lauf)) &&
+    CRON_TEXTFELDER.every((k) => istTextOderLeer(x[k]))
   );
 }
 
@@ -340,8 +405,14 @@ function tagAnzeige(datum: string | null): string {
   return m ? `${m[3]}.${m[2]}.${m[1]}` : (datum ?? "unbekannt");
 }
 
+/** Die Zeile, aus der die Lage folgt; ohne bewerteter_lauf (ältere Antwort) die jüngste. */
+function bewerteterLauf(j: CronJobStand): LaufNachweisLesung | null {
+  return j.bewerteter_lauf ?? j.letzter_lauf;
+}
+
 function teilAnzeige(j: CronJobStand): string {
-  const teile = j.letzter_lauf?.teilergebnisse ?? [];
+  const lauf = bewerteterLauf(j);
+  const teile = lauf?.teilergebnisse ?? [];
   const gelaufen = teile.filter((t) => t.ergebnis !== "uebersprungen");
   const gescheitert = gelaufen.filter((t) => t.ergebnis === "fehler").length;
   const unvollstaendig = gelaufen.filter((t) => t.ergebnis === "teilweise").length;
@@ -349,7 +420,7 @@ function teilAnzeige(j: CronJobStand): string {
     return `${gescheitert} von ${gelaufen.length} Agenten gescheitert${unvollstaendig > 0 ? ` · ${unvollstaendig} unvollständig` : ""}`;
   }
   if (unvollstaendig > 0) return `${unvollstaendig} von ${gelaufen.length} Agenten unvollständig`;
-  return j.letzter_lauf?.hinweis ? `teilweise · ${j.letzter_lauf.hinweis}` : "teilweise";
+  return lauf?.hinweis ? `teilweise · ${lauf.hinweis}` : "teilweise";
 }
 
 /** Kurztext eines Jobs ohne Bezeichnung, z. B. "überfällig seit Mo 09.11. 08:03 · letzter Lauf nie". */
@@ -357,19 +428,28 @@ export function cronJobText(j: CronJobStand, bezugIso: string): string {
   const letzter = j.letzter_lauf ? vorZeit(j.letzter_lauf.begonnen_am, bezugIso) : "nie";
   switch (j.lage) {
     case "ok":
-      return `${j.letzter_lauf?.ergebnis === "uebersprungen" ? "übersprungen" : "ok"} · letzter Lauf ${letzter}`;
+      return `${bewerteterLauf(j)?.ergebnis === "uebersprungen" ? "übersprungen" : "ok"} · letzter Lauf ${letzter}`;
     case "teilweise":
       return teilAnzeige(j);
     case "fehlgeschlagen":
       return "fehlgeschlagen";
     case "ueberfaellig":
-      return `überfällig seit ${j.sollzeitpunkt_berlin ?? "unbekannt"} · letzter Lauf ${letzter}`;
+      // Prüfbefund Z3: der erste verpasste Sollzeitpunkt; eine ältere Antwort kennt nur den jüngsten.
+      return `überfällig seit ${j.ueberfaellig_seit_berlin ?? j.sollzeitpunkt_berlin ?? "unbekannt"} · letzter Lauf ${letzter}`;
     case "erster_sollzeitpunkt_steht_aus":
       return "erster Sollzeitpunkt steht aus";
     case "aus":
       return `aus seit ${tagAnzeige(j.aus_seit)}`;
-    case "laeuft_obwohl_aus":
-      return "läuft, obwohl als aus geführt";
+    case "laeuft_obwohl_aus": {
+      // Prüfbefund Z6: mit Datum statt im Präsens — ein einziger Lauf hielt die Zeile sonst monatelang
+      // rot mit "läuft". Eine ältere Antwort ohne das Datum behält den alten Text.
+      const kern = j.stolperdraht_am_berlin
+        ? `lief zuletzt am ${j.stolperdraht_am_berlin}, obwohl als aus geführt`
+        : "läuft, obwohl als aus geführt";
+      return j.hinweis ? `${kern} · ${j.hinweis}` : kern;
+    }
+    case "zeit_unplausibel":
+      return `Zeitpunkt des Laufs unplausibel${j.hinweis ? `: ${j.hinweis}` : ""}`;
     case "nicht_lesbar":
       return j.aktiv ? "Nachweis nicht lesbar" : `aus seit ${tagAnzeige(j.aus_seit)} · Nachweis nicht lesbar`;
     default:
@@ -377,38 +457,54 @@ export function cronJobText(j: CronJobStand, bezugIso: string): string {
   }
 }
 
+/** Tooltip-Zeile eines gelesenen Laufs: Zeitpunkte, Ergebnis, HTTP-Status, Hinweis. */
+function laufZeile(titel: string, lauf: LaufNachweisLesung): string[] {
+  const teile = [
+    datumZeit(lauf.begonnen_am) ?? "Zeitpunkt unlesbar",
+    ERGEBNIS_TEXT[lauf.ergebnis] ?? lauf.ergebnis,
+    lauf.http_status !== null && lauf.http_status !== undefined ? `HTTP ${lauf.http_status}` : "ohne HTTP-Status",
+    lauf.hinweis,
+    lauf.eingetragen_am ? `eingetragen ${datumZeit(lauf.eingetragen_am) ?? "unlesbar"} (DB-Uhr)` : null,
+  ];
+  const zeilen = [`  ${titel}: ${teile.filter(Boolean).join(" · ")}`];
+  if (lauf.teilergebnisse.length > 0) {
+    const agenten = lauf.teilergebnisse.map(
+      (t) => `${t.agent} ${ERGEBNIS_TEXT[t.ergebnis] ?? t.ergebnis}${t.fehler ? ` (${t.fehler})` : ""}`,
+    );
+    zeilen.push(`  Agenten: ${agenten.join(" · ")}`);
+  }
+  return zeilen;
+}
+
 /** title-Zeilen eines Jobs: Plan mit Fundstelle, letzter Lauf mit Ergebnis, Teilergebnisse je Agent. */
 function cronJobTitel(j: CronJobStand, w: CronsWert): string[] {
+  const aktivText = j.aktiv_seit ? `aktiv seit ${datumZeit(j.aktiv_seit) ?? j.aktiv_seit}` : "aktiv";
   const zeilen = [
-    `${j.bezeichnung} (${j.job}): ${j.aktiv ? "aktiv" : `aus seit ${tagAnzeige(j.aus_seit)}${j.grund ? ` — ${j.grund}` : ""}`}`,
+    `${j.bezeichnung} (${j.job}): ${j.aktiv ? aktivText : `aus seit ${tagAnzeige(j.aus_seit)}${j.grund ? ` — ${j.grund}` : ""}`}`,
     `  Plan: ${j.plan} · Fundstelle: ${j.fundstelle}`,
   ];
   if (j.sollzeitpunkt_berlin) zeilen.push(`  Sollzeitpunkt: ${j.sollzeitpunkt_berlin} (Europe/Berlin)`);
+  if (j.ueberfaellig_seit_berlin) zeilen.push(`  Überfällig seit: ${j.ueberfaellig_seit_berlin} (Europe/Berlin, erster verpasster Sollzeitpunkt)`);
+  if (j.hinweis) zeilen.push(`  Hinweis: ${j.hinweis}`);
   const lauf = j.letzter_lauf;
+  const bewertet = j.bewerteter_lauf ?? null;
   if (lauf) {
-    const teile = [
-      datumZeit(lauf.begonnen_am) ?? "Zeitpunkt unlesbar",
-      ERGEBNIS_TEXT[lauf.ergebnis] ?? lauf.ergebnis,
-      lauf.http_status !== null ? `HTTP ${lauf.http_status}` : "ohne HTTP-Status",
-      lauf.hinweis,
-    ];
-    zeilen.push(`  Letzter Lauf: ${teile.filter(Boolean).join(" · ")}`);
-    if (lauf.teilergebnisse.length > 0) {
-      const agenten = lauf.teilergebnisse.map(
-        (t) => `${t.agent} ${ERGEBNIS_TEXT[t.ergebnis] ?? t.ergebnis}${t.fehler ? ` (${t.fehler})` : ""}`,
-      );
-      zeilen.push(`  Agenten: ${agenten.join(" · ")}`);
+    zeilen.push(...laufZeile("Letzter Lauf", lauf));
+    if (bewertet && (bewertet.begonnen_am !== lauf.begonnen_am || bewertet.ergebnis !== lauf.ergebnis)) {
+      zeilen.push(...laufZeile("Bewertet (ein übersprungener Lauf überdeckt kein früheres Ergebnis)", bewertet));
     }
   } else if (j.lage === "nicht_lesbar" || w.lesefehler !== null) {
     zeilen.push("  Letzter Lauf: Nachweis nicht lesbar");
   } else if (!j.aktiv) {
-    // Ehrlicher Text bei "aus" (§2.4). NACHWEIS_SEIT ist der Tag, seit dem der Schreiber im Code
-    // steht; die Tabelle gibt es erst nach Ausführung des SQL.
+    // Ehrlicher Text bei "aus" (§2.4). Prüfbefund B1: ein "seit" nur, wenn NACHWEIS_SEIT festgehalten
+    // ist — vorher stand hier der Tag, an dem der Code entstand, ohne Tabelle und ohne Schreiber.
     zeilen.push(
-      `  Letzter Lauf: Nachweis-Tabelle lauf_nachweis (Schreiber seit ${tagAnzeige(w.nachweis_seit)}): kein Lauf · VPS-Crontab selbst nicht gemessen`,
+      w.nachweis_seit
+        ? `  Letzter Lauf: Nachweis-Tabelle seit ${tagAnzeige(w.nachweis_seit)}: kein Lauf · VPS-Crontab selbst nicht gemessen`
+        : "  Letzter Lauf: keine Zeile in lauf_nachweis · seit wann die Tabelle besteht, ist nicht festgehalten · VPS-Crontab selbst nicht gemessen",
     );
   } else {
-    zeilen.push(`  Letzter Lauf: keiner in lauf_nachweis (Schreiber seit ${tagAnzeige(w.nachweis_seit)})`);
+    zeilen.push(`  Letzter Lauf: keiner in lauf_nachweis${j.aktiv_seit ? ` (Job aktiv seit ${datumZeit(j.aktiv_seit) ?? j.aktiv_seit})` : ""}`);
   }
   return zeilen;
 }
@@ -423,7 +519,8 @@ export interface CronsAnzeige {
 /**
  * Text der Zeile „Crons": beschreibt den schlechtesten Job (dessen Farbe die Zeile trägt).
  * Alle ok: "3 Jobs ok · letzter Lauf vor 2 h". Ein schlechtester Job: "<Bezeichnung>: <Lage>".
- * Mehrere mit derselben Lage: "aus seit 30.07.2026" (alle Jobs) bzw. "2 von 3 Jobs: …".
+ * Mehrere mit derselben Lage: "aus seit 30.07.2026" (alle Jobs) bzw. "2 von 3 Jobs: …". Bei
+ * gleicher Farbe zuerst Lagen mit Laufergebnis, dann "nicht lesbar", zuletzt "aus" (LAGE_VORRANG).
  */
 export function cronsAnzeige(m: Messwert<CronsWert>, bezugIso: string): CronsAnzeige {
   const w = m.wert;
@@ -438,7 +535,10 @@ export function cronsAnzeige(m: Messwert<CronsWert>, bezugIso: string): CronsAnz
       .sort((a, b) => Date.parse(b) - Date.parse(a))[0];
     text = `${jobs.length} ${jobs.length === 1 ? "Job" : "Jobs"} ok${juengster ? ` · letzter Lauf ${vorZeit(juengster, bezugIso)}` : ""}`;
   } else {
-    const schlecht = jobs.filter((j) => cronRang(j.status) === schlechtesterRang);
+    // Array.prototype.sort ist stabil: bei gleichem Vorrang bleibt die Plan-Reihenfolge.
+    const schlecht = jobs
+      .filter((j) => cronRang(j.status) === schlechtesterRang)
+      .sort((a, b) => lageVorrang(a.lage) - lageVorrang(b.lage));
     const texte = schlecht.map((j) => cronJobText(j, bezugIso));
     if (schlecht.length === 1) {
       text = `${schlecht[0].bezeichnung}: ${texte[0]}`;

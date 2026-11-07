@@ -298,9 +298,11 @@ async function supabaseAntwort(url, methode, kopf, body) {
     }
     const neu = liste.map((f) => {
       const jetzt = zeitstempel();
+      // lauf_nachweis.eingetragen_am: DEFAULT now(), die DB-Uhr (scripts/lauf_nachweis.sql).
+      const standard = tabelle === "lauf_nachweis" ? { eingetragen_am: jetzt } : {};
       const z = istContent
         ? { ...structuredClone(CONTENT_DEFAULTS), created_at: jetzt, updated_at: jetzt, ...structuredClone(f), id: welt.naechsteId++ }
-        : { created_at: jetzt, timestamp: jetzt, ...structuredClone(f), ...(f?.id === undefined ? { id: welt.naechsteId++ } : {}) };
+        : { created_at: jetzt, timestamp: jetzt, ...standard, ...structuredClone(f), ...(f?.id === undefined ? { id: welt.naechsteId++ } : {}) };
       zeilen.push(z);
       return z;
     });

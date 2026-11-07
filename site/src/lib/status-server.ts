@@ -353,9 +353,20 @@ function meldungAus(e: unknown): string {
   return "";
 }
 
+const ZEITUEBERSCHREITUNG = /TimeoutError|AbortError|aborted|timed out/i;
+
+/**
+ * Zeitüberschreitung oder Abbruch? Auch, wenn postgrest-js den Abbruch in error.message gewandelt
+ * hat ("TimeoutError: …"). Prüfbefund SR-4: Dann ist der Ausgang eines Inserts unbekannt — der
+ * Abbruch kann nach dem Absenden kommen, die Zeile kann trotzdem stehen.
+ */
+export function istZeitueberschreitung(e: unknown): boolean {
+  return ZEITUEBERSCHREITUNG.test(meldungAus(e));
+}
+
 export function bereinigeFehler(e: unknown): string {
   let text = meldungAus(e);
-  if (/TimeoutError|AbortError|aborted|timed out/i.test(text)) {
+  if (ZEITUEBERSCHREITUNG.test(text)) {
     return `Zeitüberschreitung (${ABFRAGE_TIMEOUT_MS / 1000} s)`;
   }
   // Alte englische Meldung von createServiceClient(); seit 06.11.2026 wirft sie selbst neutral.
@@ -872,8 +883,10 @@ export function werteKostenAus(
 // Spezifikation: docs/intern/objekt-studio-stufe-2.md §2.2–2.5. Der Plan steht in lib/totmann.ts,
 // die Tabelle in scripts/lauf_nachweis.sql (Entwurf, nicht ausgeführt). Die Schreiber
 // (api/cron/briefing, api/content/auto-produce) hängen nach bestandener Secret-Prüfung genau eine
-// Zeile an; GET /api/status liest je Job die jüngste und bewertet sie hier. Agenten bekommen
-// keinen eigenen Alterswächter: Ihr Ergebnis steht je Lauf in teilergebnisse (§2.2 Punkt 5).
+// Zeile an; GET /api/status liest je Job die jüngste und die jüngste mit einem Ergebnis außer
+// uebersprungen und bewertet sie hier. Agenten bekommen keinen eigenen Alterswächter: Ihr Ergebnis
+// steht je Lauf in teilergebnisse (§2.2 Punkt 5). Nachbesserung 07.11.2026 nach der Prüfung des
+// Branches: Prüfbefunde Z1–Z8, SR-1–SR-8 und B1–B11 sind an den Stellen genannt, die sie ändern.
 
 /** Werte des CHECK auf lauf_nachweis.ergebnis (scripts/lauf_nachweis.sql). */
 export const LAUF_ERGEBNISSE: readonly LaufErgebnis[] = ["ok", "teilweise", "fehler", "uebersprungen"];
@@ -884,17 +897,32 @@ export const NACHWEIS_HINWEIS_MAX = 300;
 /** Ein Lauf zählt für den Sollzeitpunkt S, wenn er frühestens 10 min vor S begann (§2.3). */
 export const VORLAUF_MS = 10 * 60_000;
 
+/**
+ * Höchste geduldete Uhrenabweichung einer Zeile (Setzung, nicht gemessen; Prüfbefunde Z2, SR-5).
+ * Unplausibel ist eine Zeile eines aktiven Jobs, wenn begonnen_am mehr als 10 min nach der Messzeit
+ * liegt oder beendet_am (App-Uhr, unmittelbar vor dem Insert genommen) mehr als 10 min von
+ * eingetragen_am (DB-Uhr) abweicht. Vorher hielt eine Zeile aus einer vorgelaufenen Uhr einen aktiven
+ * Job grün, bis die echte Zeit sie einholte — und als jüngste Zeile verdeckte sie jeden späteren Lauf.
+ * Jetzt wird der Job rot, bis eine plausible Zeile die jüngste ist (lieber falsch rot als falsch grün).
+ */
+export const UHR_TOLERANZ_MS = 10 * 60_000;
+
 /** Kennung eines Jobs wie der CHECK auf lauf_nachweis.job. */
 const JOB_MUSTER = /^[a-z0-9-]{1,40}$/;
 const UHRZEIT_MUSTER = /^([01]\d|2[0-3]):([0-5]\d)$/;
+/** ISO-Zeitpunkt mit ausdrücklicher Zeitzone; ohne Zone läse JavaScript ihn in der Zeitzone des Servers. */
+const ZEITPUNKT_MUSTER = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:\d{2})$/;
 /** So weit sucht letzterSollzeitpunkt zurück; bei Mo–Fr liegen höchstens 3 Tage zwischen zwei Sollzeitpunkten. */
 const SOLL_SUCHE_TAGE = 14;
+/** So weit sucht ersterSollzeitpunktAb vorwärts: Die Wochentage wiederholen sich nach 7 Tagen. */
+const SOLL_VORWAERTS_TAGE = 7;
 const WOCHENTAG_KURZ = ["So", "Mo", "Di", "Mi", "Do", "Fr", "Sa"];
 
 /**
  * Rangfolge für "die Farbe des schlechtesten Jobs" (§2.3): fehler vor warnung vor nicht_gemessen
  * vor ok. Setzung: Ein bekannter Mangel (bernstein) wiegt schwerer als ein noch ausstehendes
- * Urteil, ein ausstehendes Urteil schwerer als "ok". Dieselbe Folge nutzt cronsAnzeige (lib/types.ts).
+ * Urteil, ein ausstehendes Urteil schwerer als "ok". Dieselbe Folge nutzt cronsAnzeige
+ * (CRON_STATUS_RANG in lib/types.ts); tests/t-totmann.test.mjs prüft, dass beide gleich sind.
  */
 export const STATUS_RANG: Readonly<Record<MessStatus, number>> = { ok: 0, nicht_gemessen: 1, warnung: 2, fehler: 3 };
 
@@ -906,6 +934,7 @@ const LAGE_STATUS: Readonly<Record<Exclude<CronLage, "nicht_lesbar">, MessStatus
   erster_sollzeitpunkt_steht_aus: "nicht_gemessen",
   aus: "warnung",
   laeuft_obwohl_aus: "fehler",
+  zeit_unplausibel: "fehler",
 };
 
 function zweistellig(n: number): string {
@@ -939,15 +968,57 @@ function berlinSollAnzeige(d: Date): string {
   return `${WOCHENTAG_KURZ[wochentag]} ${zweistellig(w.tag)}.${zweistellig(w.monat)}. ${zweistellig(w.stunde)}:${zweistellig(w.minute)}`;
 }
 
+/** Zeitpunkt aus dem Plan (aktiv_seit, stolperdraht_quittiert_bis) streng lesen; sonst Fehler der Messung. */
+function planZeitpunkt(wert: string | null | undefined, was: string): number {
+  if (typeof wert === "string" && ZEITPUNKT_MUSTER.test(wert)) {
+    const ms = Date.parse(wert);
+    if (Number.isFinite(ms)) return ms;
+  }
+  throw new Error(`${was} unlesbar (erwartet ISO-Zeitpunkt mit Zeitzone, z. B. 2027-01-18T00:00:00+01:00)`);
+}
+
+type PlanZone = TotmannJob["zeitzone"];
+
+/** Wandzeit in der Zeitzone des Plans (Prüfbefund Z8: auch UTC, für einen VPS auf UTC). */
+function wandzeitIn(zone: PlanZone, d: Date): Wandzeit {
+  if (zone === "UTC") {
+    return {
+      jahr: d.getUTCFullYear(),
+      monat: d.getUTCMonth() + 1,
+      tag: d.getUTCDate(),
+      stunde: d.getUTCHours(),
+      minute: d.getUTCMinutes(),
+      sekunde: d.getUTCSeconds(),
+    };
+  }
+  return berlinWandzeit(d);
+}
+
+/** Zeitpunkt der Wandzeit jahr-monat-tag stunde:minute in der Zeitzone des Plans. */
+function zeitpunktIn(zone: PlanZone, jahr: number, monat: number, tag: number, stunde: number, minute: number): Date {
+  return zone === "UTC" ? new Date(Date.UTC(jahr, monat - 1, tag, stunde, minute, 0)) : berlinZeitpunkt(jahr, monat, tag, stunde, minute);
+}
+
 /** Prüft einen Plan-Eintrag; ein kaputter Plan ist ein Fehler der Messung, kein stiller Ersatzwert. */
 function pruefePlanJob(job: TotmannJob): { stunde: number; minute: number } {
   if (!JOB_MUSTER.test(job.job)) throw new Error("Plan: Job-Kennung ungültig (erlaubt a–z, 0–9, -; höchstens 40 Zeichen)");
-  if (job.zeitzone !== "Europe/Berlin") throw new Error(`Plan ${job.job}: Zeitzone nicht unterstützt`);
+  if (job.zeitzone !== "Europe/Berlin" && job.zeitzone !== "UTC") throw new Error(`Plan ${job.job}: Zeitzone nicht unterstützt`);
   const m = UHRZEIT_MUSTER.exec(job.uhrzeit);
   if (!m) throw new Error(`Plan ${job.job}: Uhrzeit unlesbar (erwartet HH:MM)`);
   if (!Number.isFinite(job.karenz_h) || job.karenz_h < 0) throw new Error(`Plan ${job.job}: Karenz ungültig`);
   if (job.wochentage.some((t) => !Number.isInteger(t) || t < 0 || t > 6)) throw new Error(`Plan ${job.job}: Wochentag ungültig`);
-  if (!job.aktiv) kalendertag(job.aus_seit ?? "", `Plan ${job.job}: aus_seit`);
+  if (job.aktiv) {
+    // §2.6 im Code: Ein aktiver Job braucht den Messbeginn (Prüfbefund Z1) und eine gemessene Zeitzone.
+    planZeitpunkt(job.aktiv_seit, `Plan ${job.job}: aktiv_seit`);
+    if (typeof job.zeitzone_beleg !== "string" || job.zeitzone_beleg.trim() === "") {
+      throw new Error(`Plan ${job.job}: aktiv ohne gemessene Zeitzone (zeitzone_beleg, §2.6)`);
+    }
+  } else {
+    kalendertag(job.aus_seit ?? "", `Plan ${job.job}: aus_seit`);
+    if (job.stolperdraht_quittiert_bis !== null && job.stolperdraht_quittiert_bis !== undefined) {
+      planZeitpunkt(job.stolperdraht_quittiert_bis, `Plan ${job.job}: stolperdraht_quittiert_bis`);
+    }
+  }
   return { stunde: Number(m[1]), minute: Number(m[2]) };
 }
 
@@ -960,99 +1031,212 @@ function wochentageText(tage: readonly number[]): string {
   return sortiert.map((t) => WOCHENTAG_KURZ[t]).join(", ");
 }
 
-/** Plan in Worten, z. B. "Mo–Fr 08:03 (Europe/Berlin), Karenz 2 h". */
+/**
+ * Plan in Worten, z. B. "Mo–Fr 08:03 Europe/Berlin (angenommen, VPS-Zeitzone nicht gemessen), Karenz
+ * 2 h (Setzung)". Prüfbefund B10: Zeitzone und Karenz sind Setzungen und heißen immer so — vorher
+ * standen sie wie belegte Plandaten neben der Fundstelle, die nur "CET" und nichts zur Karenz sagt.
+ */
 function planText(job: TotmannJob): string {
-  return `${wochentageText(job.wochentage)} ${job.uhrzeit} (${job.zeitzone}), Karenz ${String(job.karenz_h).replace(".", ",")} h`;
+  const beleg = typeof job.zeitzone_beleg === "string" && job.zeitzone_beleg.trim() !== "" ? job.zeitzone_beleg.trim() : null;
+  const zone = beleg === null ? `${job.zeitzone} (angenommen, VPS-Zeitzone nicht gemessen)` : `${job.zeitzone} (gemessen: ${beleg})`;
+  return `${wochentageText(job.wochentage)} ${job.uhrzeit} ${zone}, Karenz ${String(job.karenz_h).replace(".", ",")} h (Setzung)`;
 }
 
 /**
  * Sollzeitpunkt S (§2.3): der jüngste geplante Zeitpunkt, für den S + Karenz ≤ jetzt gilt — aus
- * Wochentagen und Uhrzeit des Plans in Europe/Berlin, Sommerzeit über Intl (ohne Fremdbibliothek).
- * Das Wochenende hat keinen Sollzeitpunkt, weil die Wochentage Sa und So nicht enthalten.
- * null, wenn in den letzten 14 Tagen keiner liegt (z. B. ohne Wochentage).
+ * Wochentagen und Uhrzeit des Plans in seiner Zeitzone (Europe/Berlin mit Sommerzeit über Intl, ohne
+ * Fremdbibliothek, oder UTC). Das Wochenende hat keinen Sollzeitpunkt, weil die Wochentage Sa und So
+ * nicht enthalten. null, wenn in den letzten 14 Tagen keiner liegt (z. B. ohne Wochentage).
  */
 export function letzterSollzeitpunkt(job: TotmannJob, jetzt: Date): Date | null {
   const { stunde, minute } = pruefePlanJob(job);
   const grenze = jetzt.getTime() - job.karenz_h * STUNDE_MS;
   if (!Number.isFinite(grenze)) throw new Error("Zeitpunkt unlesbar");
-  // Ein Sollzeitpunkt an einem späteren Berliner Kalendertag als die Grenze liegt immer nach ihr;
-  // gesucht wird deshalb ab dem Kalendertag der Grenze rückwärts.
-  const w = berlinWandzeit(new Date(grenze));
+  // Ein Sollzeitpunkt an einem späteren Kalendertag als die Grenze liegt immer nach ihr; gesucht
+  // wird deshalb ab dem Kalendertag der Grenze (in der Zeitzone des Plans) rückwärts.
+  const w = wandzeitIn(job.zeitzone, new Date(grenze));
   for (let i = 0; i <= SOLL_SUCHE_TAGE; i++) {
     const k = new Date(Date.UTC(w.jahr, w.monat - 1, w.tag - i));
     if (!job.wochentage.includes(k.getUTCDay())) continue;
-    const s = berlinZeitpunkt(k.getUTCFullYear(), k.getUTCMonth() + 1, k.getUTCDate(), stunde, minute);
+    const s = zeitpunktIn(job.zeitzone, k.getUTCFullYear(), k.getUTCMonth() + 1, k.getUTCDate(), stunde, minute);
     if (s.getTime() <= grenze) return s;
   }
   return null;
 }
 
-function jobStand(
-  job: TotmannJob,
-  lage: CronLage,
-  status: MessStatus,
-  soll: Date | null,
-  letzterLauf: LaufNachweisLesung | null,
-): CronJobStand {
+/**
+ * Frühester geplanter Zeitpunkt S ≥ untergrenzeMs (Prüfbefund Z3: "überfällig seit" nennt den ersten
+ * verpassten Sollzeitpunkt, nicht den jüngsten). Die Wochentage wiederholen sich nach 7 Tagen, also
+ * reichen der Tag der Untergrenze und die 7 folgenden. null ohne Wochentage.
+ */
+function ersterSollzeitpunktAb(job: TotmannJob, untergrenzeMs: number): Date | null {
+  const { stunde, minute } = pruefePlanJob(job);
+  const w = wandzeitIn(job.zeitzone, new Date(untergrenzeMs));
+  for (let i = 0; i <= SOLL_VORWAERTS_TAGE; i++) {
+    const k = new Date(Date.UTC(w.jahr, w.monat - 1, w.tag + i));
+    if (!job.wochentage.includes(k.getUTCDay())) continue;
+    const s = zeitpunktIn(job.zeitzone, k.getUTCFullYear(), k.getUTCMonth() + 1, k.getUTCDate(), stunde, minute);
+    if (s.getTime() >= untergrenzeMs) return s;
+  }
+  return null;
+}
+
+interface StandAngaben {
+  soll?: Date | null;
+  letzterLauf?: LaufNachweisLesung | null;
+  bewerteterLauf?: LaufNachweisLesung | null;
+  ueberfaelligSeit?: Date | null;
+  stolperdrahtAm?: Date | null;
+  hinweis?: string | null;
+}
+
+function jobStand(job: TotmannJob, lage: CronLage, status: MessStatus, a: StandAngaben = {}): CronJobStand {
+  const soll = a.soll ?? null;
+  const seit = a.ueberfaelligSeit ?? null;
+  const stolper = a.stolperdrahtAm ?? null;
   return {
     job: job.job,
     bezeichnung: job.bezeichnung,
     plan: planText(job),
     fundstelle: job.fundstelle,
     aktiv: job.aktiv,
+    aktiv_seit: job.aktiv ? job.aktiv_seit : null,
     aus_seit: job.aus_seit,
     grund: job.grund,
     lage,
     status,
     sollzeitpunkt: soll ? soll.toISOString() : null,
     sollzeitpunkt_berlin: soll ? berlinSollAnzeige(soll) : null,
-    letzter_lauf: letzterLauf,
+    ueberfaellig_seit: seit ? seit.toISOString() : null,
+    ueberfaellig_seit_berlin: seit ? berlinSollAnzeige(seit) : null,
+    stolperdraht_am: stolper ? stolper.toISOString() : null,
+    stolperdraht_am_berlin: stolper ? berlinAnzeige(stolper) : null,
+    letzter_lauf: a.letzterLauf ?? null,
+    bewerteter_lauf: a.bewerteterLauf ?? null,
+    hinweis: a.hinweis ?? null,
   };
 }
 
+/** Jüngste Zeile nach begonnen_am; null bei leerer Liste. */
+function juengsterLauf(laeufe: readonly LaufNachweisLesung[]): LaufNachweisLesung | null {
+  let juengster: LaufNachweisLesung | null = null;
+  for (const l of laeufe) {
+    if (juengster === null || Date.parse(l.begonnen_am) > Date.parse(juengster.begonnen_am)) juengster = l;
+  }
+  return juengster;
+}
+
+/** Grund, warum die Zeit einer Zeile unplausibel ist (UHR_TOLERANZ_MS); null = plausibel. */
+function unplausibleZeit(laeufe: readonly LaufNachweisLesung[], jetztMs: number): string | null {
+  const minuten = UHR_TOLERANZ_MS / 60_000;
+  for (const l of laeufe) {
+    if (Date.parse(l.begonnen_am) > jetztMs + UHR_TOLERANZ_MS) {
+      return `begonnen_am ${berlinAnzeige(new Date(l.begonnen_am))} liegt mehr als ${minuten} min nach der Messzeit`;
+    }
+    if (Math.abs(Date.parse(l.beendet_am) - Date.parse(l.eingetragen_am)) > UHR_TOLERANZ_MS) {
+      return `App-Uhr (beendet_am) und DB-Uhr (eingetragen_am) weichen um mehr als ${minuten} min ab`;
+    }
+  }
+  return null;
+}
+
 /**
- * Bewertet einen Job nach der Tabelle in §2.3. letzterLauf = jüngste Zeile des Jobs (begonnen_am);
- * eine Zeile eines anderen Jobs (etwa der Probe) zählt nicht. nachweisSeit = NACHWEIS_SEIT.
- * - aus: Begann der Lauf nach dem Tag aus_seit (ab 00:00 Europe/Berlin des Folgetags), heißt es
- *   "läuft, obwohl als aus geführt" (rot, Stolperdraht); sonst "aus" (bernstein).
- * - aktiv: S = letzterSollzeitpunkt. Liegt S vor nachweisSeit oder gibt es keinen, steht der erste
- *   Sollzeitpunkt aus (nicht gemessen). Ein Lauf mit begonnen_am ≥ S − 10 min entscheidet: ok und
- *   uebersprungen grün, teilweise bernstein, fehler rot. Ohne solchen Lauf: überfällig (rot).
+ * Abgeschalteter Job (§2.3): Begann ein Lauf nach dem Tag aus_seit (ab 00:00 Europe/Berlin des
+ * Folgetags) und nach stolperdraht_quittiert_bis, heißt es "läuft, obwohl als aus geführt" (rot,
+ * Stolperdraht), mit dem Beginn des jüngsten solchen Laufs (Prüfbefund Z6). Entschieden wird allein
+ * aus job und begonnen_am — auch eine sonst unlesbare Zeile löst ihn aus (Prüfbefunde Z4, SR-1, B4;
+ * vorher machte sie den Job nur "nicht lesbar", bernstein). Ohne Auslöser: "aus" (bernstein), mit
+ * unlesbarer Zeile "nicht lesbar" (bernstein).
+ */
+function bewerteAusJob(
+  job: TotmannJob,
+  juengster: LaufNachweisLesung | null,
+  unlesbareBeginne: readonly (string | null)[],
+): CronJobStand {
+  const ab = berlinTagAus(job.aus_seit ?? "", `Plan ${job.job}: aus_seit`, 1).getTime();
+  const quittiert =
+    job.stolperdraht_quittiert_bis === null || job.stolperdraht_quittiert_bis === undefined
+      ? null
+      : planZeitpunkt(job.stolperdraht_quittiert_bis, `Plan ${job.job}: stolperdraht_quittiert_bis`);
+  const beginne = [
+    ...(juengster ? [Date.parse(juengster.begonnen_am)] : []),
+    ...unlesbareBeginne.map((b) => (b === null ? Number.NaN : Date.parse(b))),
+  ].filter((ms) => Number.isFinite(ms) && ms >= ab && (quittiert === null || ms > quittiert));
+  const teilweise = unlesbareBeginne.length > 0 ? "eine Zeile in lauf_nachweis ist teilweise unlesbar" : null;
+  if (beginne.length > 0) {
+    return jobStand(job, "laeuft_obwohl_aus", LAGE_STATUS.laeuft_obwohl_aus, {
+      letzterLauf: juengster,
+      stolperdrahtAm: new Date(Math.max(...beginne)),
+      hinweis: teilweise,
+    });
+  }
+  if (unlesbareBeginne.length > 0) return jobStand(job, "nicht_lesbar", "warnung", { letzterLauf: juengster });
+  return jobStand(job, "aus", LAGE_STATUS.aus, { letzterLauf: juengster });
+}
+
+/**
+ * Bewertet einen Job nach der Tabelle in §2.3. laeufe = lesbare Zeilen (GET /api/status liest je Job
+ * die jüngste und die jüngste mit einem Ergebnis außer uebersprungen); Zeilen anderer Jobs (etwa der
+ * Probe) zählen nicht. unlesbareBeginne = je Zeile dieses Jobs, die leseLaufNachweis verwarf, ihr
+ * begonnen_am, falls allein lesbar (sonst null).
+ * - aus: siehe bewerteAusJob.
+ * - aktiv: eine unlesbare Zeile → "nicht lesbar" (rot); eine Zeile mit unplausibler Zeit →
+ *   zeit_unplausibel (rot). S = letzterSollzeitpunkt; liegt S vor aktiv_seit oder gibt es keinen,
+ *   steht der erste Sollzeitpunkt aus (nicht gemessen; Prüfbefund Z1 — vorher ein Tag für alle Jobs).
+ *   Ohne Lauf ab S − 10 min: überfällig (rot), seit dem ersten verpassten Sollzeitpunkt (Z3). Sonst
+ *   entscheidet der jüngste Lauf ab S − 10 min mit Ergebnis ok, teilweise oder fehler (grün,
+ *   bernstein, rot); gibt es dort nur übersprungene, ist der Job grün. Ein übersprungener Lauf
+ *   überdeckt also kein früheres Ergebnis zum selben S (Prüfbefund Z5: vorher machte ein manueller
+ *   Nachlauf am Samstag, "skipped, Wochenende", einen gescheiterten Freitagslauf grün).
  */
 export function bewerteJob(
   job: TotmannJob,
-  letzterLauf: LaufNachweisLesung | null,
+  laeufe: readonly LaufNachweisLesung[],
   jetzt: Date,
-  nachweisSeit: string,
+  unlesbareBeginne: readonly (string | null)[] = [],
 ): CronJobStand {
   pruefePlanJob(job);
-  const lauf = letzterLauf !== null && letzterLauf.job === job.job ? letzterLauf : null;
-  const begonnenMs = lauf ? Date.parse(lauf.begonnen_am) : Number.NaN;
-  if (lauf && !Number.isFinite(begonnenMs)) throw new Error(`Lauf ${job.job}: begonnen_am unlesbar`);
-
-  if (!job.aktiv) {
-    const ab = berlinTagAus(job.aus_seit ?? "", `Plan ${job.job}: aus_seit`, 1);
-    const trotzdem = lauf !== null && begonnenMs >= ab.getTime();
-    return trotzdem
-      ? jobStand(job, "laeuft_obwohl_aus", LAGE_STATUS.laeuft_obwohl_aus, null, lauf)
-      : jobStand(job, "aus", LAGE_STATUS.aus, null, lauf);
+  const jetztMs = jetzt.getTime();
+  if (!Number.isFinite(jetztMs)) throw new Error("Zeitpunkt unlesbar");
+  const eigene = laeufe.filter((l) => l.job === job.job);
+  for (const l of eigene) {
+    for (const feld of ["begonnen_am", "beendet_am", "eingetragen_am"] as const) {
+      if (!Number.isFinite(Date.parse(l[feld]))) throw new Error(`Lauf ${job.job}: ${feld} unlesbar`);
+    }
   }
+  const juengster = juengsterLauf(eigene);
 
+  if (!job.aktiv) return bewerteAusJob(job, juengster, unlesbareBeginne);
+
+  const messbeginn = planZeitpunkt(job.aktiv_seit, `Plan ${job.job}: aktiv_seit`);
   const soll = letzterSollzeitpunkt(job, jetzt);
-  const seit = berlinTagAus(nachweisSeit, "NACHWEIS_SEIT");
-  if (soll === null || soll.getTime() < seit.getTime()) {
-    return jobStand(job, "erster_sollzeitpunkt_steht_aus", LAGE_STATUS.erster_sollzeitpunkt_steht_aus, soll, lauf);
+  if (unlesbareBeginne.length > 0) return jobStand(job, "nicht_lesbar", "fehler", { soll, letzterLauf: juengster });
+  const unplausibel = unplausibleZeit(eigene, jetztMs);
+  if (unplausibel !== null) {
+    return jobStand(job, "zeit_unplausibel", LAGE_STATUS.zeit_unplausibel, { soll, letzterLauf: juengster, hinweis: unplausibel });
   }
-  if (lauf === null || begonnenMs < soll.getTime() - VORLAUF_MS) {
-    return jobStand(job, "ueberfaellig", LAGE_STATUS.ueberfaellig, soll, lauf);
+  if (soll === null || soll.getTime() < messbeginn) {
+    return jobStand(job, "erster_sollzeitpunkt_steht_aus", LAGE_STATUS.erster_sollzeitpunkt_steht_aus, { soll, letzterLauf: juengster });
   }
+  const fenster = soll.getTime() - VORLAUF_MS;
+  if (juengster === null || Date.parse(juengster.begonnen_am) < fenster) {
+    // Ein Lauf zu t deckt jeden S ≤ t + 10 min; verpasst ist der erste S danach, frühestens aktiv_seit.
+    const untergrenze = juengster === null ? messbeginn : Math.max(messbeginn, Date.parse(juengster.begonnen_am) + VORLAUF_MS + 1);
+    const erster = ersterSollzeitpunktAb(job, untergrenze);
+    return jobStand(job, "ueberfaellig", LAGE_STATUS.ueberfaellig, {
+      soll,
+      letzterLauf: juengster,
+      ueberfaelligSeit: erster !== null && erster.getTime() <= soll.getTime() ? erster : soll,
+    });
+  }
+  const massgeblich = juengsterLauf(eigene.filter((l) => l.ergebnis !== "uebersprungen" && Date.parse(l.begonnen_am) >= fenster));
   const lage: CronLage =
-    lauf.ergebnis === "ok" || lauf.ergebnis === "uebersprungen"
+    massgeblich === null || massgeblich.ergebnis === "ok"
       ? "ok"
-      : lauf.ergebnis === "teilweise"
+      : massgeblich.ergebnis === "teilweise"
         ? "teilweise"
         : "fehlgeschlagen";
-  return jobStand(job, lage, LAGE_STATUS[lage], soll, lauf);
+  return jobStand(job, lage, LAGE_STATUS[lage], { soll, letzterLauf: juengster, bewerteterLauf: massgeblich ?? juengster });
 }
 
 /**
@@ -1063,13 +1247,13 @@ export function leseLaufNachweis(zeile: unknown): LaufNachweisLesung | null {
   if (!istObjekt(zeile)) return null;
   const job = textOderNull(zeile.job);
   const begonnen = isoOderNull(zeile.begonnen_am);
+  // beendet_am und eingetragen_am sind NOT NULL (scripts/lauf_nachweis.sql); ohne sie ist der
+  // Uhrenabgleich (UHR_TOLERANZ_MS) nicht möglich, die Zeile gilt dann als unlesbar.
+  const beendet = isoOderNull(zeile.beendet_am);
+  const eingetragen = isoOderNull(zeile.eingetragen_am);
   const ergebnis = zeile.ergebnis;
-  if (job === null || begonnen === null || !LAUF_ERGEBNISSE.some((e) => e === ergebnis)) return null;
-  let beendet: string | null = null;
-  if (zeile.beendet_am !== null && zeile.beendet_am !== undefined) {
-    beendet = isoOderNull(zeile.beendet_am);
-    if (beendet === null) return null;
-  }
+  if (job === null || begonnen === null || beendet === null || eingetragen === null) return null;
+  if (!LAUF_ERGEBNISSE.some((e) => e === ergebnis)) return null;
   let http: number | null = null;
   if (zeile.http_status !== null && zeile.http_status !== undefined) {
     http = zahlOderNull(zeile.http_status);
@@ -1090,6 +1274,7 @@ export function leseLaufNachweis(zeile: unknown): LaufNachweisLesung | null {
     job,
     begonnen_am: begonnen,
     beendet_am: beendet,
+    eingetragen_am: eingetragen,
     ergebnis: ergebnis as LaufErgebnis,
     http_status: http,
     teilergebnisse,
@@ -1097,10 +1282,29 @@ export function leseLaufNachweis(zeile: unknown): LaufNachweisLesung | null {
   };
 }
 
+/** lauf_nachweis als Ganzes nicht lesbar (§2.3): aus bleibt bernstein mit Hinweis, aktiv wird rot. */
 function nichtLesbar(job: TotmannJob, jetzt: Date): CronJobStand {
   pruefePlanJob(job);
-  // Ohne lesbaren Nachweis: aus bleibt bernstein mit Hinweis, aktiv wird rot (§2.3).
-  return jobStand(job, "nicht_lesbar", job.aktiv ? "fehler" : "warnung", job.aktiv ? letzterSollzeitpunkt(job, jetzt) : null, null);
+  return jobStand(job, "nicht_lesbar", job.aktiv ? "fehler" : "warnung", { soll: job.aktiv ? letzterSollzeitpunkt(job, jetzt) : null });
+}
+
+/**
+ * Kurzfassung der abgeschalteten Jobs, z. B. "alle 3 Jobs laut Plan aus seit 30.07.2026". Prüfbefund
+ * B7: Ein Client von vor dem Totmann liest nur quelle, hinweis und gemessen_am; ohne diesen Satz
+ * zeigte er im Hauptzustand "Warnung" ohne jeden Grund.
+ */
+function ausHinweis(plan: readonly TotmannJob[]): string | undefined {
+  const gruppen = new Map<string, string[]>();
+  for (const j of plan) {
+    if (j.aktiv) continue;
+    const seit = j.aus_seit ?? "";
+    gruppen.set(seit, [...(gruppen.get(seit) ?? []), j.bezeichnung]);
+  }
+  const teile = [...gruppen].map(([seit, namen]) => {
+    const wer = namen.length === plan.length && plan.length > 1 ? `alle ${plan.length} Jobs` : namen.join(", ");
+    return `${wer} laut Plan aus seit ${datumAnzeige(seit)}`;
+  });
+  return verbinde(...teile);
 }
 
 export interface TotmannBewertung {
@@ -1112,46 +1316,46 @@ export interface TotmannBewertung {
 
 /**
  * Bewertet den ganzen Plan. laeufe = gelesene Zeilen aus lauf_nachweis (GET /api/status holt je
- * Job die jüngste); je Plan-Job zählt die jüngste lesbare Zeile mit genau dieser Kennung — Probe-
- * Zeilen (content-auto-produce-probe) und fremde Jobs zählen nicht. lesefehler = bereinigter Grund,
- * warum lauf_nachweis nicht lesbar war (auch eine fehlende Tabelle); dann sind alle Jobs "nicht
- * lesbar": aus → bernstein, aktiv → rot. nachweisSeit = NACHWEIS_SEIT aus lib/totmann.ts (dieser
- * Datei fehlt der Laufzeit-Import mit Absicht).
+ * Job die jüngste und die jüngste mit einem Ergebnis außer uebersprungen; Dubletten schaden nicht);
+ * je Plan-Job zählen die lesbaren Zeilen mit genau dieser Kennung — Probe-Zeilen
+ * (content-auto-produce-probe) und fremde Jobs zählen nicht. Eine unlesbare Zeile mit lesbarer
+ * Kennung geht mit ihrem begonnen_am (falls allein lesbar) an bewerteJob, eine ohne lesbare Kennung
+ * macht alle Plan-Jobs unlesbar. lesefehler = bereinigter Grund, warum lauf_nachweis nicht lesbar
+ * war (auch eine fehlende Tabelle); dann sind alle Jobs "nicht lesbar": aus → bernstein, aktiv → rot.
+ * nachweisSeit = NACHWEIS_SEIT aus lib/totmann.ts (dieser Datei fehlt der Laufzeit-Import mit
+ * Absicht); nur für den Tooltip, null = nicht festgehalten.
  */
 export function bewerteTotmann(
   plan: readonly TotmannJob[],
   laeufe: readonly unknown[],
   jetzt: Date,
   lesefehler: string | null,
-  nachweisSeit: string,
+  nachweisSeit: string | null,
 ): TotmannBewertung {
   if (plan.length === 0) throw new Error("Totmann-Plan ohne Jobs");
-  berlinTagAus(nachweisSeit, "NACHWEIS_SEIT");
+  if (nachweisSeit !== null) kalendertag(nachweisSeit, "NACHWEIS_SEIT");
   const imPlan = new Set(plan.map((j) => j.job));
   if (imPlan.size !== plan.length) throw new Error("Totmann-Plan: Job-Kennung doppelt");
 
-  const juengste = new Map<string, LaufNachweisLesung>();
-  const unlesbar = new Set<string>();
+  const lesbar = new Map<string, LaufNachweisLesung[]>();
+  const unlesbar = new Map<string, (string | null)[]>();
+  const merke = <T>(karte: Map<string, T[]>, job: string, wert: T) => karte.set(job, [...(karte.get(job) ?? []), wert]);
   if (lesefehler === null) {
     for (const roh of laeufe) {
       const lauf = leseLaufNachweis(roh);
       if (lauf === null) {
-        // Eine unlesbare Zeile macht genau ihren Job unlesbar; ohne lesbare Kennung alle Plan-Jobs.
+        // Eine unlesbare Zeile betrifft genau ihren Job; ohne lesbare Kennung alle Plan-Jobs.
         const kennung = istObjekt(roh) ? textOderNull(roh.job) : null;
-        if (kennung === null) for (const j of imPlan) unlesbar.add(j);
-        else if (imPlan.has(kennung)) unlesbar.add(kennung);
+        if (kennung === null) for (const j of imPlan) merke(unlesbar, j, null);
+        else if (imPlan.has(kennung)) merke(unlesbar, kennung, istObjekt(roh) ? isoOderNull(roh.begonnen_am) : null);
         continue;
       }
-      if (!imPlan.has(lauf.job)) continue;
-      const bisher = juengste.get(lauf.job);
-      if (!bisher || Date.parse(lauf.begonnen_am) > Date.parse(bisher.begonnen_am)) juengste.set(lauf.job, lauf);
+      if (imPlan.has(lauf.job)) merke(lesbar, lauf.job, lauf);
     }
   }
 
   const jobs = plan.map((job) =>
-    lesefehler !== null || unlesbar.has(job.job)
-      ? nichtLesbar(job, jetzt)
-      : bewerteJob(job, juengste.get(job.job) ?? null, jetzt, nachweisSeit),
+    lesefehler !== null ? nichtLesbar(job, jetzt) : bewerteJob(job, lesbar.get(job.job) ?? [], jetzt, unlesbar.get(job.job) ?? []),
   );
   const status = jobs.reduce<MessStatus>((schlecht, j) => (STATUS_RANG[j.status] > STATUS_RANG[schlecht] ? j.status : schlecht), "ok");
   return {
@@ -1159,8 +1363,8 @@ export function bewerteTotmann(
     status,
     hinweis: verbinde(
       lesefehler !== null && `Nachweis nicht lesbar: ${lesefehler}`,
-      unlesbar.size > 0 && `Zeile in lauf_nachweis unlesbar (${[...unlesbar].join(", ")})`,
-      plan.some((j) => j.aktiv) && "Sollzeitpunkte in Europe/Berlin gelesen; die Zeitzone des VPS ist nicht gemessen.",
+      unlesbar.size > 0 && `Zeile in lauf_nachweis unlesbar (${[...unlesbar.keys()].join(", ")})`,
+      ausHinweis(plan),
     ),
   };
 }
@@ -1272,14 +1476,19 @@ function autoProduceFehlerText(fehler: unknown): string | null {
 
 /**
  * Ergebnis eines auto-produce-Laufs (§2.2 Punkt 2): produced → ok; skipped → uebersprungen;
- * partial oder abgelehnt → teilweise; status "fehler" → fehler, AUCH bei HTTP 200 (Speicherfehler
- * oder Pipeline-fehler, api/content/auto-produce/route.ts); jede 5xx → fehler. dry_run (nur die
- * Probe) → ok. Ein unbekannter oder fehlender status ist fehler (fail-closed).
- * schritte = steps der Pipeline-Antwort, sofern die Pipeline lief.
+ * partial (mit Pipeline-Status partial) oder abgelehnt → teilweise; status "fehler" → fehler, AUCH
+ * bei HTTP 200 (Speicherfehler oder Pipeline-fehler, api/content/auto-produce/route.ts); jede 5xx →
+ * fehler. dry_run (nur die Probe) → ok. Ein unbekannter oder fehlender status ist fehler
+ * (fail-closed). Prüfbefund SR-2: Die Route meldet jeden Pipeline-Status außer complete, abgelehnt
+ * und fehler als "partial" — auch einen fehlenden oder unbekannten (route.ts, Abbildung des
+ * Pipeline-Status). "partial" zählt deshalb nur mit pipeline.status "partial" als teilweise, sonst
+ * als fehler. schritte = steps der Pipeline-Antwort, sofern die Pipeline lief.
  */
 export function autoProduceNachweis(httpStatus: number, antwort: unknown, schritte: unknown): NachweisInhalt {
   const d = istObjekt(antwort) ? antwort : {};
   const status = typeof d.status === "string" ? d.status : null;
+  const pipelineStatus = istObjekt(d.pipeline) ? d.pipeline.status : undefined;
+  const echtTeilweise = status === "partial" && pipelineStatus === "partial";
   const ergebnis: LaufErgebnis =
     httpStatus >= 500 || status === "fehler"
       ? "fehler"
@@ -1287,11 +1496,18 @@ export function autoProduceNachweis(httpStatus: number, antwort: unknown, schrit
         ? "ok"
         : status === "skipped"
           ? "uebersprungen"
-          : status === "partial" || status === "abgelehnt"
+          : echtTeilweise || status === "abgelehnt"
             ? "teilweise"
             : "fehler";
 
   const teile: string[] = [status === null ? "Antwort ohne status" : `status ${status}`];
+  if (status === "partial" && !echtTeilweise) {
+    teile.push(
+      typeof pipelineStatus === "string" && pipelineStatus.trim() !== ""
+        ? `Pipeline-Status unbekannt (${bereinigeFehler(pipelineStatus)})`
+        : "Pipeline-Status fehlt",
+    );
+  }
   if (ergebnis === "fehler") {
     const text = autoProduceFehlerText(d.fehler);
     if (text !== null) teile.push(bereinigeFehler(text));

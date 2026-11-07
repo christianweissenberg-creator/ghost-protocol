@@ -10,22 +10,29 @@
 // Zeitzone offen: Für die curl-Jobs gibt es nur den Kommentar „CET" (setup-vps-crons.sh:20).
 // crontab:3 („Alle Zeiten in UTC") gilt für die Python-Jobs des DONNA-Schedulers und ist
 // nicht versioniert. Maßgeblich ist die Systemzeitzone des VPS, sie ist nicht gemessen.
-// Vor aktiv:true messen.
+// Vor aktiv:true messen und mit Beleg in zeitzone_beleg eintragen; ohne Beleg lehnt die
+// Plan-Prüfung (lib/status-server.ts) einen aktiven Job ab. Läuft der VPS auf UTC, heißt der Plan
+// zeitzone "UTC" — oder der Crontab wird auf Europe/Berlin gestellt (Prüfbefund Z8).
 //
 // Vor jedem aktiv:true gilt §2.6 der Spezifikation (neues CRON_SECRET, Middleware-Ausnahme R7,
-// Header statt ?secret=, gemessene Zeitzone, umgebauter Launch-Kalender) — im selben PR, sonst
-// wird der Totmann am ersten Werktag rot.
+// Header statt ?secret=, gemessene Zeitzone, umgebauter Launch-Kalender) — im selben PR, und mit
+// aktiv_seit (ab wann der Crontab den Job ausführt) und zeitzone_beleg. Sollzeitpunkte vor
+// aktiv_seit heißen "erster Sollzeitpunkt steht aus"; ein fester Tag für alle Jobs (die frühere
+// NACHWEIS_SEIT-Regel) ließ jede spätere Aktivierung sofort rot werden (Prüfbefund Z1).
 
 /** Tabelle des Lauf-Nachweises (scripts/lauf_nachweis.sql). Nur die Service-Rolle liest und hängt an. */
 export const NACHWEIS_TABELLE = "lauf_nachweis";
 
 /**
- * Datum (JJJJ-MM-TT, Europe/Berlin), seit dem der Schreiber im Code steht (Branch feat/totmann,
- * 07.11.2026). Kein Deploy-Datum: Die Tabelle lauf_nachweis gibt es erst nach Ausführung von
- * scripts/lauf_nachweis.sql, und die ist ein Inhaberentscheid. Ein aktiver Job, dessen jüngster
- * Sollzeitpunkt vor diesem Tag liegt, heißt "erster Sollzeitpunkt steht aus" (nicht gemessen).
+ * Tag (JJJJ-MM-TT, Europe/Berlin), seit dem lauf_nachweis in Produktion besteht und der Schreiber
+ * deployt ist — der spätere von Deploy und Ausführung von scripts/lauf_nachweis.sql (§2.2 Punkt 3:
+ * "<Deploy-Datum>"). null, solange das nicht festgehalten ist: Stufe 1 ist gemergt, aber nicht
+ * deployt, und das SQL ist ein Inhaberentscheid. Nach Deploy und SQL in einem eigenen Commit setzen.
+ * Nur für den Tooltip „Nachweis-Tabelle seit …: kein Lauf" (§2.4). Prüfbefund B1: Vorher stand hier
+ * der Tag, an dem der Code entstand (07.11.2026), und der Tooltip behauptete ein Beobachtungsfenster,
+ * in dem es weder Tabelle noch Schreiber gab. Das Urteil über aktive Jobs hängt an aktiv_seit.
  */
-export const NACHWEIS_SEIT = "2026-11-07";
+export const NACHWEIS_SEIT: string | null = null;
 
 export const JOB_BRIEFING_MORGEN = "briefing-morgen";
 export const JOB_BRIEFING_ABEND = "briefing-abend";
@@ -44,12 +51,32 @@ export interface TotmannJob {
   wochentage: readonly number[];
   /** Ortszeit HH:MM in zeitzone. */
   uhrzeit: string;
-  zeitzone: "Europe/Berlin";
+  /** Europe/Berlin (Sommerzeit über Intl) oder UTC für einen VPS auf UTC (Prüfbefund Z8). */
+  zeitzone: "Europe/Berlin" | "UTC";
+  /**
+   * Beleg der gemessenen Systemzeitzone des VPS (Befehl und Datum); null = nicht gemessen, zeitzone
+   * ist dann eine Annahme, und die Plan-Zeile im Tooltip sagt das (Prüfbefund B10). Pflicht, bevor
+   * aktiv true wird (§2.6).
+   */
+  zeitzone_beleg: string | null;
   /** Setzung nach HAENGEND_AB_MS (lib/status-server.ts), nicht gemessen: Die Laufdauern sind unbekannt. */
   karenz_h: number;
   aktiv: boolean;
+  /**
+   * Pflicht, wenn aktiv true ist: ISO-Zeitpunkt mit Zeitzone (z. B. "2027-01-18T00:00:00+01:00"), ab
+   * dem der Crontab den Job ausführt — gesetzt im Aktivierungs-PR (§2.6), frühestens zu dessen
+   * Deploy. Sollzeitpunkte davor heißen "erster Sollzeitpunkt steht aus" (nicht gemessen).
+   */
+  aktiv_seit: string | null;
   /** JJJJ-MM-TT; gesetzt, wenn aktiv false ist. */
   aus_seit: string | null;
+  /**
+   * Nur bei aktiv false: ISO-Zeitpunkt mit Zeitzone, bis zu dem der Stolperdraht quittiert ist — ein
+   * Lauf, der bis dahin begann, löst ihn nicht mehr aus (Prüfbefund Z6; die Tabelle nimmt nur Anhänge
+   * an, eine Zeile lässt sich nicht zurücknehmen). Gesetzt im Code nach Klärung des Laufs, die
+   * Git-Historie ist die Quittung. null = nichts quittiert.
+   */
+  stolperdraht_quittiert_bis: string | null;
   grund: string | null;
   fundstelle: string;
 }
@@ -65,9 +92,12 @@ export const TOTMANN_PLAN: readonly TotmannJob[] = [
     wochentage: [1, 2, 3, 4, 5],
     uhrzeit: "08:03",
     zeitzone: "Europe/Berlin",
+    zeitzone_beleg: null,
     karenz_h: 2,
     aktiv: false,
+    aktiv_seit: null,
     aus_seit: "2026-07-30",
+    stolperdraht_quittiert_bis: null,
     grund: "Crons abgeschaltet (Betreiber-Entscheid)",
     fundstelle: "GG/decisions_log.md Abschnitt 30.07.2026; scripts/setup-vps-crons.sh:21",
   },
@@ -77,9 +107,12 @@ export const TOTMANN_PLAN: readonly TotmannJob[] = [
     wochentage: [1, 2, 3, 4, 5],
     uhrzeit: "18:03",
     zeitzone: "Europe/Berlin",
+    zeitzone_beleg: null,
     karenz_h: 2,
     aktiv: false,
+    aktiv_seit: null,
     aus_seit: "2026-07-30",
+    stolperdraht_quittiert_bis: null,
     grund: "Crons abgeschaltet (Betreiber-Entscheid)",
     fundstelle: "GG/decisions_log.md Abschnitt 30.07.2026; scripts/setup-vps-crons.sh:24",
   },
@@ -89,9 +122,12 @@ export const TOTMANN_PLAN: readonly TotmannJob[] = [
     wochentage: [1, 2, 3, 4, 5],
     uhrzeit: "09:07",
     zeitzone: "Europe/Berlin",
+    zeitzone_beleg: null,
     karenz_h: 2,
     aktiv: false,
+    aktiv_seit: null,
     aus_seit: "2026-07-30",
+    stolperdraht_quittiert_bis: null,
     grund: "Crons abgeschaltet (Betreiber-Entscheid)",
     fundstelle: "GG/decisions_log.md Abschnitt 30.07.2026; scripts/setup-vps-crons.sh:27",
   },

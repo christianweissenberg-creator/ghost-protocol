@@ -12,9 +12,12 @@
 -- alle Jobs laut Plan (site/src/lib/totmann.ts) aus sind; rot, sobald einer aktiv ist.
 --
 -- Uhren: begonnen_am und beendet_am stammen beide aus der App-Uhr, die DB setzt nur
--- eingetragen_am. Kein CHECK vergleicht App-Uhr mit DB-Uhr (now()): Liefe die VPS-Uhr der
--- DB-Uhr voraus, hätte ein solcher CHECK den Insert abgelehnt und der Totmann zu Unrecht
--- „überfällig" gezeigt (§2.2 Punkt 2). Geprüft in site/tests/t-totmann.test.mjs.
+-- eingetragen_am. Kein CHECK vergleicht App-Uhr mit DB-Uhr (now() oder die Spalte
+-- eingetragen_am): Liefe die VPS-Uhr der DB-Uhr voraus, hätte ein solcher CHECK den Insert
+-- abgelehnt und der Totmann zu Unrecht „überfällig" gezeigt (§2.2 Punkt 2). Geprüft in
+-- site/tests/t-totmann.test.mjs (T-S1; T-R13 wertet genau diese CHECKs mit verschobener DB-Uhr aus).
+-- Den Abgleich der Uhren macht der Leser: GET /api/status liest eingetragen_am mit und wertet eine
+-- Zeile mit mehr als 10 min Abweichung als unplausibel (site/src/lib/status-server.ts).
 --
 -- Nach der Ausführung messen (§2.5 Live-Abnahme): anonymes Lesen per REST scheitert; die
 -- Rechte mit den Abfragen aus §5.5 (a).

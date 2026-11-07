@@ -57,11 +57,16 @@ export interface LaufTeilergebnis {
   fehler: string | null;
 }
 
-/** Eine gelesene Zeile aus lauf_nachweis. begonnen_am und beendet_am stammen beide aus der App-Uhr. */
+/**
+ * Eine gelesene Zeile aus lauf_nachweis. begonnen_am und beendet_am stammen beide aus der App-Uhr,
+ * eingetragen_am aus der DB-Uhr (DEFAULT now()). Alle drei sind NOT NULL (scripts/lauf_nachweis.sql);
+ * eingetragen_am liest der Totmann für den Uhrenabgleich (Prüfbefunde Z2, SR-5).
+ */
 export interface LaufNachweisLesung {
   job: string;
   begonnen_am: string;
-  beendet_am: string | null;
+  beendet_am: string;
+  eingetragen_am: string;
   ergebnis: LaufErgebnis;
   http_status: number | null;
   teilergebnisse: LaufTeilergebnis[];
@@ -70,9 +75,10 @@ export interface LaufNachweisLesung {
 
 /**
  * Lage eines Jobs nach der Tabelle in §2.3. Farbe (status): ok → "ok"; teilweise und aus →
- * "warnung"; fehlgeschlagen, ueberfaellig und laeuft_obwohl_aus → "fehler";
+ * "warnung"; fehlgeschlagen, ueberfaellig, laeuft_obwohl_aus und zeit_unplausibel → "fehler";
  * erster_sollzeitpunkt_steht_aus → "nicht_gemessen"; nicht_lesbar → "warnung", wenn der Job aus
- * ist, sonst "fehler".
+ * ist, sonst "fehler". zeit_unplausibel (aktiver Job, Prüfbefunde Z2, SR-5): begonnen_am liegt nach
+ * der Messzeit, oder App- und DB-Uhr der Zeile weichen zu weit ab — der Zeile wird nicht geglaubt.
  */
 export type CronLage =
   | "ok"
@@ -82,16 +88,21 @@ export type CronLage =
   | "erster_sollzeitpunkt_steht_aus"
   | "aus"
   | "laeuft_obwohl_aus"
+  | "zeit_unplausibel"
   | "nicht_lesbar";
 
+// Felder nach dem 07.11.2026 (Prüfbefunde Z1, Z3, Z5, Z6) sind optional: Eine Antwort ohne sie
+// liest cronsAnzeige (lib/types.ts) wie bisher.
 export interface CronJobStand {
   job: string;
   bezeichnung: string;
-  /** Plan in Worten, z. B. "Mo–Fr 08:03 (Europe/Berlin), Karenz 2 h". */
+  /** Plan in Worten, z. B. "Mo–Fr 08:03 Europe/Berlin (angenommen, VPS-Zeitzone nicht gemessen), Karenz 2 h (Setzung)". */
   plan: string;
   /** Woher der Plan stammt (lib/totmann.ts, fundstelle). */
   fundstelle: string;
   aktiv: boolean;
+  /** ISO-Zeitpunkt aus dem Plan, ab dem ein aktiver Job laufen muss; null bei abgeschalteten Jobs. */
+  aktiv_seit?: string | null;
   /** JJJJ-MM-TT, nur bei abgeschalteten Jobs. */
   aus_seit: string | null;
   grund: string | null;
@@ -101,15 +112,34 @@ export interface CronJobStand {
   sollzeitpunkt: string | null;
   /** S in Europe/Berlin, z. B. "Mo 09.11. 08:03" — der Browser kann in einer anderen Zeitzone stehen. */
   sollzeitpunkt_berlin: string | null;
+  /** Nur bei ueberfaellig: erster verpasster Sollzeitpunkt nach dem letzten Lauf bzw. ab aktiv_seit (ISO). */
+  ueberfaellig_seit?: string | null;
+  /** ueberfaellig_seit in Europe/Berlin, z. B. "Di 17.11. 08:03". */
+  ueberfaellig_seit_berlin?: string | null;
+  /** Nur bei laeuft_obwohl_aus: begonnen_am des jüngsten auslösenden Laufs (ISO). */
+  stolperdraht_am?: string | null;
+  /** stolperdraht_am in Europe/Berlin, z. B. "20.11.2026 18:03". */
+  stolperdraht_am_berlin?: string | null;
   /** Jüngste Zeile dieses Jobs in lauf_nachweis; null = keine Zeile oder nicht lesbar. */
   letzter_lauf: LaufNachweisLesung | null;
+  /**
+   * Die Zeile, aus der ok, teilweise oder fehlgeschlagen folgt: der jüngste Lauf ab S − 10 min mit
+   * einem Ergebnis außer uebersprungen, sonst der übersprungene. Kann älter sein als letzter_lauf —
+   * ein übersprungener Lauf überdeckt kein früheres Ergebnis (Prüfbefund Z5). null sonst.
+   */
+  bewerteter_lauf?: LaufNachweisLesung | null;
+  /** Begründung zur Lage, z. B. warum die Zeit unplausibel ist oder dass eine Zeile teilweise unlesbar ist. */
+  hinweis?: string | null;
 }
 
 export interface CronsWert {
   /** Je Job des Plans ein Eintrag, in Plan-Reihenfolge. */
   jobs: CronJobStand[];
-  /** NACHWEIS_SEIT aus lib/totmann.ts: seit diesem Tag steht der Schreiber im Code (kein Deploy-Datum). */
-  nachweis_seit: string;
+  /**
+   * NACHWEIS_SEIT aus lib/totmann.ts: Tag, seit dem lauf_nachweis in Produktion besteht; null, solange
+   * Deploy und SQL nicht festgehalten sind — dann behauptet der Tooltip kein Beobachtungsfenster.
+   */
+  nachweis_seit: string | null;
   /** Lesefehler von lauf_nachweis (bereinigt, auch eine fehlende Tabelle); null = gelesen. */
   lesefehler: string | null;
 }
@@ -141,6 +171,8 @@ export interface SystemStatus {
    * §2.3; status = Farbe des schlechtesten Jobs. Ausnahme von der Grundregel oben: Steht der
    * schlechteste Job auf "erster Sollzeitpunkt steht aus", ist status "nicht_gemessen", wert und
    * gemessen_am bleiben aber gesetzt — gelesen wurde, nur geurteilt werden kann noch nicht.
+   * Fehlt der Service-Schlüssel, wurde lauf_nachweis nicht abgefragt: gemessen_am ist dann null,
+   * wert trägt die Jobs als "nicht lesbar" (Prüfbefunde SR-6, B9).
    * Antworten von vor dem Totmann tragen hier wert null und status "nicht_gemessen"; der Leser
    * (cronsFeld in lib/types.ts) verträgt beides.
    */

@@ -311,30 +311,31 @@ async function messeKosten(sb: () => ServiceClient, jetzt: Date) {
 
 // ── Totmann: Crons und Agenten (Objekt-Studio Stufe 2, §2.2–2.4) ──────────────
 
-const NACHWEIS_SPALTEN = "job, begonnen_am, beendet_am, ergebnis, http_status, teilergebnisse, hinweis";
+// eingetragen_am (DB-Uhr) für den Uhrenabgleich der Zeile (Prüfbefunde Z2, SR-5).
+const NACHWEIS_SPALTEN = "job, begonnen_am, beendet_am, eingetragen_am, ergebnis, http_status, teilergebnisse, hinweis";
 
-// Je Plan-Job die jüngste Zeile (order begonnen_am desc, limit 1; Index
-// idx_lauf_nachweis_job_beginn in scripts/lauf_nachweis.sql), mit demselben Zeitlimit wie die
-// übrigen Messungen. Probe-Zeilen (content-auto-produce-probe) stehen in keinem Plan und werden
-// gar nicht gelesen. Ein Lesefehler — auch eine fehlende Tabelle, solange das SQL nicht
-// ausgeführt ist, oder ein fehlender Service-Schlüssel — geht als lesefehler an bewerteTotmann:
-// Sind alle Jobs aus, bleibt die Zeile bernstein mit Hinweis; ist einer aktiv, wird sie rot.
+// Je Plan-Job zwei Zeilen (order begonnen_am desc, limit 1; Index idx_lauf_nachweis_job_beginn in
+// scripts/lauf_nachweis.sql): die jüngste und die jüngste mit einem Ergebnis außer uebersprungen.
+// Prüfbefund Z5: Mit nur der jüngsten machte ein späterer übersprungener Lauf ein früheres
+// Ergebnis zum selben Sollzeitpunkt unsichtbar. Alle Abfragen mit demselben Zeitlimit wie die
+// übrigen Messungen. Probe-Zeilen (content-auto-produce-probe) stehen in keinem Plan und werden gar
+// nicht gelesen. Ein Lesefehler — auch eine fehlende Tabelle, solange das SQL nicht ausgeführt ist,
+// oder ein fehlender Service-Schlüssel — geht als lesefehler an bewerteTotmann: Sind alle Jobs aus,
+// bleibt die Zeile bernstein mit Hinweis; ist einer aktiv, wird sie rot.
 async function messeCrons(sb: () => ServiceClient, jetzt: Date): Promise<Messwert<CronsWert>> {
   const zeilen: unknown[] = [];
   let lesefehler: string | null = null;
+  let abgefragt = true;
   try {
     const client = sb();
     const signal = zeitlimit();
+    const juengste = (job: string) =>
+      client.from(NACHWEIS_TABELLE).select(NACHWEIS_SPALTEN).eq("job", job);
     const antworten = await Promise.all(
-      TOTMANN_PLAN.map((j) =>
-        client
-          .from(NACHWEIS_TABELLE)
-          .select(NACHWEIS_SPALTEN)
-          .eq("job", j.job)
-          .order("begonnen_am", { ascending: false })
-          .limit(1)
-          .abortSignal(signal)
-      )
+      TOTMANN_PLAN.flatMap((j) => [
+        juengste(j.job).order("begonnen_am", { ascending: false }).limit(1).abortSignal(signal),
+        juengste(j.job).neq("ergebnis", "uebersprungen").order("begonnen_am", { ascending: false }).limit(1).abortSignal(signal),
+      ])
     );
     for (const res of antworten) {
       pruefeAntwort(res);
@@ -342,10 +343,13 @@ async function messeCrons(sb: () => ServiceClient, jetzt: Date): Promise<Messwer
       zeilen.push(...res.data);
     }
   } catch (e) {
-    lesefehler = istKonfigurationsFehler(e) ? `${bereinigeFehler(e)} — nicht abgefragt` : bereinigeFehler(e);
+    abgefragt = !istKonfigurationsFehler(e);
+    lesefehler = abgefragt ? bereinigeFehler(e) : `${bereinigeFehler(e)} — nicht abgefragt`;
   }
   const b = bewerteTotmann(TOTMANN_PLAN, zeilen, jetzt, lesefehler, NACHWEIS_SEIT);
-  return messwert(b.wert, b.status, Q.crons, b.hinweis);
+  // Prüfbefunde SR-6, B9: Ohne Service-Schlüssel wurde die Datenbank nicht abgefragt — dann kein
+  // Messzeitpunkt (wie messe() für die übrigen Felder). Die Farbe bleibt nach §2.3 bernstein bzw. rot.
+  return messwert(b.wert, b.status, Q.crons, b.hinweis, abgefragt ? new Date().toISOString() : null);
 }
 
 // ── Steinadel-Export (5 min zwischengespeichert) ──────────────────────────────
