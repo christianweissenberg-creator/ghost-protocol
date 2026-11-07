@@ -1239,6 +1239,55 @@ test("T-A14 Anzeige (Prüfbefund anzeige-5): 'toString' und 'constructor' fallen
   }
 });
 
+// ═══ Mutationstest der dritten Nachbesserung (cf604a4), Runde 2: überlebender Mutant der Anzeige ═══
+// X22 und X27 (Bewertung) prüfen die Tests "Mutant X22" und "Mutant X27" in tests/b-status-server.test.mjs.
+
+test("T-A15 Anzeige (Mutant X14): steht der Hinweis eines Jobs schon in der Lage, nennt der Tooltip ihn kein zweites Mal", () => {
+  // cronJobTitel (lib/types.ts) hängt "  Hinweis: …" nur an, wenn die Lage-Zeile den Hinweis nicht schon
+  // enthält: Beim Stolperdraht und bei unplausibler Zeit steht er dort. Ohne diese Bedingung stand
+  // dieselbe Aussage zweimal im Block des Jobs, und kein Test bemerkte es.
+  const fr = "2026-11-20T20:00:00.000Z"; // Fr 21:00 Berlin
+  const di = "2026-11-24T20:00:00.000Z"; // Di 21:00 Berlin
+  const frMorgen = "2026-11-20T09:04:00.000Z"; // Fr 10:04 Berlin
+  for (const [name, m, kopf, hinweis] of [
+    [
+      "Stolperdraht aus einer teils unlesbaren Zeile",
+      cronsMesswert(totmann.TOTMANN_PLAN, [{ ...zeile("briefing-abend", "2026-11-20T17:03:00.000Z"), http_status: 0 }], fr),
+      "Briefing abends (briefing-abend):",
+      "eine Zeile in lauf_nachweis ist teilweise unlesbar",
+    ],
+    [
+      "Stolperdraht nach eingetragen_am (Zeit der Zeile unplausibel)",
+      cronsMesswert(totmann.TOTMANN_PLAN, [{ ...zeile("briefing-abend", "2027-11-24T17:03:00.000Z"), eingetragen_am: "2026-11-24T17:04:01.000Z" }], di),
+      "Briefing abends (briefing-abend):",
+      "Zeitstempel des Laufs unplausibel, eingetragen am 24.11.2026 18:04 (DB-Uhr; begonnen_am 24.11.2027 18:03 liegt mehr als 10 min nach der Messzeit)",
+    ],
+    [
+      "aktiver Job, Zeitpunkt des Laufs unplausibel",
+      cronsMesswert([aktiv(MORGEN), ABEND, AUTO], [zeile("briefing-morgen", "2027-03-01T07:03:00.000Z")], frMorgen),
+      "Briefing morgens (briefing-morgen):",
+      "begonnen_am 01.03.2027 08:03 liegt mehr als 10 min nach der Messzeit",
+    ],
+  ]) {
+    assert.ok(m.wert.jobs.some((j) => j.hinweis === hinweis), `${name}: Voraussetzung, der Server meldet den Hinweis am Job`);
+    const block = jobBlock(cronsZeile({ erzeugt_am: m.gemessen_am, crons: m }).title, kopf);
+    const zeilen = block.split("\n");
+    assert.ok(zeilen.find((l) => l.startsWith("  Lage: "))?.includes(hinweis), `${name}: der Hinweis steht in der Lage\n${block}`);
+    assert.equal(block.split(hinweis).length - 1, 1, `${name}: genau einmal im Block\n${block}`);
+    assert.deepEqual(zeilen.filter((l) => l.startsWith("  Hinweis: ")), [], `${name}: keine eigene Hinweis-Zeile\n${block}`);
+  }
+  // Gegenprobe: Einen Hinweis, den die Lage nicht nennt (etwa aus einer neueren Antwort), nennt der Tooltip
+  // genau einmal, als eigene Zeile.
+  const fremd = structuredClone(cronsMesswert(totmann.TOTMANN_PLAN, [], fr));
+  fremd.wert.jobs[0].hinweis = "Hinweis, den die Lage nicht nennt";
+  const block = jobBlock(cronsZeile({ erzeugt_am: fr, crons: fremd }).title, "Briefing morgens (briefing-morgen):");
+  assert.deepEqual(
+    block.split("\n").filter((l) => l.includes("Hinweis, den die Lage nicht nennt")),
+    ["  Hinweis: Hinweis, den die Lage nicht nennt"],
+    block,
+  );
+});
+
 // ═══ scripts/lauf_nachweis.sql ═══
 
 /** Inhalt jeder CHECK (...)-Klausel, Klammern ausgezählt. */

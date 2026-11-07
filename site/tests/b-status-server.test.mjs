@@ -1492,6 +1492,85 @@ test("Totmann (Prüfbefund anzeige-2): 'erster Sollzeitpunkt steht aus' nennt de
   assert.equal(bewerteJob(MORGEN, [], MO_1004).urteil_ab, null);
 });
 
+// ── Mutationstest der dritten Nachbesserung (cf604a4), Runde 2: Tests gegen überlebende Mutanten ──
+// X22 und X27 blieben bei 639 von 639 grünen Tests am Leben; je Mutant ein Fall, im Namen genannt.
+// Den dritten Überlebenden (X14, Anzeige) prüft T-A15 in tests/t-totmann.test.mjs.
+
+test("Totmann (Mutant X22): eine unlesbare Zeile mit derselben DB-Uhr (auf die Millisekunde) wie die zuletzt eingetragene lesbare kann die zuletzt eingetragene sein → 'nicht lesbar' (rot)", () => {
+  // Fr 20.11. 09:07 Berlin läuft auto-produce (ok, eingetragen E). Eine zweite Zeile desselben Jobs,
+  // übersprungen und mit einem Teilergebnis ohne agent (unlesbar; die SQL-Datei prüft nur, dass
+  // teilergebnisse ein Array ist), trägt dasselbe eingetragen_am auf die Millisekunde. Bei Gleichstand
+  // ordnet die Route nach id (spaeterEingetragen); die id einer unlesbaren Zeile kennt bewerteJob nicht.
+  // Sie kann also die zuletzt eingetragene sein und trägt das Urteil. Mit "e > juengsterEingetragen"
+  // statt "e >= juengsterEingetragen" (unlesbarTraegt in bewerteJob) wurde der Job grün.
+  const R = lauf(JOB_AUTO_PRODUCE, "2026-11-20T08:07:05Z", "ok", { id: 7 });
+  const U = lauf(JOB_AUTO_PRODUCE, "2026-11-20T08:07:00Z", "uebersprungen", {
+    id: 8,
+    eingetragen_am: R.eingetragen_am,
+    teilergebnisse: [{ ergebnis: "ok" }],
+    hinweis: "status skipped · kein Kalendereintrag",
+  });
+  assert.equal(leseLaufNachweis(U), null, "Voraussetzung: U ist unlesbar");
+  const jetzt = new Date("2026-11-20T11:00:00Z"); // Fr 12:00 Berlin, S = Fr 20.11. 09:07
+  const auto = (zeilen) => bewerteTotmann([MORGEN, ABEND, AUTO_SEIT_MO], zeilen, jetzt, null, NACHWEIS_SEIT).wert.jobs[2];
+  for (const zeilen of [
+    [R, U],
+    [U, R],
+  ]) {
+    const j = auto(zeilen);
+    assert.deepEqual([j.lage, j.status, j.letzter_lauf.begonnen_am, j.bewerteter_lauf], ["nicht_lesbar", "fehler", R.begonnen_am, null]);
+  }
+  // Die Grenze liegt genau beim Gleichstand: 1 ms später eingetragen ebenso rot; 1 ms früher ist R die
+  // zuletzt eingetragene, und ein übersprungener Lauf ändert kein Ergebnis → grün (wie im Test zu r3-logik-4).
+  const um = (ms) => ({ ...U, eingetragen_am: new Date(Date.parse(R.eingetragen_am) + ms).toISOString() });
+  assert.equal(auto([R, um(1)]).lage, "nicht_lesbar");
+  const frueher = auto([R, um(-1)]);
+  assert.deepEqual([frueher.lage, frueher.status, frueher.bewerteter_lauf.begonnen_am], ["ok", "ok", R.begonnen_am]);
+});
+
+test("Totmann (Mutant X27): abgeschalteter Job, Zeile ohne lesbares begonnen_am — eine Abweichung zwischen beendet_am und eingetragen_am löst keinen Stolperdraht aus, es bleibt 'nicht lesbar' (bernstein)", () => {
+  // Der Stolperdraht hängt an begonnen_am; eingetragen_am (DB-Uhr) tritt nur an seine Stelle, wenn
+  // begonnen_am lesbar, die Zeit der Zeile aber unplausibel ist (ausloeser, Prüfbefund logik-2). Ohne
+  // lesbares begonnen_am ist die Zeile "nicht lesbar" (bernstein, wie im Test zu Z4, SR-1, B4), gleich,
+  // ob beendet_am und eingetragen_am zueinander passen. Rechnete ausloeser den Zeitgrund auch ohne
+  // lesbares begonnen_am, wurde aus einer Abweichung von mehr als 10 min "läuft, obwohl als aus geführt"
+  // (rot) mit eingetragen_am als Stolperdraht — ob die Zeile auslöst, hing dann an der Uhrenabweichung.
+  // begonnen_am '-infinity': TIMESTAMPTZ kennt den Wert, der CHECK beendet_am >= begonnen_am hält, und
+  // Date.parse liest ihn nicht (abgeleitet aus scripts/lauf_nachweis.sql, nicht gegen eine DB gemessen).
+  const jetzt = new Date("2026-11-20T20:00:00Z"); // Fr 21:00 Berlin
+  const ohneBeginn = (beendet, eingetragen) => ({
+    ...lauf(JOB_BRIEFING_ABEND, "2026-11-20T17:03:00Z"),
+    begonnen_am: "-infinity",
+    beendet_am: beendet,
+    eingetragen_am: eingetragen,
+  });
+  for (const [name, z] of [
+    ["DB-Uhr 26 min nach beendet_am", ohneBeginn("2026-11-20T17:04:00.000Z", "2026-11-20T17:30:00.000Z")],
+    ["DB-Uhr 26 min vor beendet_am", ohneBeginn("2026-11-20T17:30:00.000Z", "2026-11-20T17:04:00.000Z")],
+    ["Uhren passen (1 s)", ohneBeginn("2026-11-20T17:04:00.000Z", "2026-11-20T17:04:01.000Z")],
+  ]) {
+    assert.equal(leseLaufNachweis(z), null, `${name}: Voraussetzung, die Zeile ist unlesbar`);
+    const b = bewerteTotmann(TOTMANN_PLAN, [z], jetzt, null, NACHWEIS_SEIT);
+    const j = b.wert.jobs[1];
+    assert.deepEqual([j.lage, j.status, j.stolperdraht_am, j.stolperdraht_spalte, j.hinweis], ["nicht_lesbar", "warnung", null, null, null], name);
+    assert.equal(b.status, "warnung", name);
+  }
+  // Gegenprobe: begonnen_am lesbar, die Zeile nur teils unlesbar (Teilergebnis ohne agent) — dieselbe
+  // Abweichung löst aus, mit eingetragen_am als Stolperdraht und beiden Hinweisen.
+  const teils = {
+    ...lauf(JOB_BRIEFING_ABEND, "2026-11-20T17:03:00Z"),
+    beendet_am: "2026-11-20T17:04:00.000Z",
+    eingetragen_am: "2026-11-20T17:30:00.000Z",
+    teilergebnisse: [{ ergebnis: "ok" }],
+  };
+  const g = bewerteTotmann(TOTMANN_PLAN, [teils], jetzt, null, NACHWEIS_SEIT).wert.jobs[1];
+  assert.deepEqual([g.lage, g.status, g.stolperdraht_am, g.stolperdraht_spalte], ["laeuft_obwohl_aus", "fehler", "2026-11-20T17:30:00.000Z", "eingetragen_am"]);
+  assert.equal(
+    g.hinweis,
+    "Zeitstempel des Laufs unplausibel, eingetragen am 20.11.2026 18:30 (DB-Uhr; App-Uhr (beendet_am) und DB-Uhr (eingetragen_am) weichen um mehr als 10 min ab) · eine Zeile in lauf_nachweis ist teilweise unlesbar",
+  );
+});
+
 // ── Totmann: Ableitung der Schreiber (§2.2 Punkt 2) ──
 
 const VOLL = { fehler: null, abgeschnitten: false, stop_reason: "end_turn" };
