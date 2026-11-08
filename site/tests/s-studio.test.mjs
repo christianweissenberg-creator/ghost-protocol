@@ -1146,3 +1146,228 @@ test("S-N14 (SPEZ-6) Regeln: Anker-, Startbild- und Rechte-Regel stehen da — a
   // "darunter": Der Bauträger bleibt die letzte Regel.
   assert.equal(STUDIO_REGELN[STUDIO_REGELN.length - 1].regel, "Bauträger öffentlich nicht namentlich nennen.");
 });
+
+// ═══ M: Mutationsprüfung (08.11.2026) ═══
+// Je Test in Klammern die Mutanten, die vorher die ganze Suite überlebten (Mutationslauf gegen 650a9b0 in
+// einer eigenen Kopie). Jeder Test ist mit seinem Mutanten rot und ohne ihn grün; Produktcode unverändert.
+
+/** Zeitpunkt in Europe/Berlin mit Zonenangabe, unabhängig von lib/types.ts gerechnet (wie in S-Z1). */
+const BERLIN_FORMAT = new Intl.DateTimeFormat("de-DE", {
+  timeZone: "Europe/Berlin",
+  day: "2-digit",
+  month: "2-digit",
+  year: "numeric",
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+  hourCycle: "h23",
+});
+function berlinZeit(iso) {
+  const t = Object.fromEntries(BERLIN_FORMAT.formatToParts(new Date(iso)).map((p) => [p.type, p.value]));
+  return `${t.day}.${t.month}.${t.year} ${t.hour}:${t.minute}:${t.second} (Europe/Berlin)`;
+}
+
+/** Ansicht mit einer Lesung ohne Route (laden, Abweisung). */
+async function lesungHtml(lesung, slug = SLUG) {
+  const V = await ansicht();
+  return renderToStaticMarkup(React.createElement(V.StudioAnsicht, { slug, lesung, kopiere: () => {}, kopierStatus: () => "Kopieren" }));
+}
+
+const NICHT_LESBAR_2XX = { art: "abgewiesen", httpStatus: 200, text: "Antwort ohne lesbare Studio-Teile" };
+
+test("S-M1 (B18) Teilfehler Export: Der Fehlertext von /api/objekte geht nur bereinigt hinaus — ohne URL, ohne Schlüssel", async () => {
+  lauf(1, { steps: ALT });
+  // Der Testwert aus beforeEach (kein echter Schlüssel) steht im Fehlertext, dazu eine URL mit Token.
+  const schluessel = process.env.SUPABASE_SERVICE_KEY;
+  welt.objekteAntwort = {
+    status: 502,
+    body: { fehler: `upstream https://export.example/v1/objekte?token=abc antwortet nicht (${schluessel})`, fehler_art: "quelle_fehler" },
+  };
+  const { body } = await hole();
+  const o = body.objekt;
+  assert.equal(o.status, "fehler");
+  assert.equal(o.fehler_art, "quelle_fehler");
+  assert.equal(o.hinweis, "upstream [URL] antwortet nicht ([entfernt])");
+  assert.equal(body.assets.status, "ok");
+  // Die Ansicht zeigt den bereinigten Grund; roh steht er weder im Text noch im title.
+  const html = await studioHtml(body);
+  assert.ok(sichtbar(html).includes("Fehler: upstream [URL] antwortet nicht ([entfernt])"), sichtbar(html).slice(0, 1200));
+  for (const roh of ["export.example", "token=abc", schluessel]) assert.ok(!ent(html).includes(roh), roh);
+});
+
+test("S-M2 (B19, B20) Kosten je Stufe: cost 0 ist eine gespeicherte Angabe, eine negative Zahl keine — Regel wie leseKosten der Pipeline", async () => {
+  welt.objekteAntwort = exportAntwort();
+  const rest = [nichtGelaufen("publisher"), nichtGelaufen("amplifier")];
+  lauf(1, { steps: [gelaufen("researcher", 0), gelaufen("scribe", 0), gelaufen("counsel", 0), ...rest] });
+  lauf(2, { steps: [gelaufen("researcher", 0.05), gelaufen("scribe", -0.5), gelaufen("counsel", 0.02), ...rest] });
+  const { body } = await hole();
+  const je = Object.fromEntries(body.assets.wert.map((a) => [a.id, a.kosten_usd]));
+  // Drei gelaufene Stufen mit cost 0: eine gemessene 0 (ok), nicht "keine Kostenangabe".
+  assert.equal(je[1].status, "ok", je[1].hinweis);
+  assert.deepEqual(je[1].wert, { summe_usd: 0, stufen_gelaufen: 3, stufen_mit_angabe: 3, stufen_ohne_angabe: 0 });
+  // cost −0,5 ist keine Angabe: nicht summiert, die Summe ist eine Untergrenze.
+  assert.equal(je[2].status, "warnung");
+  assert.deepEqual(je[2].wert, { summe_usd: 0.07, stufen_gelaufen: 3, stufen_mit_angabe: 2, stufen_ohne_angabe: 1 });
+  assert.equal(je[2].hinweis, "Untergrenze: 1 Stufe von 3 gelaufenen ohne Kostenangabe");
+  assert.equal(body.kosten_usd.status, "warnung");
+  assert.deepEqual(body.kosten_usd.wert, {
+    summe: 0.07,
+    laeufe: 2,
+    laeufe_mit_angabe: 2,
+    laeufe_ohne_angabe: 0,
+    laeufe_unvollstaendig: 1,
+    laeufe_alte_preistabelle: 2,
+  });
+});
+
+test("S-M3 (B24) Teilfehler Export: 2xx ohne lesbares JSON (etwa HTML eines Proxys) heißt 'Antwort von /api/objekte nicht lesbar'", async () => {
+  lauf(1, { steps: ALT });
+  const harnessFetch = globalThis.fetch;
+  let status = 200;
+  globalThis.fetch = async (input, init = {}) => {
+    const url = String(typeof input === "string" ? input : input.url);
+    if (url.endsWith("/api/objekte")) {
+      return new Response("<!doctype html><title>Proxy</title><p>Wartung</p>", { status, headers: { "content-type": "text/html" } });
+    }
+    return harnessFetch(input, init);
+  };
+  try {
+    // Daneben derselbe HTML-Körper mit 502: Dann zählt nur der Status (wie exportFehlerAusAntwort ohne Fehlerfeld).
+    for (const [s, art, hinweis] of [
+      [200, "quelle_fehler", "Antwort von /api/objekte nicht lesbar"],
+      [502, "unbekannt", "HTTP 502"],
+    ]) {
+      status = s;
+      const r = await hole();
+      assert.equal(r.status, 200);
+      const o = r.body.objekt;
+      assert.equal(o.status, "fehler", String(s));
+      assert.equal(o.wert, null);
+      assert.equal(o.fehler_art, art, String(s));
+      assert.equal(o.hinweis, hinweis, String(s));
+      assert.equal(r.body.assets.status, "ok", String(s));
+    }
+  } finally {
+    globalThis.fetch = harnessFetch;
+  }
+});
+
+test("S-M4 (B35, B36) Kosten tragen den Zeitpunkt der Lesung: kosten_usd und jede Asset-Angabe mit gemessen_am, sichtbar im title", async () => {
+  standardWelt();
+  const { body } = await hole();
+  const gelesen = body.assets.gemessen_am;
+  assert.ok(Number.isFinite(Date.parse(gelesen)), String(gelesen));
+  assert.equal(body.kosten_usd.status, "warnung");
+  assert.equal(body.kosten_usd.gemessen_am, gelesen);
+  const je = Object.fromEntries(body.assets.wert.map((a) => [a.id, a.kosten_usd]));
+  for (const [id, status] of [[1, "ok"], [2, "ok"], [4, "warnung"]]) {
+    assert.equal(je[id].status, status, `Asset ${id}`);
+    assert.equal(je[id].gemessen_am, gelesen, `Asset ${id}`);
+  }
+  // Objekt-Summe mit Status ok: Stand der Datenbank vom 08.11.2026 (S-B7).
+  zuruecksetzen();
+  gemessenerStand();
+  const ok = (await hole()).body;
+  assert.equal(ok.kosten_usd.status, "ok");
+  assert.equal(ok.kosten_usd.gemessen_am, ok.assets.gemessen_am);
+  // Ansicht: Kosten-Kachel und Kosten jeder Karte nennen im title den Zeitpunkt, nie "gemessen: nicht gemessen".
+  const html = await studioHtml(ok);
+  const zeit = `gemessen: ${berlinZeit(ok.assets.gemessen_am)}`;
+  const kachelTitel = ent(/<div[^>]*data-teil="kosten_usd"[^>]*title="([^"]*)"/.exec(html)?.[1] ?? "");
+  assert.ok(kachelTitel.includes(zeit), kachelTitel);
+  const kartenTitel = [...html.matchAll(/<div class="min-w-0" title="([^"]*)"><dt class="mono-label">Kosten \(Claude, USD\)<\/dt>/g)].map((m) => ent(m[1]));
+  assert.equal(kartenTitel.length, 10);
+  for (const t of kartenTitel) assert.ok(t.includes(zeit), t);
+});
+
+test("S-M5 (C08) Seite: 2xx ohne die fünf Studio-Teile ist 'Studio nicht lesbar' — kein Absturz der Ansicht", async () => {
+  standardWelt();
+  const echt = (await hole()).body;
+  const V = await ansicht();
+  assert.equal(V.leseStudioAntwort(200, echt).art, "daten", "Gegenprobe: die Antwort der Route ist lesbar");
+  const ohneMessung = structuredClone(echt);
+  delete ohneMessung.messung;
+  const statusOhneText = { ...structuredClone(echt), kosten_usd: { ...echt.kosten_usd, status: 1 } };
+  for (const daten of [{ hallo: "welt" }, ohneMessung, statusOhneText, [], null]) {
+    const lesung = V.leseStudioAntwort(200, daten);
+    assert.deepEqual(lesung, NICHT_LESBAR_2XX, JSON.stringify(daten).slice(0, 80));
+    const t = sichtbar(await lesungHtml(lesung));
+    assert.ok(t.includes("Studio nicht lesbar Antwort ohne lesbare Studio-Teile"), t.slice(0, 800));
+  }
+  // Über die Seite: Die Ansicht bekommt die Abweisung, nicht die fremde Antwort als Daten.
+  const vorher = globalThis.fetch;
+  globalThis.fetch = async () => ({ status: 200, json: async () => ({ hallo: "welt" }) });
+  try {
+    const s = await seitenLauf();
+    s.lz.rendere();
+    await s.lz.ruhe();
+    assert.deepEqual(s.letzte().lesung, NICHT_LESBAR_2XX);
+  } finally {
+    globalThis.fetch = vorher;
+  }
+});
+
+test("S-M6 (C17) Kopf: 'Denkmal-AfA bis …' nur, wenn der Export istDenkmal true meldet", async () => {
+  for (const [istDenkmal, erwartet, status] of [
+    [false, "AfA 5 % (laut Export kein Denkmal)", "ok"],
+    [undefined, "AfA 5 % (Denkmal-Angabe nicht im Export)", "warnung"],
+    [true, "Denkmal-AfA bis 5 %", "ok"],
+  ]) {
+    zuruecksetzen();
+    const objekt = { ...RITTERGUT, afaProzent: 5, istDenkmal };
+    if (istDenkmal === undefined) delete objekt.istDenkmal;
+    welt.objekteAntwort = exportAntwort([objekt]);
+    const { body } = await hole();
+    assert.equal(body.objekt.status, status, String(istDenkmal));
+    assert.deepEqual(body.objekt.wert.afa, { prozent: 5, denkmal: istDenkmal ?? null });
+    const html = await studioHtml(body);
+    const afa = /<dd[^>]*data-afa[^>]*>(.*?)<\/dd>/s.exec(html)?.[1] ?? "";
+    assert.equal(sichtbar(afa).trim(), erwartet, String(istDenkmal));
+  }
+});
+
+test("S-M7 (C18) Kopf: Fehlt das Objekt im Export, nennt die Seite genau diese Ursache — nicht 'Export nicht lesbar'", async () => {
+  lauf(1, { steps: ALT });
+  welt.objekteAntwort = exportAntwort([VILLA]);
+  const { body } = await hole();
+  assert.equal(body.objekt.fehler_art, "nicht_im_export");
+  const html = await studioHtml(body);
+  const kopf = /<section[^>]*data-teil="objekt"[^>]*>.*?<\/section>/s.exec(html)?.[0] ?? "";
+  const t = sichtbar(kopf);
+  assert.ok(t.includes("OBJEKT NICHT IM EXPORT — Steinadel-Export · Objektkopf nicht lesbar"), t);
+  assert.ok(
+    t.includes("Der Steinadel-Export wurde gelesen, enthält dieses Objekt aber nicht. Fehler: Objekt „rittergut-seifersdorf“ nicht im Steinadel-Export"),
+    t,
+  );
+  assert.ok(!t.includes("EXPORT NICHT LESBAR"), t);
+  assert.match(kopf, /<p class="mono-label" style="color:var\(--gp-rose\)">/);
+});
+
+test("S-M8 (C24) Pfad: Eine Kennung aus der URL mit dem geschützten Namen steht maskiert da — beim Laden und bei 404", async () => {
+  const kennung = `${NAME.toLowerCase()}-villa`;
+  const V = await ansicht();
+  for (const lesung of [{ art: "laedt" }, V.leseStudioAntwort(404, NICHT_IM_STUDIO)]) {
+    const html = await lesungHtml(lesung, kennung);
+    assert.doesNotMatch(ent(html), ENTHAELT_NAMEN, lesung.art);
+    const pfad = /<nav[^>]*aria-label="Pfad"[^>]*>.*?<\/nav>/s.exec(html)?.[0] ?? "";
+    assert.ok(sichtbar(pfad).includes(`Objekt-Studio · ${regeln.NAMENS_ERSATZ}-villa`), sichtbar(pfad));
+  }
+});
+
+test("S-M9 (F10) Abweisung: Ein Fehlertext der Route mit dem geschützten Namen erscheint maskiert — in der Lesung und im Markup", async () => {
+  const V = await ansicht();
+  for (const [status, daten, erwartet] of [
+    [500, { fehler: `Studio nicht ermittelbar: ${NAME} antwortet nicht`, fehler_art: "programmfehler" }, `Studio nicht ermittelbar: ${regeln.NAMENS_ERSATZ} antwortet nicht (HTTP 500)`],
+    [502, { error: `Bad Gateway (${NAME})` }, `Bad Gateway (${regeln.NAMENS_ERSATZ}) (HTTP 502)`],
+  ]) {
+    const lesung = V.leseStudioAntwort(status, daten);
+    assert.deepEqual(lesung, { art: "abgewiesen", httpStatus: status, text: erwartet });
+    const html = await lesungHtml(lesung);
+    assert.doesNotMatch(ent(html), ENTHAELT_NAMEN, String(status));
+    assert.ok(sichtbar(html).includes(`Studio nicht lesbar ${erwartet}`), sichtbar(html).slice(0, 800));
+  }
+  // Die Ansicht maskiert auch selbst ("der Server maskiert schon, die Ansicht noch einmal").
+  const roh = await lesungHtml({ art: "abgewiesen", httpStatus: 500, text: `Fehler bei ${NAME}` });
+  assert.doesNotMatch(ent(roh), ENTHAELT_NAMEN);
+  assert.ok(sichtbar(roh).includes(`Studio nicht lesbar Fehler bei ${regeln.NAMENS_ERSATZ}`), sichtbar(roh).slice(0, 800));
+});
