@@ -274,9 +274,12 @@ export function zeile(id) {
   return welt.content.find((z) => z.id === id) ?? null;
 }
 
-async function supabaseAntwort(url, methode, kopf, body) {
+async function supabaseAntwort(url, methode, kopf, body, signal) {
   const tabelle = url.pathname.replace("/rest/v1/", "");
-  const anfrage = { art: "supabase", methode, tabelle, url, params: url.searchParams, body };
+  // kopf und signal (Objekt-Studio Schritt 3): Header der Anfrage, etwa apikey — damit eine Störung nur
+  // einen bestimmten Schlüssel treffen kann —, und das Abbruchsignal der Abfrage (Zeitlimit prüfbar;
+  // tests/r-content-server.test.mjs).
+  const anfrage = { art: "supabase", methode, tabelle, url, params: url.searchParams, body, kopf, signal };
   welt.log.push({ methode, tabelle, query: decodeURIComponent(url.searchParams.toString()), body });
   if (welt.vorAntwort) await welt.vorAntwort(anfrage);
   if (welt.stoerung) {
@@ -391,7 +394,7 @@ export function installiere() {
     const roh = typeof init.body === "string" ? init.body : undefined;
     const body = roh === undefined || roh === "" ? undefined : JSON.parse(roh);
 
-    if (url.hostname === SUPABASE_HOST) return supabaseAntwort(url, methode, kopf, body);
+    if (url.hostname === SUPABASE_HOST) return supabaseAntwort(url, methode, kopf, body, init.signal);
     if (url.hostname === "api.anthropic.com") {
       // Bezahlter Aufruf in echt — hier nur die Attrappe; ohne sie wirft der Aufruf.
       welt.claudeAufrufe += 1;

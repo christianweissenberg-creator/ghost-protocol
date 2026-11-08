@@ -111,6 +111,16 @@ export function hookLaufzeit() {
     }
     return baum;
   }
+  /** Seite verlassen (Objekt-Studio Schritt 3): die Aufräumfunktion jedes Effekts läuft einmal, wie beim Unmount. */
+  function abbauen() {
+    for (const slot of z.hooks) {
+      if (slot && typeof slot.aufraeumen === "function") {
+        const aufraeumen = slot.aufraeumen;
+        slot.aufraeumen = undefined;
+        aufraeumen();
+      }
+    }
+  }
   return {
     attrappen: { react, "react/jsx-runtime": { jsx, jsxs: jsx, Fragment } },
     jsx,
@@ -120,6 +130,7 @@ export function hookLaufzeit() {
     },
     rendere,
     ruhe,
+    abbauen,
   };
 }
 
