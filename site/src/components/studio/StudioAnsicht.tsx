@@ -7,12 +7,15 @@
 // Beleg-Kette kopiert auf Wunsch den CTA-Link (wie auf /content).
 // Jeder Text aus Export und Datenbank erscheint maskiert (der Server maskiert schon, die Ansicht
 // noch einmal). Jede Zahl trägt im title Quelle und Messzeitpunkt.
+// Zeitangaben des Studios stehen in Europe/Berlin mit Zonenangabe (wie die Zählung des Servers in
+// lib/studio/lesen.ts), unabhängig von der Zeitzone des Browsers. Die Beleg-Kette ist mit /content
+// geteilt und bleibt unverändert; sie zeigt Zeiten in der Zeitzone des Browsers (Vermerk an der Liste).
 
 import Link from "next/link";
 import type { ReactNode } from "react";
 import { objekteFehlerAnzeige, objektFehlerText } from "@/lib/hooks-status";
 import type { ObjekteFehlerArt } from "@/lib/hooks-status";
-import { datumZeit, formatiereUsd4, formatiereUsdUntergrenze } from "@/lib/types";
+import { berlinDatumZeit, formatiereUsd4, formatiereUsdUntergrenze } from "@/lib/types";
 import { STUDIO_BAUSCHRITTE, nochNichtGebautText } from "@/lib/studio/objekte";
 import { STUDIO_REGELN } from "@/lib/studio/regeln";
 import type {
@@ -25,9 +28,17 @@ import type {
   StudioMesswert,
   StudioStatus,
 } from "@/lib/studio/typen";
-import type { CounselUrteil } from "@/lib/status-types";
 import { BelegKette } from "@/components/studio/BelegKette";
-import { FARBE_BERNSTEIN, FARBE_GRUEN, FARBE_ROT, istObjekt, maskiert } from "@/components/studio/beleg-hilfen";
+import {
+  FARBE_BERNSTEIN,
+  FARBE_GRUEN,
+  FARBE_ROT,
+  bezugHinweis,
+  freigabeLageGemerkt,
+  istObjekt,
+  maskiert,
+  urteilAnzeige,
+} from "@/components/studio/beleg-hilfen";
 
 /** Was die Seite gerade zeigen kann: lädt, abgewiesen (400/401/404/500 oder Netz), Daten. */
 export type StudioLesung =
@@ -82,14 +93,14 @@ function assetStatus(status: string): { label: string; farbe: string } {
   return Object.hasOwn(ASSET_STATUS, status) ? ASSET_STATUS[status] : { label: maskiert(status), farbe: "#6b6b7b" };
 }
 
-function urteilFarbe(urteil: CounselUrteil): string {
-  if (urteil === "FREIGABE") return FARBE_GRUEN;
-  if (urteil === "ABLEHNUNG") return FARBE_ROT;
-  return FARBE_BERNSTEIN;
-}
-
 function laeufeText(n: number): string {
   return n === 1 ? "1 Lauf" : `${n} Läufe`;
+}
+
+/** Zeitpunkt in Europe/Berlin mit Zonenangabe, z. B. "08.11.2026 08:30:00 (Europe/Berlin)"; sonst der Ersatztext. */
+function zeitBerlin(iso: string | null | undefined, ersatz: string): string {
+  const t = berlinDatumZeit(iso);
+  return t === null ? ersatz : `${t} (Europe/Berlin)`;
 }
 
 /** title-Text eines Teils: Quelle, Hinweis, Messzeitpunkt. */
@@ -97,7 +108,7 @@ function teilTitel(m: StudioMesswert<unknown>): string {
   return [
     `Quelle: ${maskiert(m.quelle)}`,
     m.hinweis ? `Hinweis: ${maskiert(m.hinweis)}` : null,
-    `gemessen: ${datumZeit(m.gemessen_am) ?? "nicht gemessen"}`,
+    `gemessen: ${zeitBerlin(m.gemessen_am, "nicht gemessen")}`,
   ]
     .filter(Boolean)
     .join("\n");
@@ -160,7 +171,7 @@ function Kachel({
   );
 }
 
-function NichtGebaut({ titel, schritt, text }: { titel: string; schritt: number; text: string }) {
+function NichtGebaut({ titel, schritt, text, children }: { titel: string; schritt: number; text: string; children?: ReactNode }) {
   return (
     <div className="card-ghost p-4 min-w-0" data-noch-nicht-gebaut={schritt}>
       <p className="text-[10px] text-text-muted uppercase tracking-widest mb-2">{titel}</p>
@@ -168,6 +179,7 @@ function NichtGebaut({ titel, schritt, text }: { titel: string; schritt: number;
         {nochNichtGebautText(schritt)}
       </p>
       <p className="text-[11px] text-text-muted mt-1 break-words">{text}</p>
+      {children}
     </div>
   );
 }
@@ -192,14 +204,13 @@ function ObjektKopfKarte({ m, slug }: { m: StudioMesswert<ObjektKopf>; slug: str
         <p className="text-[12px] break-words" style={{ color: "var(--gp-ink-2)" }}>
           {f.titel} Fehler: {objektFehlerText(m.hinweis ?? "unbekannter Fehler")}
         </p>
-        <p className="text-[10px] text-text-muted">Objekt-Kennung: {maskiert(slug)} · Leseversuch {datumZeit(m.gemessen_am) ?? "ohne Zeitpunkt"}</p>
+        <p className="text-[10px] text-text-muted">Objekt-Kennung: {maskiert(slug)} · Leseversuch {zeitBerlin(m.gemessen_am, "ohne Zeitpunkt")}</p>
       </section>
     );
   }
   const k = m.wert;
   const nicht = "nicht im Export";
   const datierung = k.datierung ? `${k.datierung.bezeichnung} ${k.datierung.jahr}` : `Baujahr ${nicht}`;
-  const erzeugt = datumZeit(k.export.generiert_am);
   return (
     <section className="card-ghost p-5 mb-6 min-w-0" data-teil="objekt" data-status={m.status} title={teilTitel(m)}>
       <div className="flex flex-wrap items-center gap-2 mb-2">
@@ -241,7 +252,7 @@ function ObjektKopfKarte({ m, slug }: { m: StudioMesswert<ObjektKopf>; slug: str
         </div>
       </dl>
       <p className="mono-label mt-4 break-words" style={{ color: "var(--gp-ink-3)" }} data-quelle>
-        Quelle: Steinadel-Export · erzeugt {erzeugt ?? "ohne Zeitpunkt"} · abgerufen {datumZeit(m.gemessen_am) ?? "ohne Zeitpunkt"}
+        Quelle: Steinadel-Export · erzeugt {zeitBerlin(k.export.generiert_am, "ohne Zeitpunkt")} · abgerufen {zeitBerlin(m.gemessen_am, "ohne Zeitpunkt")}
         {k.export.quelle ? ` · Export-Kopf „${maskiert(k.export.quelle)}“` : ""}
         {k.export.version ? ` · Version ${maskiert(k.export.version)}` : ""}
       </p>
@@ -265,6 +276,13 @@ function AssetKarte({
 }) {
   const status = assetStatus(a.status);
   const kanal = [a.kanal, a.format].filter((t): t is string => typeof t === "string" && t.trim() !== "").map(maskiert);
+  // Anzeigeregel R2 wie in der Beleg-Kette und auf /content: grünes FREIGABE nur, wenn COUNSEL genau
+  // den Freigabetext geprüft hat. Dieselbe gemerkte Freigabe-Lage, die die Beleg-Kette dieser Karte
+  // zeigt — Karte und Kette können sich nicht widersprechen.
+  const lage = freigabeLageGemerkt(a.beleg);
+  const urteil = urteilAnzeige(a.counsel.urteil, lage.bezug);
+  // Wie der Hinweis am Freigeben-Knopf auf /content: freigebbar, aber nicht genau dieser Text geprüft.
+  const bezug = a.freigabe_sperre ? null : bezugHinweis(lage.bezug);
   return (
     <article className="card-ghost p-4 min-w-0" data-asset={a.id}>
       <div className="flex flex-wrap items-center gap-2 mb-1.5">
@@ -284,8 +302,12 @@ function AssetKarte({
         <div className="min-w-0">
           <dt className="mono-label">COUNSEL-Urteil (abgeleitet)</dt>
           <dd className="break-words">
-            <span className="font-semibold font-[family-name:var(--font-jbmono)]" style={{ color: urteilFarbe(a.counsel.urteil) }}>
-              {a.counsel.urteil}
+            <span
+              className="font-semibold font-[family-name:var(--font-jbmono)]"
+              style={{ color: urteil.farbe }}
+              data-karten-urteil={lage.bezug}
+            >
+              {urteil.text}
             </span>
             <span className="text-text-muted"> · {maskiert(a.counsel.grund)}</span>
           </dd>
@@ -295,6 +317,11 @@ function AssetKarte({
           <dd className="break-words" style={{ color: a.freigabe_sperre ? FARBE_ROT : FARBE_GRUEN }} data-sperre={a.freigabe_sperre ? "ja" : "nein"}>
             {a.freigabe_sperre ? `gesperrt: ${maskiert(a.freigabe_sperre)}` : "freigebbar laut Server-Regel"}
           </dd>
+          {bezug && (
+            <dd className="text-[10px] break-words" style={{ color: FARBE_BERNSTEIN }} data-bezug-hinweis>
+              {bezug}
+            </dd>
+          )}
         </div>
         <div className="min-w-0" title={teilTitel(a.kosten_usd)}>
           <dt className="mono-label">Kosten (Claude, USD)</dt>
@@ -308,7 +335,7 @@ function AssetKarte({
         </div>
         <div className="min-w-0">
           <dt className="mono-label">Erstellt</dt>
-          <dd className="text-text-muted">{datumZeit(a.erstellt_am) ?? "ohne Zeitpunkt"}</dd>
+          <dd className="text-text-muted">{zeitBerlin(a.erstellt_am, "ohne Zeitpunkt")}</dd>
         </div>
       </dl>
       <details className="mt-3" id={`beleg-${a.id}`}>
@@ -343,10 +370,13 @@ function AssetListe({
         </p>
       ) : m.wert.length === 0 ? (
         <p className="card-ghost p-4 text-xs text-text-muted">
-          Die Abfrage lieferte keine content-Zeile mit metadata.objekt_slug = {maskiert(slug)} (gelesen {datumZeit(m.gemessen_am) ?? "ohne Zeitpunkt"}).
+          Die Abfrage lieferte keine content-Zeile mit metadata.objekt_slug = {maskiert(slug)} (gelesen {zeitBerlin(m.gemessen_am, "ohne Zeitpunkt")}).
         </p>
       ) : (
         <div className="space-y-3">
+          <p className="text-[10px] text-text-muted break-words" data-zeitzonen-vermerk>
+            Zeiten des Studios in Europe/Berlin; die Beleg-Kette zeigt ihre Zeiten wie /content in der Zeitzone dieses Browsers.
+          </p>
           {m.hinweis && (
             <p className="text-[11px] break-words" style={{ color: FARBE_BERNSTEIN }}>
               {maskiert(m.hinweis)}
@@ -361,6 +391,19 @@ function AssetListe({
   );
 }
 
+/**
+ * Unterzeile der Kosten-Kachel. Sind nicht alle Läufe geladen (abgeschnitten) oder fehlt die Zählung,
+ * gilt "ohne Kostenangabe" nur für die geladenen Läufe; die Gesamtzahl kommt dann aus der Zählung der
+ * Abfrage (wie die Assets-Kachel) — nie die geladenen Läufe als "gesamt".
+ */
+export function kostenUnterzeile(k: StudioKosten, gesamt: number | null): string {
+  if (gesamt === null) return `${k.laeufe_ohne_angabe} von ${k.laeufe} geladenen Läufen ohne Kostenangabe · ohne Zählung`;
+  if (gesamt > k.laeufe) {
+    return `${k.laeufe_ohne_angabe} von ${k.laeufe} geladenen Läufen ohne Kostenangabe · ${laeufeText(gesamt)} laut Zählung`;
+  }
+  return `${laeufeText(k.laeufe_ohne_angabe)} ohne Kostenangabe · ${laeufeText(k.laeufe)} gesamt`;
+}
+
 function Kennzahlen({ antwort }: { antwort: StudioAntwort }) {
   const assets = antwort.assets;
   const kosten = antwort.kosten_usd;
@@ -368,46 +411,60 @@ function Kennzahlen({ antwort }: { antwort: StudioAntwort }) {
   const messung = antwort.messung;
   const anzahl =
     assets.status === "fehler" || assets.wert === null ? "nicht lesbar" : String(assets.gesamt ?? assets.wert.length);
+  // Ohne Zählung (gesamt null) ist die Zahl nur die Menge der geladenen Zeilen — so steht es auch da.
   const anzahlUnter =
     assets.status === "fehler" || assets.wert === null
       ? maskiert(assets.hinweis ?? "Lesefehler")
-      : `Zählung der Abfrage · Supabase · content${assets.gesamt !== null && assets.gesamt !== assets.wert.length ? ` · ${assets.wert.length} geladen` : ""}`;
+      : assets.gesamt === null
+        ? "geladene Zeilen, ohne Zählung · Supabase · content"
+        : `Zählung der Abfrage · Supabase · content${assets.gesamt !== assets.wert.length ? ` · ${assets.wert.length} geladen` : ""}`;
   const k = kosten.wert;
+  const kostenLesbar = kosten.status !== "fehler" && k !== null;
   return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-      <Kachel teil="assets" titel="Assets (Text)" wert={anzahl} unterzeile={anzahlUnter} status={assets.status} title={teilTitel(assets)} />
-      <Kachel
-        teil="kosten_usd"
-        titel="Claude-Kosten (USD, geschätzt)"
-        wert={kosten.status === "fehler" || k === null ? "nicht lesbar" : kostenWertText(k, kosten.status)}
-        unterzeile={
-          kosten.status === "fehler" || k === null ? (
-            maskiert(kosten.hinweis ?? "Lesefehler")
-          ) : (
-            <span data-ohne-angabe={k.laeufe_ohne_angabe}>
-              {laeufeText(k.laeufe_ohne_angabe)} ohne Kostenangabe · {laeufeText(k.laeufe)} gesamt
-            </span>
-          )
-        }
-        status={kosten.status}
-        title={teilTitel(kosten)}
-      />
-      <Kachel
-        teil="kosten_credits"
-        titel="Higgsfield-Credits"
-        wert={ungebautText(credits, STUDIO_BAUSCHRITTE.credits)}
-        unterzeile={`geplante Quelle: ${maskiert(credits.quelle)}`}
-        status={credits.status}
-        title={teilTitel(credits)}
-      />
-      <Kachel
-        teil="messung"
-        titel="Messplan"
-        wert={ungebautText(messung, STUDIO_BAUSCHRITTE.messplan)}
-        unterzeile={`geplante Quelle: ${maskiert(messung.quelle)}`}
-        status={messung.status}
-        title={teilTitel(messung)}
-      />
+    <div className="mb-6">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <Kachel teil="assets" titel="Assets (Text)" wert={anzahl} unterzeile={anzahlUnter} status={assets.status} title={teilTitel(assets)} />
+        <Kachel
+          teil="kosten_usd"
+          titel="Claude-Kosten (USD, geschätzt)"
+          wert={kostenLesbar ? kostenWertText(k, kosten.status) : "nicht lesbar"}
+          unterzeile={
+            kostenLesbar ? (
+              <span data-ohne-angabe={k.laeufe_ohne_angabe}>{kostenUnterzeile(k, assets.gesamt)}</span>
+            ) : (
+              maskiert(kosten.hinweis ?? "Lesefehler")
+            )
+          }
+          status={kosten.status}
+          title={teilTitel(kosten)}
+        />
+        <Kachel
+          teil="kosten_credits"
+          titel="Higgsfield-Credits"
+          wert={ungebautText(credits, STUDIO_BAUSCHRITTE.credits)}
+          unterzeile={`geplante Quelle: ${maskiert(credits.quelle)}`}
+          status={credits.status}
+          title={teilTitel(credits)}
+        />
+        <Kachel
+          teil="messung"
+          titel="Messplan"
+          wert={ungebautText(messung, STUDIO_BAUSCHRITTE.messplan)}
+          unterzeile={`geplante Quelle: ${maskiert(messung.quelle)}`}
+          status={messung.status}
+          title={teilTitel(messung)}
+        />
+      </div>
+      {/* Vorbehalte der Kostenschätzung sichtbar (Schätzung, alte Preistabelle, Untergrenze), nicht nur im title — wie unter der Kosten-Kachel des Dashboards. */}
+      {kostenLesbar && kosten.hinweis && (
+        <p
+          className="font-[family-name:var(--font-jbmono)] text-[10px] leading-relaxed break-words mt-2"
+          style={{ color: kosten.status === "ok" ? "var(--gp-ink-3)" : FARBE_BERNSTEIN }}
+          data-kosten-hinweis
+        >
+          Claude-Kosten: {maskiert(kosten.hinweis)}
+        </p>
+      )}
     </div>
   );
 }
@@ -511,7 +568,13 @@ export function StudioAnsicht({
               titel="Video / Medien"
               schritt={STUDIO_BAUSCHRITTE.medien}
               text="Startbild, Original und Export je Video mit Beleg und Prüfprotokoll."
-            />
+            >
+              {/* Nur der Hinweis auf den Erzeugungsweg: Das Studio ruft Higgsfield nie selbst auf. */}
+              <p className="text-[11px] mt-2 break-words" style={{ color: "var(--gp-ink-2)" }} data-erzeugungsweg>
+                Higgsfield im Studio: aktiver Erzeugungsweg ist die Connector-Sitzung (Higgsfield-Connector in einer
+                Claude-Sitzung). Das Studio ruft Higgsfield nicht auf.
+              </p>
+            </NichtGebaut>
           </div>
           <AssetListe m={lesung.antwort.assets} slug={lesung.antwort.objekt_slug} kopiere={kopiere} kopierStatus={kopierStatus} />
         </>

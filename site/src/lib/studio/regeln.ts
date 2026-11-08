@@ -1,8 +1,11 @@
 // Objekt-Studio: "Regeln, die mitlaufen" (Schritt 2, 08.11.2026) — statische Liste für die
 // Studio-Seite. Jede Regel nennt, wo sie steht (Datei im Repo oder Commit) und wie sie durchgesetzt
-// wird. Nur öffentlich zitierbare Fundstellen; wo es keine gibt, steht das dabei.
+// wird. Nur öffentlich zitierbare Fundstellen; wo es keine gibt, steht das dabei. Regeln, deren
+// Prüfung erst ein späterer Bauschritt bringt (Anker, Startbild, Rechte), stehen mit
+// "noch nicht gebaut (Schritt N)" da — nie als laufende Prüfung.
 
 import { MIN_FREIGABE_ZEICHEN } from "@/lib/freigabe-regeln";
+import { STUDIO_BAUSCHRITTE, nochNichtGebautText } from "./objekte";
 
 export interface StudioRegel {
   regel: string;
@@ -13,6 +16,7 @@ export interface StudioRegel {
 }
 
 const PIPELINE = "site/src/app/api/content/pipeline/route.ts (buildObjektBlock)";
+const OHNE_FUNDSTELLE = "Vorgabe des Inhabers; im Repo noch ohne eigene Fundstelle";
 
 export const STUDIO_REGELN: readonly StudioRegel[] = [
   {
@@ -31,8 +35,10 @@ export const STUDIO_REGELN: readonly StudioRegel[] = [
     pruefung: "Code, in jeder Anzeige des Studios",
   },
   {
+    // 0f553a9 verlangte die Kennzeichnung "im Bild UND in der Caption"; den ausgeschriebenen,
+    // sichtbaren Text (eine Anweisung an den Designer genügt nicht) brachte erst 77229ef.
     regel: "KI-Hinweis als sichtbarer Text im Content, nie nur als Design-Notiz.",
-    fundstelle: `Commit 0f553a9; ${PIPELINE}, Pflicht-Element 2`,
+    fundstelle: `Commits 0f553a9 und 77229ef; ${PIPELINE}, Pflicht-Element 2`,
     pruefung: "COUNSEL prüft den Text",
   },
   {
@@ -59,6 +65,21 @@ export const STUDIO_REGELN: readonly StudioRegel[] = [
     regel: "Keine Zahl ohne Quelle, nie 0 als Platzhalter.",
     fundstelle: "site/src/lib/status-types.ts (Messwert); site/src/lib/studio/typen.ts",
     pruefung: "Code, in jeder Antwort und Anzeige des Studios",
+  },
+  {
+    regel: "Anker-Bilder nur aus dem Anker-Manifest und mit unverändertem Datei-Hash; ein Anker heißt Visualisierung, nie Foto.",
+    fundstelle: OHNE_FUNDSTELLE,
+    pruefung: nochNichtGebautText(STUDIO_BAUSCHRITTE.anker),
+  },
+  {
+    regel: "Ein Video startet nur aus einem Ausschnitt eines Ankers; das Startbild wird gegen diesen Ausschnitt abgeglichen.",
+    fundstelle: OHNE_FUNDSTELLE,
+    pruefung: nochNichtGebautText(STUDIO_BAUSCHRITTE.medien),
+  },
+  {
+    regel: "Medien erst freigebbar, wenn die Nutzungsrechte geklärt und mit Nachweis vermerkt sind; bis dahin keine Veröffentlichung.",
+    fundstelle: OHNE_FUNDSTELLE,
+    pruefung: nochNichtGebautText(STUDIO_BAUSCHRITTE.medienregel),
   },
   {
     regel: "Bauträger öffentlich nicht namentlich nennen.",

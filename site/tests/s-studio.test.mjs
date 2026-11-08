@@ -11,7 +11,7 @@
 // Kopie; Ansicht und Seite lassen sich über Z_TSX_* tauschen (tests/harness/tsx.mjs).
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync, statSync } from "node:fs";
 import { registerHooks } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -578,7 +578,9 @@ test("S-C1 Abnahme Seite: Kopf mit 'Ersterwähnung 1335' und Export-Zeitpunkt, P
   const t = sichtbar(html);
   assert.ok(t.includes("Testort · Ersterwähnung 1335 · Status Vermarktung"), t.slice(0, 900));
   assert.ok(!t.includes("Baujahr 1335"));
-  assert.ok(t.includes(`Quelle: Steinadel-Export · erzeugt ${types.datumZeit(GENERIERT)} · abgerufen`), t.slice(0, 1400));
+  // Nachbesserung 08.11.2026 (Prüfbefund K1): fester Sollwert in Europe/Berlin mit Zonenangabe statt
+  // types.datumZeit(GENERIERT) — das war dieselbe Funktion wie in der Ansicht und hing an der Zone des Prozesses.
+  assert.ok(t.includes("Quelle: Steinadel-Export · erzeugt 08.11.2026 08:30:00 (Europe/Berlin) · abgerufen"), t.slice(0, 1400));
   assert.ok(t.includes("ab 123.456 € (Testwert)"));
   assert.ok(t.includes("Denkmal-AfA bis 100 %"));
   assert.ok(t.includes("Laut Steinadel-Objektdaten ist 1335 das Jahr der Ersterwähnung, nicht das Baujahr."));
@@ -859,4 +861,288 @@ test("S-E1 Regel 5: Studio-Seite, /expose und Sidebar erreichen weder Server-Mod
   }
   const routeImporte = laufzeitImporte(path.join(SITE, "src/app/api/studio/[objekt]/route.ts"));
   assert.ok(routeImporte.includes("@/lib/studio/lesen") && routeImporte.includes("@/lib/supabase"));
+});
+
+// ═══ N: Nachbesserung nach der Prüfung (08.11.2026) ═══
+// Je Test der Prüfbefund in Klammern. Rückprobe: Die Tests zu SPEZ-1/2/3/4/5/6, K2 und SI-2 sind gegen
+// den Stand vor der Nachbesserung (bc04472) rot; die zu K4 und SI-1 sichern unverändertes Verhalten ab
+// und töten die Mutanten, die vorher die ganze Suite überlebten (MP1, MP2, MP3, MP6, MP7, MS1).
+
+/** Karte eines Assets im Markup der Ansicht. */
+function karteVon(html, id) {
+  return new RegExp(`<article[^>]*data-asset="${id}".*?</article>`, "s").exec(html)?.[0] ?? "";
+}
+
+/** Kachel ab ihrem öffnenden Tag (ohne dessen title im sichtbaren Text). */
+function kachelVon(html, teil) {
+  return new RegExp(`<div[^>]*data-teil="${teil}"[^>]*>.*?</div></div>`, "s").exec(html)?.[0] ?? "";
+}
+
+/** Urteil-Anzeige als { stil, bezug, text }: in der Karte (data-karten-urteil) bzw. in der Beleg-Kette (data-urteil-anzeige). */
+function urteilSpan(k, attribut) {
+  const m = new RegExp(`<span[^>]*style="([^"]*)"[^>]*${attribut}="([^"]+)"[^>]*>([^<]*)</span>`).exec(k);
+  return m ? { stil: m[1], bezug: m[2], text: ent(m[3]) } : null;
+}
+
+test("S-N1 (SPEZ-1) Karte: COUNSEL-Urteil nach R2 wie die Beleg-Kette — grünes FREIGABE nur bei genau geprüftem Freigabetext", async () => {
+  welt.objekteAntwort = exportAntwort();
+  const mitScribe = (output) => [gelaufen("researcher", 0.01), gelaufen("scribe", 0.01, { output }), gelaufen("counsel", 0.01), gelaufen("publisher", 0.01), gelaufen("amplifier", 0.01)];
+  const ANDERS = `${TEXT} Nach der COUNSEL-Prüfung ergänzt.`;
+  // Wie Zeile 2 am 08.11.2026 (SELECT): freigegeben, URTEIL FREIGABE, Freigabetext ungleich der SCRIBE-Fassung.
+  lauf(1, { status: "freigegeben", steps: mitScribe(TEXT), body: ANDERS, review_notes: "## URTEIL: FREIGABE-EMPFEHLUNG" });
+  lauf(2, { status: "zur_freigabe", steps: mitScribe(TEXT), body: TEXT, review_notes: FREIGABE });
+  lauf(3, { status: "zur_freigabe", steps: mitScribe(TEXT), body: ANDERS, review_notes: FREIGABE });
+  lauf(4, { status: "zur_freigabe", steps: [gelaufen("researcher", 0.01), { agent: "scribe", cost: 0.01, duration_ms: 1 }], body: TEXT, review_notes: FREIGABE });
+  lauf(5, { status: "abgelehnt", steps: mitScribe(TEXT), body: TEXT, review_notes: "URTEIL: ABLEHNUNG" });
+  const html = await studioHtml((await hole()).body);
+  const erwartet = {
+    1: ["abweichend", "COUNSEL prüfte die Vorfassung · Freigabetext ungeprüft", "var(--gp-amber)"],
+    2: ["identisch", "FREIGABE", "var(--gp-emerald)"],
+    3: ["abweichend", "COUNSEL prüfte die Vorfassung · Freigabetext ungeprüft", "var(--gp-amber)"],
+    4: ["nicht_pruefbar", "FREIGABE der geprüften Fassung · Bezug zum Freigabetext nicht prüfbar", "var(--gp-amber)"],
+    5: ["identisch", "ABLEHNUNG", "var(--gp-rose)"],
+  };
+  for (const [id, [bezug, text, farbe]] of Object.entries(erwartet)) {
+    const k = karteVon(html, id);
+    assert.ok(sichtbar(k).includes(`COUNSEL-Urteil (abgeleitet) ${text} · `), `${id}: ${sichtbar(k).slice(0, 400)}`);
+    const karte = urteilSpan(k, "data-karten-urteil");
+    assert.deepEqual(karte, { stil: `color:${farbe}`, bezug, text }, `Karte ${id}`);
+    assert.deepEqual(urteilSpan(k, "data-urteil-anzeige"), karte, `Karte ${id}: dieselbe Anzeige wie ihre Beleg-Kette`);
+  }
+  // Feld "Freigabe": freigebbar, aber COUNSEL prüfte nicht genau diesen Text — Hinweis wie am Freigeben-Knopf auf /content.
+  assert.ok(sichtbar(karteVon(html, 3)).includes("Freigabe freigebbar laut Server-Regel Freigabetext ungeprüft — COUNSEL prüfte die Vorfassung"));
+  assert.ok(sichtbar(karteVon(html, 4)).includes("Freigabe freigebbar laut Server-Regel Bezug zur geprüften Fassung nicht prüfbar"));
+  for (const id of [1, 2, 5]) assert.doesNotMatch(karteVon(html, id), /data-bezug-hinweis/, `Karte ${id}: gesperrt oder genau geprüft`);
+});
+
+test("S-N2 (SPEZ-2) Kosten: Vorbehalte der Schätzung stehen sichtbar unter den Kennzahlen, nicht nur im title", async () => {
+  gemessenerStand();
+  const { body } = await hole();
+  assert.equal(body.kosten_usd.status, "ok");
+  const html = await studioHtml(body);
+  const t = sichtbar(html);
+  assert.ok(t.includes(`Claude-Kosten: ${body.kosten_usd.hinweis}`), t.slice(0, 3000));
+  assert.ok(t.includes("Schätzung, keine Abrechnung; maßgeblich ist die Anthropic-Rechnung"));
+  assert.ok(t.includes("10 von 10 summierten Läufen vor dem 06.11.2026: mit der alten Preistabelle geschätzt und nicht umgerechnet"));
+  // Bei Lesefehler kein zweiter Hinweis: Dann nennt die Kachel selbst den Grund.
+  zuruecksetzen();
+  standardWelt();
+  welt.stoerung = (a) => (a.art === "supabase" ? { status: 500, body: { message: "connection refused" } } : null);
+  const fehlerHtml = await studioHtml((await hole()).body);
+  assert.doesNotMatch(fehlerHtml, /data-kosten-hinweis/);
+  assert.ok(sichtbar(kachelVon(fehlerHtml, "kosten_usd")).includes("Läufe nicht lesbar: connection refused"));
+});
+
+test("S-N3 (SPEZ-3, K3) Abgeschnitten: Kosten-Kachel nennt die geladenen Läufe und die Zählung — nie die geladenen als 'gesamt'", async () => {
+  welt.objekteAntwort = exportAntwort();
+  for (let i = 1; i <= 501; i++) lauf(i, { steps: ALT });
+  const html = await studioHtml((await hole()).body);
+  const kosten = sichtbar(kachelVon(html, "kosten_usd"));
+  assert.ok(kosten.includes("Claude-Kosten (USD, geschätzt) ≥ $40,0000 0 von 500 geladenen Läufen ohne Kostenangabe · 501 Läufe laut Zählung"), kosten);
+  assert.ok(!kosten.includes("gesamt"), kosten);
+  // Dieselbe Gesamtzahl wie die Assets-Kachel daneben.
+  assert.ok(sichtbar(kachelVon(html, "assets")).includes("Assets (Text) 501 Zählung der Abfrage · Supabase · content · 500 geladen"));
+});
+
+test("S-N4 (K2) Ohne Zählung: Assets- und Kosten-Kachel nennen geladene Zeilen, nicht 'Zählung der Abfrage'", async () => {
+  welt.objekteAntwort = exportAntwort();
+  for (let i = 1; i <= 3; i++) lauf(i, { steps: ALT });
+  // Supabase ohne content-range-Zählung: erste Seite mit den Zeilen, die nächste leer.
+  welt.stoerung = (a) =>
+    a.tabelle === "content" ? { status: 200, body: Number(a.params.get("offset") ?? 0) === 0 ? structuredClone(welt.content) : [] } : null;
+  const { body } = await hole();
+  assert.equal(body.assets.gesamt, null);
+  assert.equal(body.assets.status, "warnung");
+  const html = await studioHtml(body);
+  const assets = sichtbar(kachelVon(html, "assets"));
+  assert.ok(assets.includes("Assets (Text) 3 geladene Zeilen, ohne Zählung · Supabase · content"), assets);
+  assert.ok(!assets.includes("Zählung der Abfrage"), assets);
+  const kosten = sichtbar(kachelVon(html, "kosten_usd"));
+  assert.ok(kosten.includes("0 von 3 geladenen Läufen ohne Kostenangabe · ohne Zählung"), kosten);
+  assert.ok(sichtbar(html).includes("Supabase lieferte keine Zählung; gezählt sind die geladenen Zeilen"));
+});
+
+test("S-N6 (K4) Preiswechsel um Mitternacht Europe/Berlin: 05.11. 22:59:59Z alte, 23:00:00Z neue Preistabelle", async () => {
+  welt.objekteAntwort = exportAntwort();
+  lauf(1, { steps: ALT, am: "2026-11-05T22:59:59.999Z" });
+  lauf(2, { steps: ALT, am: "2026-11-05T23:00:00Z" });
+  const k = (await hole()).body.kosten_usd;
+  assert.equal(k.wert.laeufe_alte_preistabelle, 1);
+  assert.match(k.hinweis, /1 von 2 summierten Läufen vor dem 06\.11\.2026/);
+});
+
+test("S-N7 (K4) Altformat ohne status: Stufe mit output oder duration_ms, aber ohne cost, gilt als gelaufen ohne Kostenangabe", async () => {
+  welt.objekteAntwort = exportAntwort();
+  lauf(1, { steps: [gelaufen("researcher", 0.05), { agent: "scribe", output: "Text", duration_ms: 5 }, { agent: "counsel", duration_ms: 3 }, nichtGelaufen("publisher"), nichtGelaufen("amplifier")] });
+  const { body } = await hole();
+  const a = body.assets.wert[0].kosten_usd;
+  assert.deepEqual(a.wert, { summe_usd: 0.05, stufen_gelaufen: 3, stufen_mit_angabe: 1, stufen_ohne_angabe: 2 });
+  assert.equal(a.status, "warnung");
+  assert.equal(a.hinweis, "Untergrenze: 2 Stufen von 3 gelaufenen ohne Kostenangabe");
+  assert.equal(body.kosten_usd.wert.laeufe_unvollstaendig, 1);
+  assert.equal(body.kosten_usd.status, "warnung");
+});
+
+/** Seite mit Hook-Laufzeit; useParams liest den Slug aus zustand.slug (der Test kann ihn wechseln). */
+async function seitenLauf(slug = SLUG) {
+  const V = await ansicht();
+  const zustand = { slug };
+  const erfasst = [];
+  const lz = hookLaufzeit();
+  const seite = ladeTsx("app/studio/[objekt]/page.tsx", {
+    ...lz.attrappen,
+    "next/navigation": { useParams: () => ({ objekt: zustand.slug }) },
+    "@/components/studio/StudioAnsicht": {
+      StudioAnsicht: (props) => {
+        erfasst.push(props);
+        return null;
+      },
+      leseStudioAntwort: V.leseStudioAntwort,
+    },
+    "@/components/studio/beleg-hilfen": { maskiert: regeln.maskiereGeschuetzteNamen },
+  });
+  lz.setzeWurzel(seite.default);
+  return { lz, zustand, letzte: () => erfasst[erfasst.length - 1] };
+}
+
+/** fetch-Attrappe: Jeder Abruf wartet, bis der Test ihn beantwortet (auch nach einem Abbruch). */
+function wartendesFetch() {
+  const abrufe = [];
+  const fetch = (url, init) =>
+    new Promise((ok) => abrufe.push({ url, init, antworte: (status, daten) => ok({ status, json: async () => daten }) }));
+  return { abrufe, fetch };
+}
+
+const NICHT_IM_STUDIO = { fehler: "Objekt nicht im Studio", fehler_art: "nicht_im_studio" };
+const LESUNG_404 = { art: "abgewiesen", httpStatus: 404, text: "Objekt nicht im Studio (HTTP 404)" };
+
+test("S-N8 (K4) Seite: Nach einem Slug-Wechsel steht 'lädt', bis die Antwort zum neuen Slug da ist", async () => {
+  standardWelt();
+  const echt = (await hole()).body;
+  const f = wartendesFetch();
+  const vorher = globalThis.fetch;
+  globalThis.fetch = f.fetch;
+  try {
+    const s = await seitenLauf();
+    s.lz.rendere();
+    f.abrufe[0].antworte(200, echt);
+    await s.lz.ruhe();
+    assert.equal(s.letzte().lesung.art, "daten");
+    s.zustand.slug = "villa-x";
+    s.lz.rendere();
+    assert.equal(s.letzte().slug, "villa-x");
+    assert.equal(s.letzte().lesung.art, "laedt", "keine Daten des alten Objekts unter dem neuen Slug");
+    assert.deepEqual(f.abrufe.map((a) => a.url), ["/api/studio/rittergut-seifersdorf", "/api/studio/villa-x"]);
+    f.abrufe[1].antworte(404, NICHT_IM_STUDIO);
+    await s.lz.ruhe();
+    assert.deepEqual(s.letzte().lesung, LESUNG_404);
+  } finally {
+    globalThis.fetch = vorher;
+  }
+});
+
+test("S-N9 (K4) Seite: Eine späte Antwort der abgebrochenen Lesung überschreibt die Lesung des neuen Slugs nicht", async () => {
+  standardWelt();
+  const echt = (await hole()).body;
+  const f = wartendesFetch();
+  const vorher = globalThis.fetch;
+  globalThis.fetch = f.fetch;
+  try {
+    const s = await seitenLauf();
+    s.lz.rendere();
+    s.zustand.slug = "villa-x";
+    s.lz.rendere();
+    assert.equal(f.abrufe[0].init.signal.aborted, true, "der Wechsel bricht die alte Lesung ab");
+    assert.equal(f.abrufe[1].init.signal.aborted, false);
+    f.abrufe[1].antworte(404, NICHT_IM_STUDIO);
+    await s.lz.ruhe();
+    assert.deepEqual(s.letzte().lesung, LESUNG_404);
+    // Die Antwort zum alten Slug kommt trotz Abbruch noch an — sie darf nichts mehr setzen.
+    f.abrufe[0].antworte(200, echt);
+    await s.lz.ruhe();
+    assert.equal(s.letzte().slug, "villa-x");
+    assert.deepEqual(s.letzte().lesung, LESUNG_404);
+  } finally {
+    globalThis.fetch = vorher;
+  }
+});
+
+test("S-N10 (SI-1) Seite: Die Kennung aus useParams wird kodiert — kein Pfadwechsel auf andere API-Routen", async () => {
+  const f = wartendesFetch();
+  const vorher = globalThis.fetch;
+  globalThis.fetch = f.fetch;
+  try {
+    for (const [roh, url] of [
+      ["../freigaben", "/api/studio/..%2Ffreigaben"],
+      ["a/b?x=1#y", "/api/studio/a%2Fb%3Fx%3D1%23y"],
+      ["%2e%2e", "/api/studio/%252e%252e"],
+    ]) {
+      const s = await seitenLauf(roh);
+      s.lz.rendere();
+      assert.equal(f.abrufe[f.abrufe.length - 1].url, url, roh);
+    }
+  } finally {
+    globalThis.fetch = vorher;
+  }
+});
+
+/** Alle Dateien unter einem Ordner von site/. */
+function dateienUnter(rel) {
+  const voll = path.join(SITE, rel);
+  return readdirSync(voll).flatMap((n) => {
+    const p = path.join(voll, n);
+    return statSync(p).isDirectory() ? dateienUnter(path.relative(SITE, p)) : [p];
+  });
+}
+
+/** Verweise auf die nicht versionierte Planung, zusammengesetzt wie INTERNE_VERWEISE. */
+const PLANUNGS_VERWEISE = new RegExp(["Spezi" + "fikation", "Studio-" + "Plan"].join("|"));
+
+test("S-N11 (SI-2) Studio-Dateien ohne Verweise auf interne Planungsunterlagen", () => {
+  const dateien = ["src/components/studio", "src/lib/studio", "src/app/studio", "src/app/api/studio"].flatMap(dateienUnter);
+  assert.ok(dateien.length >= 10, dateien.join(", "));
+  for (const d of dateien) {
+    const text = readFileSync(d, "utf8");
+    assert.doesNotMatch(text, INTERNE_VERWEISE, path.relative(SITE, d));
+    assert.doesNotMatch(text, PLANUNGS_VERWEISE, path.relative(SITE, d));
+  }
+});
+
+test("S-N12 (SPEZ-4) Regel KI-Hinweis: Fundstelle nennt 0f553a9 (Kennzeichnung) und 77229ef (ausgeschriebener, sichtbarer Text)", async () => {
+  const { STUDIO_REGELN } = await regelnStudio();
+  const ki = STUDIO_REGELN.filter((r) => r.regel.startsWith("KI-Hinweis als sichtbarer Text"));
+  assert.equal(ki.length, 1);
+  assert.match(ki[0].fundstelle, /\b0f553a9\b/);
+  assert.match(ki[0].fundstelle, /\b77229ef\b/);
+  // Die zitierte Datei trägt den Wortlaut, den 77229ef brachte (Pflicht-Element 2).
+  const pipeline = readFileSync(path.join(SITE, "src/app/api/content/pipeline/route.ts"), "utf8");
+  assert.match(pipeline, /2\. KI-KENNZEICHNUNG:[\s\S]{0,600}genügt NICHT/);
+});
+
+test("S-N13 (SPEZ-5) Higgsfield im Studio: nur der Hinweis auf den aktiven Erzeugungsweg (Connector-Sitzung), kein Knopf", async () => {
+  standardWelt();
+  const html = await studioHtml((await hole()).body);
+  const t = sichtbar(html);
+  assert.ok(
+    t.includes("Higgsfield im Studio: aktiver Erzeugungsweg ist die Connector-Sitzung (Higgsfield-Connector in einer Claude-Sitzung). Das Studio ruft Higgsfield nicht auf."),
+    t.slice(0, 3000),
+  );
+  const knoepfe = [...html.matchAll(/<button[^>]*>(.*?)<\/button>/g)].map((m) => m[1]);
+  assert.ok(knoepfe.every((k) => k === "Kopieren"), knoepfe.join(" | "));
+});
+
+test("S-N14 (SPEZ-6) Regeln: Anker-, Startbild- und Rechte-Regel stehen da — als 'noch nicht gebaut (Schritt N)', nicht als laufende Prüfung", async () => {
+  const { STUDIO_REGELN } = await regelnStudio();
+  standardWelt();
+  const t = sichtbar(await studioHtml((await hole()).body));
+  for (const [muster, schritt] of [[/^Anker-Bilder/, 6], [/Startbild/, 7], [/Nutzungsrechte/, 8]]) {
+    const treffer = STUDIO_REGELN.filter((r) => muster.test(r.regel));
+    assert.equal(treffer.length, 1, String(muster));
+    const r = treffer[0];
+    assert.equal(r.pruefung, `noch nicht gebaut (Schritt ${schritt})`, r.regel);
+    assert.doesNotMatch(r.fundstelle, INTERNE_VERWEISE);
+    assert.ok(t.includes(`${r.regel} Fundstelle: ${r.fundstelle} · Prüfung: noch nicht gebaut (Schritt ${schritt})`), r.regel);
+  }
+  // "darunter": Der Bauträger bleibt die letzte Regel.
+  assert.equal(STUDIO_REGELN[STUDIO_REGELN.length - 1].regel, "Bauträger öffentlich nicht namentlich nennen.");
 });

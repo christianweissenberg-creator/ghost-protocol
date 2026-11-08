@@ -298,8 +298,9 @@ export function messTitel(m: Messwert<unknown>, zusatz?: string): string {
 
 let berlinZeitFormat: Intl.DateTimeFormat | null = null;
 
-/** "09.11.2026 08:03:05" in Europe/Berlin; null, wenn der Zeitpunkt fehlt oder unlesbar ist. */
-function berlinDatumZeit(iso: string | null | undefined): string | null {
+/** "09.11.2026 08:03:05" in Europe/Berlin; null, wenn der Zeitpunkt fehlt oder unlesbar ist.
+ *  Exportiert für die Zeitangaben des Objekt-Studios (components/studio/StudioAnsicht.tsx). */
+export function berlinDatumZeit(iso: string | null | undefined): string | null {
   if (!iso) return null;
   const t = Date.parse(iso);
   if (!Number.isFinite(t)) return null;

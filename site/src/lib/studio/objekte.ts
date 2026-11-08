@@ -38,10 +38,10 @@ export function studioPfad(slug: StudioObjekt): string {
 export const STUDIO_EINSTIEG = studioPfad(STUDIO_OBJEKTE[0]);
 
 /**
- * Bauschritte laut Studio-Plan, ab denen ein Bereich kommt. Bis dahin steht dort
+ * Bauschritte des Studios, ab denen ein Bereich bzw. eine Prüfung kommt. Bis dahin steht dort
  * "noch nicht gebaut (Schritt N)" — ohne Zahl, nie 0 als Platzhalter.
  */
-export const STUDIO_BAUSCHRITTE = { anker: 6, medien: 7, credits: 7, messplan: 11 } as const;
+export const STUDIO_BAUSCHRITTE = { anker: 6, medien: 7, credits: 7, medienregel: 8, messplan: 11 } as const;
 
 export function nochNichtGebautText(schritt: number): string {
   return `noch nicht gebaut (Schritt ${schritt})`;

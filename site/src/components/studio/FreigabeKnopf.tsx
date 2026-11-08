@@ -1,7 +1,7 @@
 // Freigeben-Knopf mit Sperre (R4) — ausgelagert aus app/content/page.tsx (Objekt-Studio Schritt 2,
 // 08.11.2026), Code unverändert übernommen. Gesperrt, solange pruefeFreigabe sperrt; der Grund steht
 // sichtbar am Knopf. Maßgeblich bleibt die Prüfung auf dem Server (api/content/status, 409 + Grund).
-// Dateiname wie in der Studio-Spezifikation; die Komponente heißt weiter FreigebenKnopf.
+// Die Datei heißt FreigabeKnopf.tsx; die Komponente heißt weiter FreigebenKnopf (wie bisher auf /content).
 
 import { FARBE_BERNSTEIN, FARBE_ROT, bezugHinweis, maskiert } from "@/components/studio/beleg-hilfen";
 import type { FreigabeLage } from "@/components/studio/beleg-hilfen";
