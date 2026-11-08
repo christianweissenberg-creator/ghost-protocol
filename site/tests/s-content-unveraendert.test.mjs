@@ -172,7 +172,7 @@ const FREIGABEN = {
 
 // ═══ Herkunft der Vorher-Fassung ═══
 
-test("S-C0 Vorher-Fassung ist site/src/app/content/page.tsx aus e9c17c5 (Git-Blob-ID der Kopie)", () => {
+test("S-U0 Vorher-Fassung ist site/src/app/content/page.tsx aus e9c17c5 (Git-Blob-ID der Kopie)", () => {
   const kopf = Buffer.from(`blob ${VORHER_QUELLE.length}\0`);
   const id = createHash("sha1").update(Buffer.concat([kopf, VORHER_QUELLE])).digest("hex");
   assert.equal(id, BLOB_E9C17C5);
@@ -204,7 +204,7 @@ function echteAttrappen({ suche = "", freigaben = null } = {}) {
   };
 }
 
-test("S-C1 /content byte-gleich: ganze Seite je Starttab, mit und ohne Freigabe-Stapel (echtes React)", () => {
+test("S-U1 /content byte-gleich: ganze Seite je Starttab, mit und ohne Freigabe-Stapel (echtes React)", () => {
   let verglichen = 0;
   const laengen = [];
   for (const suche of ["", "tab=pipeline", "tab=calendar", "tab=content", "tab=unsinn"]) {
@@ -221,7 +221,7 @@ test("S-C1 /content byte-gleich: ganze Seite je Starttab, mit und ohne Freigabe-
   assert.ok(verglichen > 20_000, `verglichen: ${verglichen} Zeichen (${laengen.join(", ")})`);
 });
 
-test("S-C2 /content byte-gleich: Freigeben-Knopf und Beleg-Kette je Eintrag (echtes React)", () => {
+test("S-U2 /content byte-gleich: Freigeben-Knopf und Beleg-Kette je Eintrag (echtes React)", () => {
   const { vorher, nachher } = beideSeiten(echteAttrappen());
   const kopiere = () => {};
   const kopierStatus = (key) => `Kopieren ${key}`;
@@ -338,7 +338,7 @@ async function mitFetch(lauf) {
   }
 }
 
-test("S-C3 /content byte-gleich: Content-Tab mit geladenen Einträgen, jeder Eintrag aufgeklappt", async () => {
+test("S-U3 /content byte-gleich: Content-Tab mit geladenen Einträgen, jeder Eintrag aufgeklappt", async () => {
   await mitFetch(async () => {
     const alt = simulation("vorher", "tab=content");
     const neu = simulation("nachher", "tab=content");
@@ -362,7 +362,7 @@ test("S-C3 /content byte-gleich: Content-Tab mit geladenen Einträgen, jeder Ein
   });
 });
 
-test("S-C4 /content byte-gleich: Pipeline-Ergebnis mit Urteilsanzeige und Fassungsbezug", async () => {
+test("S-U4 /content byte-gleich: Pipeline-Ergebnis mit Urteilsanzeige und Fassungsbezug", async () => {
   await mitFetch(async () => {
     const laeufe = {};
     for (const fassung of ["vorher", "nachher"]) {
