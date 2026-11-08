@@ -2,8 +2,10 @@
 
 import Link from "next/link";
 import type { Agent } from "@/lib/types";
-import { aktivierungsAnzeige, registerEintragFuer, tierMetaFuer } from "@/lib/types";
+import { aktivierungsAnzeige, modellAnzeige, registerEintragFuer, tierMetaFuer } from "@/lib/types";
 import { useJetztIso } from "@/lib/hooks";
+// Nur die Zuordnung Agent → Modell, keine System-Prompts (lib/agent-prompts.ts nie im Browser).
+import { dashboardModellFuer } from "@/lib/agent-modelle";
 
 interface AgentCardProps {
   agent: Agent;
@@ -13,6 +15,10 @@ interface AgentCardProps {
 // Zeit (agents.last_heartbeat) statt agents.status — der Registerstatus ist ein gespeicherter
 // Wert ohne Messung und steht nur noch im title, als "nicht gemessen". Tier und Persona kommen
 // mit Rückfall aus lib/types (tierMetaFuer, registerEintragFuer).
+// Tor-Prüfung 07.11.2026 (F2): Das Modell kommt aus der Dashboard-Konfiguration
+// (lib/agent-modelle.ts) — das Modell, das activate aufruft. agents.llm_model (Register) stand für
+// AMPLIFIER, MERCHANT und SCRIBE auf Sonnet, obwohl alle ihre Läufe auf Haiku liefen; eine
+// Abweichung steht jetzt sichtbar als zweite Zeile da, ein Agent ohne Prompt als solcher.
 export function AgentCard({ agent }: AgentCardProps) {
   const registry = registerEintragFuer(agent);
   const tierMeta = tierMetaFuer(agent.tier);
@@ -21,6 +27,7 @@ export function AgentCard({ agent }: AgentCardProps) {
   // Ohne eigene Persona fällt die Anzeige auf die Rolle zurück; die steht schon unter dem
   // Namen und wird nicht doppelt gezeigt.
   const persona = registry.persona && registry.persona !== agent.role ? registry.persona : null;
+  const modell = modellAnzeige(dashboardModellFuer(agent.id), agent.llm_model);
 
   return (
     <Link href={`/agents/${agent.id}`} className="card-ghost p-4 group animate-slide-up block cursor-pointer hover:border-accent-violet/30">
@@ -73,15 +80,27 @@ export function AgentCard({ agent }: AgentCardProps) {
         </p>
       )}
 
-      {/* LLM Model — laut Register (agents.llm_model) */}
-      <div className="mt-3 pt-3 border-t border-border-subtle flex items-center justify-between">
-        <span
-          className="text-[10px] text-text-muted font-mono"
-          title="Modell laut Register (agents.llm_model). Das bei einem Lauf aufgerufene Modell steht in metadata.model der Bus-Nachricht."
-        >
-          {agent.llm_model || "Modell nicht eingetragen"}
-        </span>
-        <div className="flex gap-1">
+      {/* Modell des Dashboard-Aufrufs (lib/agent-modelle.ts); Register nur bei Abweichung bzw. ohne Prompt */}
+      <div className="mt-3 pt-3 border-t border-border-subtle flex items-center justify-between gap-2">
+        <div className="min-w-0" title={modell.titel}>
+          <p
+            className="text-[10px] font-mono break-all"
+            style={{ color: modell.ohnePrompt ? "var(--gp-amber)" : "var(--gp-ink-3)" }}
+            data-modell="dashboard"
+          >
+            {modell.text}
+          </p>
+          {modell.register && (
+            <p
+              className="text-[9px] font-mono break-all mt-0.5"
+              style={{ color: modell.abweichung ? "var(--gp-amber)" : "var(--gp-ink-3)" }}
+              data-modell="register"
+            >
+              {modell.register}
+            </p>
+          )}
+        </div>
+        <div className="flex gap-1 shrink-0">
           {(agent.channels ?? []).slice(0, 3).map((ch) => (
             <span
               key={ch}

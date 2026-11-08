@@ -38,6 +38,7 @@ delete process.env.IMMONEXUS_EXPORT_TOKEN;
 const types = await import("../src/lib/types.ts");
 const regeln = await import("../src/lib/freigabe-regeln.ts");
 const hooksStatus = await import("../src/lib/hooks-status.ts");
+const kosten = await import("../src/lib/kosten.ts");
 const statusRoute = await import(pathToFileURL(process.env.G_ROUTE_STATUS ?? path.join(SITE, "src/app/api/status/route.ts")).href);
 
 const ECHT = { react: React, "react/jsx-runtime": jsxRuntime };
@@ -221,6 +222,7 @@ function messagesSeite(lz, { messages = [], agents = [], agentsError = null } = 
       },
     },
     "@/lib/freigabe-regeln": regeln,
+    "@/lib/kosten": kosten,
     "@/lib/types": types,
   });
   return { M, gefangen };
@@ -250,8 +252,13 @@ test("G-N1 /messages: Fehllauf zählt nicht als Antwort und trägt das Etikett '
   const knopf = finde(baum, (k) => k.type === "button" && text(k).startsWith("Antwort"))[0];
   assert.equal(text(knopf), "Antwort1", "nur die echte Antwort zählt");
   const t = text(baum);
-  assert.ok(t.includes("1 Fehllauf (bezahlt, ohne verwertbare Antwort) nicht als Antwort gezählt"), t.slice(0, 600));
-  const etiketten = finde(baum, (k) => k.type === "span" && (text(k) === "Fehllauf" || text(k) === "response"));
+  // Wortlaut seit der Nachprüfung 07.11.2026 (ehrlichkeit-3): sagt auch, wo der Fehllauf zählt.
+  assert.ok(t.includes("1 Fehllauf (bezahlt, ohne verwertbare Antwort) im Zähler Fehllauf, nicht als Antwort oder Plan gezählt"), t.slice(0, 600));
+  // Etiketten der Liste (font-mono); seit der Tor-Prüfung (F5) heißt auch ein Zähler "Fehllauf".
+  const etiketten = finde(
+    baum,
+    (k) => k.type === "span" && /font-mono/.test(String(k.props.className ?? "")) && (text(k) === "Fehllauf" || text(k) === "response"),
+  );
   assert.deepEqual(etiketten.map(text).sort(), ["Fehllauf", "response"]);
 });
 

@@ -16,10 +16,12 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 const SITE = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 // "@/…" → site/src/….ts, "next/server" → node_modules (ESM braucht die Endung), relative
-// Importe ohne Endung aus .ts-Dateien → ".ts" (lib/auftrag.ts importiert so).
+// Importe ohne Endung aus .ts-Dateien → ".ts" (lib/auftrag.ts importiert so). "server-only"
+// (Riegel in lib/agent-prompts.ts) → die leere Fassung, die Next.js im Server-Bundle nimmt.
 registerHooks({
   resolve(specifier, context, nextResolve) {
     if (specifier === "next/server") return nextResolve(pathToFileURL(path.join(SITE, "node_modules/next/server.js")).href, context);
+    if (specifier === "server-only") return nextResolve(pathToFileURL(path.join(SITE, "node_modules/next/dist/compiled/server-only/empty.js")).href, context);
     if (specifier.startsWith("@/")) return nextResolve(pathToFileURL(path.join(SITE, "src", `${specifier.slice(2)}.ts`)).href, context);
     if (/^\.\.?\//.test(specifier) && !/\.[cm]?[jt]sx?$/.test(specifier) && context.parentURL?.endsWith(".ts")) {
       return nextResolve(`${specifier}.ts`, context);

@@ -54,6 +54,13 @@ import type { CounselUrteil } from "@/lib/status-types";
 //   dafür keinen Lauf (vorher 400 ohne format). Ob LinkedIn Plattform wird, entscheidet der
 //   Inhaber (R39); die Seite nimmt das nicht vorweg.
 // - Untergrenzen der Laufkosten ("mindestens") werden abgerundet, nie über der Summe.
+//
+// Tor-Prüfung 07.11.2026 (F8): Die Kachel "Freigegeben" sagte für jeden Eintrag mit Status
+// freigegeben "Bereit zum Posten" — auch für #2, am 27.07.2026 vor Stufe 1 ohne Betreiber-Vermerk
+// (metadata.freigabe) freigegeben, mit ungeprüftem Freigabetext (gemessen per SQL). "Bereit zum
+// Posten" zählt jetzt nur Einträge mit Vermerk; die übrigen stehen als "freigegeben ohne
+// Betreiber-Vermerk (Altbestand)" da, in der Kachel und am Eintrag. Nur Anzeige: Freigabe-Regel
+// (pruefeFreigabe), Status-Route und Datenbank bleiben unverändert.
 
 // ═══ TYPES ═══
 
@@ -414,6 +421,25 @@ function istObjekt(wert: unknown): wert is Record<string, unknown> {
 /** Wie istObjekt, behält aber den deklarierten Typ (metadata kommt ungeprüft aus der DB). */
 function alsObjekt<T extends object>(wert: T | string | null | undefined): T | null {
   return typeof wert === "object" && wert !== null && !Array.isArray(wert) ? wert : null;
+}
+
+/**
+ * Freigabe durch den Betreiber vermerkt? /api/content/status schreibt seit Stufe 1 beim Freigeben
+ * metadata.freigabe mit aktion "freigeben". Ein Eintrag mit Status freigegeben ohne diesen Vermerk
+ * stammt aus der Zeit davor (Altbestand) und zählt nicht als "bereit zum Posten" (F8).
+ */
+function mitBetreiberVermerk(item: Pick<ContentItem, "metadata">): boolean {
+  return alsObjekt(alsObjekt(item.metadata)?.freigabe)?.aktion === "freigeben";
+}
+
+/** Unterzeile der Kachel "Freigegeben": bereit nur mit Betreiber-Vermerk, Altbestand getrennt. */
+function freigegebenUntertitel(content: readonly Pick<ContentItem, "status" | "metadata">[], limit: number): string {
+  const freigegeben = content.filter((c) => c.status === "freigegeben");
+  const bereit = freigegeben.filter(mitBetreiberVermerk).length;
+  const altbestand = freigegeben.length - bereit;
+  const teile = [`${bereit} bereit zum Posten (mit Betreiber-Vermerk)`];
+  if (altbestand > 0) teile.push(`${altbestand} freigegeben ohne Betreiber-Vermerk (Altbestand)`);
+  return `${teile.join(" · ")} · in den letzten ${limit}`;
 }
 
 function ohne<T>(eintraege: Record<number, T>, id: number): Record<number, T> {
@@ -2092,7 +2118,13 @@ function ContentSeite() {
           {/* KPIs */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
             <KPICard label="Zur Freigabe" value={zurFreigabeWert} subtitle={zurFreigabeUntertitel} color="var(--gp-amber)" />
-            <KPICard label="Freigegeben" value={listenWert(statusCounts["freigegeben"] ?? 0)} subtitle={`Bereit zum Posten · in den letzten ${LISTE_LIMIT}`} color="#22c55e" />
+            {/* F8: "bereit zum Posten" nur mit Betreiber-Vermerk; ohne Daten keine Aussage */}
+            <KPICard
+              label="Freigegeben"
+              value={listenWert(statusCounts["freigegeben"] ?? 0)}
+              subtitle={contentFehler || loading ? `Status freigegeben · in den letzten ${LISTE_LIMIT}` : freigegebenUntertitel(content, LISTE_LIMIT)}
+              color="#22c55e"
+            />
             {/* R35: gezählt wird die Markierung durch den Betreiber, nicht ein gemessener Live-Zustand */}
             <KPICard label="Gepostet" value={listenWert(statusCounts["gepostet"] ?? 0)} subtitle={`als gepostet markiert · in den letzten ${LISTE_LIMIT}`} color="#8b5cf6" />
             <KPICard label="Abgelehnt/Fehler" value={listenWert((statusCounts["abgelehnt"] ?? 0) + (statusCounts["fehler"] ?? 0))} subtitle={`COUNSEL/Betreiber/Technik · in den letzten ${LISTE_LIMIT}`} color="#ff4d6a" />
@@ -2193,6 +2225,16 @@ function ContentSeite() {
                             {erwarteText && bodyLeer && (
                               <span className="text-[9px] px-1.5 py-0.5 rounded font-mono uppercase" style={{ background: "rgba(255, 77, 106, 0.15)", color: "var(--gp-rose)" }}>
                                 Text leer
+                              </span>
+                            )}
+                            {item.status === "freigegeben" && !mitBetreiberVermerk(item) && (
+                              <span
+                                className="text-[9px] px-1.5 py-0.5 rounded font-mono uppercase"
+                                style={{ background: "rgba(245, 158, 11, 0.12)", color: "var(--gp-amber)" }}
+                                title="Status freigegeben ohne metadata.freigabe: vor Stufe 1 gesetzt, kein Beleg, wer welchen Text freigegeben hat. Zählt nicht als bereit zum Posten."
+                                data-altbestand
+                              >
+                                ohne Betreiber-Vermerk (Altbestand)
                               </span>
                             )}
                             {lage.nameImText && (

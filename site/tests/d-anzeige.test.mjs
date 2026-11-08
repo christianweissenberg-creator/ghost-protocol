@@ -351,8 +351,14 @@ test("Aktivierung: Kosten ohne Angabe heißen 'nicht gemessen'", () => {
 // ── Metadaten-Chips ──
 
 test("metaWertText: Kosten als geschätzt, leere Werte als 'nicht gemessen', Objekte als JSON", () => {
-  assert.equal(metaWertText("cost_usd", 0.01), "cost_usd (geschätzt): 0.01");
-  assert.equal(metaWertText("cost_usd", null), "cost_usd (geschätzt): nicht gemessen");
+  // Tor-Prüfung 07.11.2026 (F6): cost_usd einheitlich wie formatiereUsd4; ohne Kontext ist die
+  // Preistabelle unbekannt, mit aktuellem preis_stand steht nur "(geschätzt)".
+  assert.equal(metaWertText("cost_usd", 0.01), "cost_usd (geschätzt, Preistabelle unbekannt): $0,0100");
+  assert.equal(
+    metaWertText("cost_usd", 0.01, { meta: { source: "activation-api", preis_stand: "2026-11-06" }, preisStandAb: "2026-11-06" }),
+    "cost_usd (geschätzt): $0,0100",
+  );
+  assert.equal(metaWertText("cost_usd", null), "cost_usd (geschätzt, Preistabelle unbekannt): nicht gemessen");
   assert.equal(metaWertText("x", { a: 1 }), 'x: {"a":1}');
   assert.equal(metaWertText("source", "fehllauf"), "source: fehllauf");
 });

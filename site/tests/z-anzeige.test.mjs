@@ -27,6 +27,7 @@ const regeln = await import("../src/lib/freigabe-regeln.ts");
 const kosten = await import("../src/lib/kosten.ts");
 const hooksStatus = await import("../src/lib/hooks-status.ts");
 const auftragTypes = await import("../src/lib/auftrag-types.ts");
+const modelle = await import("../src/lib/agent-modelle.ts");
 
 const NAME = ["Immo", "Nexus"].join("");
 const ENTHAELT_NAMEN = /imm[ou][\s._-]*nexus/i;
@@ -50,6 +51,7 @@ function detailSeite(detail) {
     },
     "@/lib/freigabe-regeln": regeln,
     "@/lib/kosten": kosten,
+    "@/lib/agent-modelle": modelle,
     "@/lib/types": types,
   });
 }
@@ -104,15 +106,28 @@ test("Agent-Detail: Leertexte sagen, was die Abfrage lieferte", () => {
   assert.ok(!/Agent "oracle" nicht gefunden/.test(ohne));
 });
 
-test("Agent-Detail: Kosten-Untergrenze abgerundet, nie '≥ < $0,0001'; Titel nennt die alte Preistabelle", () => {
-  const html = rendereDetail({ agent: AGENT, messages: [] });
-  assert.ok(html.includes("≥ $0,0123"), "0,01239 abgerundet");
+// Tor-Prüfung 07.11.2026 (F3): Die Kosten kommen aus den Tokens × aktueller Tabelle des
+// Dashboard-Modells, nicht mehr aus total_cost_usd (alte Tabelle, je Lauf gerundet).
+test("Agent-Detail: Kosten-Untergrenze abgerundet, nie '≥ < $0,0001'; Titel nennt die alte Preistabelle der gespeicherten Summe", () => {
+  // Nachprüfung 07.11.2026 (ehrlichkeit-2): "≥" nur, wenn die geladenen Läufe (activation-api, mit
+  // metadata.model) die Token-Summen ergeben — hier der eine Lauf von oracle.
+  const lauf = (ein, aus) => ({
+    ...nachricht("l1", "oracle", ["donna"], "Lauf"),
+    metadata: { source: "activation-api", model: "claude-sonnet-5", input_tokens: ein, output_tokens: aus },
+  });
+  const html = rendereDetail({ agent: AGENT, messages: [lauf(1200, 300)] });
+  // 1.200 × 2 + 300 × 10 USD je Mio. Tokens (claude-sonnet-5, Dashboard-Modell von oracle) = 0,0054
+  assert.ok(html.includes("≥ $0,0054"), "aus Tokens × aktueller Tabelle, abgerundet");
   assert.ok(html.includes("≥ 1.200"));
-  assert.match(html, /vor dem 06\.11\.2026 mit der alten Preistabelle geschätzt/);
-  const klein = rendereDetail({ agent: { ...AGENT, total_cost_usd: 0.00003 }, messages: [] });
+  assert.match(html, /vor dem 06\.11\.2026 die alte/);
+  const klein = rendereDetail({ agent: { ...AGENT, total_input_tokens: 1, total_output_tokens: 1 }, messages: [lauf(1, 1)] });
   assert.ok(klein.includes("> $0 (gemessen unter $0,0001)"));
   assert.ok(!klein.includes("≥ <"));
-  assert.ok(rendereDetail({ agent: { ...AGENT, total_cost_usd: 0 }, messages: [] }).includes("nicht gemessen"));
+  // Ohne geladenen Lauf ist das Modell nicht geprüft: "≈", keine Untergrenze.
+  const ohneLauf = rendereDetail({ agent: AGENT, messages: [] });
+  assert.ok(ohneLauf.includes("≈ $0,0054") && !ohneLauf.includes("≥ $0,0054"));
+  const leer = { ...AGENT, total_input_tokens: 0, total_output_tokens: 0, total_cost_usd: 0 };
+  assert.ok(rendereDetail({ agent: leer, messages: [] }).includes("nicht gemessen"));
 });
 
 // ═══ Kostenblock im Steinadel-Panel und TopBar ═══
@@ -243,6 +258,7 @@ test("/metrics: abgelaufene Sitzung (401) heißt in der Kostenkachel 'nicht ange
     "@/components/ui/KPICard": { KPICard: ({ label, value }) => lz.attrappen["react/jsx-runtime"].jsx("div", { children: `${label}: ${value}` }) },
     "@/components/ui/AttributionPanel": { AttributionPanel: () => null },
     "@/lib/kosten": kosten,
+    "@/lib/agent-modelle": modelle,
     "@/lib/types": types,
   });
   const t = text(lz.rendere(M.default, {}, []));

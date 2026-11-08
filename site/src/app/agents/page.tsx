@@ -9,6 +9,8 @@
 // die herausgefilterten Zeilen.
 // Nachbesserung 06.11.2026: Eine leere Liste sagt, was die Abfrage im Browser geliefert hat,
 // nicht, was in der Tabelle steht; Gegenprobe ist die Zählung über /api/status.
+// Tor-Prüfung 07.11.2026 (F2): Das Modell je Karte kommt aus der Dashboard-Konfiguration
+// (lib/agent-modelle.ts), nicht aus dem Register; die Unterzeile sagt das.
 
 import { useAgents } from "@/lib/hooks";
 import { useSystemStatus } from "@/lib/hooks-status";
@@ -53,7 +55,7 @@ export default function AgentsPage() {
         <p className="gp-kicker">Operator-Grid — Autonome KI-Corporation</p>
         <h1 className="gp-wordmark">Agent<em>flotte</em></h1>
         <p className="gp-sub">
-          Die Spezialisten nach Tier — letzte Aktivierung, Modell und Kanäle je Einheit, direkt aus dem Agenten-Register.
+          Die Spezialisten nach Tier — letzte Aktivierung und Kanäle aus dem Agenten-Register, Modell laut Dashboard-Konfiguration (abweichendes Register markiert).
         </p>
       </div>
 

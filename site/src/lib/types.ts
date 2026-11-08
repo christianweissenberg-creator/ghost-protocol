@@ -324,6 +324,57 @@ function berlinZeitText(iso: string | null | undefined): string {
   return t === null ? (iso ?? "unbekannt") : `${t} (Europe/Berlin)`;
 }
 
+// ── Zeitangabe im Message Bus des Command Centers — Tor-Prüfung 07.11.2026 (F1) ──
+// Vorher nur HH:MM:SS (Browserzeit): 27 der 30 gezeigten Nachrichten stammten vom 28. bis
+// 30.07.2026 (gemessen per SQL am 07.11.2026) und standen als "00:19:54" direkt unter denen von
+// heute — sie lasen sich wie Läufe der letzten Nacht. Jetzt in Europe/Berlin und mit Datum, wenn
+// der Tag nicht der Tag der Messung ist (wie /messages: "30.07., 00:19:54"); Bezug ist erzeugt_am
+// aus /api/status (wie vorZeit), nicht die Browseruhr. Ohne Bezug steht immer das Datum da.
+
+function berlinTeile(ms: number): { tag: string; monat: string; jahr: string; uhr: string } {
+  berlinZeitFormat ??= new Intl.DateTimeFormat("de-DE", {
+    timeZone: "Europe/Berlin",
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23",
+  });
+  const teil: Partial<Record<Intl.DateTimeFormatPartTypes, string>> = {};
+  for (const p of berlinZeitFormat.formatToParts(new Date(ms))) teil[p.type] = p.value;
+  return { tag: teil.day ?? "", monat: teil.month ?? "", jahr: teil.year ?? "", uhr: `${teil.hour}:${teil.minute}:${teil.second}` };
+}
+
+/**
+ * Zeit einer Bus-Nachricht: "12:24:39" am Tag der Messung, sonst "30.07., 00:19:54", in einem
+ * anderen Jahr "30.07.2025, 00:19:54". Feld wie bisher timestamp, ersatzweise created_at.
+ */
+export function busZeitAnzeige(
+  m: { timestamp?: string | null; created_at?: string | null },
+  bezugIso: string | null | undefined,
+): { text: string; titel: string } {
+  const feld = m.timestamp !== null && m.timestamp !== undefined ? "messages.timestamp" : "messages.created_at";
+  const t = Date.parse(m.timestamp ?? m.created_at ?? "");
+  if (!Number.isFinite(t)) return { text: "Zeit unbekannt", titel: `Zeitpunkt fehlt oder ist unlesbar (${feld})` };
+  const z = berlinTeile(t);
+  const b = typeof bezugIso === "string" ? Date.parse(bezugIso) : Number.NaN;
+  const bezug = Number.isFinite(b) ? berlinTeile(b) : null;
+  let text: string;
+  let zusatz = "";
+  if (bezug === null) {
+    text = `${z.tag}.${z.monat}.${z.jahr}, ${z.uhr}`;
+    zusatz = " · Datum immer gezeigt: Messzeitpunkt des Systemzustands fehlt";
+  } else if (bezug.jahr === z.jahr && bezug.monat === z.monat && bezug.tag === z.tag) {
+    text = z.uhr;
+    zusatz = " · ohne Datum: Tag der Messung des Systemzustands";
+  } else {
+    text = bezug.jahr === z.jahr ? `${z.tag}.${z.monat}., ${z.uhr}` : `${z.tag}.${z.monat}.${z.jahr}, ${z.uhr}`;
+  }
+  return { text, titel: `${z.tag}.${z.monat}.${z.jahr} ${z.uhr} (Europe/Berlin) · Feld ${feld}${zusatz}` };
+}
+
 /**
  * Dieselbe Folge wie STATUS_RANG in lib/status-server.ts (Server-Datei, hier nicht importierbar).
  * Exportiert, damit tests/t-totmann.test.mjs die Gleichheit beider prüft (Prüfbefund B5).
@@ -452,6 +503,20 @@ function tagAnzeige(datum: string | null): string {
   return m ? `${m[3]}.${m[2]}.${m[1]}` : (datum ?? "unbekannt");
 }
 
+/**
+ * "aus" eines Jobs (Tor-Prüfung 07.11.2026, Befund T2): aus_seit ist ein Planwert aus
+ * lib/totmann.ts, keine Messung, und gilt nur für den VPS-Crontab. Vorher stand nur
+ * "aus seit 30.07.2026" in der Zeile, unter einem Fuß "gemessen um …"; "laut Plan" stand allein
+ * im title, der Umfang nirgends.
+ */
+function ausText(j: CronJobStand): string {
+  return `laut Plan aus seit ${tagAnzeige(j.aus_seit)} · VPS-Crontab`;
+}
+
+/** Schlusszeile des title der Zeile „Crons": was Plan und Nachweis abdecken — und was nicht. */
+export const CRONS_UMFANG =
+  "Umfang: Plan und Nachweis gelten nur für den VPS-Crontab (lib/totmann.ts, lauf_nachweis) · Zeitpläne der GitHub-Workflows (.github/workflows) sind nicht gemessen";
+
 /** Die Zeile, aus der die Lage folgt; ohne bewerteter_lauf (ältere Antwort) die jüngste. */
 function bewerteterLauf(j: CronJobStand): LaufNachweisLesung | null {
   return j.bewerteter_lauf ?? j.letzter_lauf;
@@ -486,7 +551,7 @@ export function cronJobText(j: CronJobStand, bezugIso: string): string {
     case "erster_sollzeitpunkt_steht_aus":
       return "erster Sollzeitpunkt steht aus";
     case "aus":
-      return `aus seit ${tagAnzeige(j.aus_seit)}`;
+      return ausText(j);
     case "laeuft_obwohl_aus": {
       // Prüfbefund Z6: mit Datum statt im Präsens — ein einziger Lauf hielt die Zeile sonst monatelang
       // rot mit "läuft". Eine ältere Antwort ohne das Datum behält den alten Text.
@@ -498,7 +563,7 @@ export function cronJobText(j: CronJobStand, bezugIso: string): string {
     case "zeit_unplausibel":
       return `Zeitpunkt des Laufs unplausibel${j.hinweis ? `: ${j.hinweis}` : ""}`;
     case "nicht_lesbar":
-      return j.aktiv ? "Nachweis nicht lesbar" : `aus seit ${tagAnzeige(j.aus_seit)} · Nachweis nicht lesbar`;
+      return j.aktiv ? "Nachweis nicht lesbar" : `${ausText(j)} · Nachweis nicht lesbar`;
     default:
       return "Lage unbekannt";
   }
@@ -551,7 +616,7 @@ function cronJobTitel(j: CronJobStand, w: CronsWert, bezugIso: string): string[]
   const planAktiv = j.aktiv_seit ? `laut Plan aktiv seit ${berlinZeitText(j.aktiv_seit)}` : "laut Plan aktiv";
   const lage = cronJobText(j, bezugIso);
   const zeilen = [
-    `${j.bezeichnung} (${j.job}): ${j.aktiv ? planAktiv : `aus seit ${tagAnzeige(j.aus_seit)}${j.grund ? ` — ${j.grund}` : ""}`}`,
+    `${j.bezeichnung} (${j.job}): ${j.aktiv ? planAktiv : `laut Plan aus seit ${tagAnzeige(j.aus_seit)}${j.grund ? ` — ${j.grund}` : ""}`}`,
     `  Lage: ${lage}`,
     `  Plan: ${j.plan} · Fundstelle: ${j.fundstelle}`,
   ];
@@ -614,8 +679,9 @@ export interface CronsAnzeige {
 /**
  * Text der Zeile „Crons": beschreibt den schlechtesten Job (dessen Farbe die Zeile trägt).
  * Alle ok: "3 Jobs ok · letzter Lauf vor 2 h". Ein schlechtester Job: "<Bezeichnung>: <Lage>".
- * Mehrere mit derselben Lage: "aus seit 30.07.2026" (alle Jobs) bzw. "2 von 3 Jobs: …". Bei
- * gleicher Farbe zuerst Lagen mit Laufergebnis, dann "nicht lesbar", zuletzt "aus" (LAGE_VORRANG).
+ * Mehrere mit derselben Lage: "laut Plan aus seit 30.07.2026 · VPS-Crontab" (alle Jobs) bzw.
+ * "2 von 3 Jobs: …". Bei gleicher Farbe zuerst Lagen mit Laufergebnis, dann "nicht lesbar",
+ * zuletzt "aus" (LAGE_VORRANG). Der title endet mit CRONS_UMFANG.
  */
 export function cronsAnzeige(m: Messwert<CronsWert>, bezugIso: string): CronsAnzeige {
   const w = m.wert;
@@ -643,7 +709,7 @@ export function cronsAnzeige(m: Messwert<CronsWert>, bezugIso: string): CronsAnz
       text = `${schlecht[0].bezeichnung}: ${texte[0]} · +${schlecht.length - 1} weitere`;
     }
   }
-  const zusatz = jobs.flatMap((j) => cronJobTitel(j, w, bezugIso)).join("\n");
+  const zusatz = [...jobs.flatMap((j) => cronJobTitel(j, w, bezugIso)), CRONS_UMFANG].join("\n");
   return { text, zusatz };
 }
 
@@ -691,6 +757,321 @@ export function modellKlasse(modell: string | null | undefined): ModellKlasse {
 export function formatierePreis(preis: PreisJeMillion | null): string {
   if (!preis) return "kein Tabellenpreis";
   return `Input ${formatiereUsd(preis.input)} · Output ${formatiereUsd(preis.output)} je Mio. Tokens`;
+}
+
+// ── Modell je Agent: Dashboard-Konfiguration vor Register — Tor-Prüfung 07.11.2026 (F2) ──
+// Karten und /metrics zeigten agents.llm_model. Das Register stammt aus dem Seed, dem ruhenden
+// Python-Pfad oder dem letzten Dashboard-Lauf (activate schreibt es erst nach einem Lauf, R15).
+// Aufgerufen wird aber das Modell aus lib/agent-modelle.ts. Gemessen am 07.11.2026: AMPLIFIER,
+// MERCHANT und SCRIBE standen im Register auf claude-sonnet-5, alle Läufe von AMPLIFIER und
+// SCRIBE im Bus auf claude-haiku-4-5-20251001. Jetzt steht das Modell des Dashboard-Aufrufs vorn,
+// eine Abweichung des Registers ist sichtbar markiert. Das Dashboard-Modell reicht der Aufrufer
+// herein (dashboardModellFuer aus lib/agent-modelle.ts): Diese Datei bleibt ohne Laufzeit-Import.
+
+/** Wo die Zuordnung Agent → Modell steht. */
+export const DASHBOARD_MODELL_QUELLE = "Dashboard-Konfiguration (lib/agent-modelle.ts)";
+
+const REGISTER_HERKUNFT =
+  "Register (agents.llm_model): Seed, Python-Pfad oder letzter Dashboard-Lauf — activate schreibt es erst nach einem Lauf neu";
+
+/** Modell-ID ohne Datums-Suffix, klein geschrieben — dieselbe Regel wie basisModell (lib/kosten.ts),
+ *  hier ohne Laufzeit-Import nachgebildet (tests/u-tor-anzeige.test.mjs prüft die Gleichheit). */
+export function modellKern(modell: string): string {
+  return modell.trim().toLowerCase().replace(/-\d{8}$/, "");
+}
+
+/** Registerwert als Text; leer oder kein Text → null. */
+function registerModellText(wert: unknown): string | null {
+  return typeof wert === "string" && wert.trim() ? wert.trim() : null;
+}
+
+export interface ModellAnzeige {
+  /** Sichtbar: "Dashboard: <Modell>" oder "kein Dashboard-Prompt". */
+  text: string;
+  /** Zweite sichtbare Zeile zum Register; null, wenn das Register nichts anderes sagt. */
+  register: string | null;
+  /** Das Register nennt ein anderes Modell als die Dashboard-Konfiguration. */
+  abweichung: boolean;
+  /** Kein Dashboard-Prompt: über das Dashboard nicht aktivierbar. */
+  ohnePrompt: boolean;
+  titel: string;
+}
+
+/**
+ * Modell eines Agenten für Karte und Detailseite. dashboardModell = dashboardModellFuer(agent.id)
+ * aus lib/agent-modelle.ts (null = kein Dashboard-Prompt), registerModell = agents.llm_model.
+ * Abweichung heißt: anderes Basismodell (Datums-Suffix und Schreibweise zählen nicht).
+ */
+export function modellAnzeige(dashboardModell: string | null, registerModell: unknown): ModellAnzeige {
+  const register = registerModellText(registerModell);
+  if (dashboardModell === null) {
+    return {
+      text: "kein Dashboard-Prompt",
+      register: register === null ? null : `Register: ${register}`,
+      abweichung: false,
+      ohnePrompt: true,
+      titel: [
+        `Kein Dashboard-Prompt in der ${DASHBOARD_MODELL_QUELLE}: über das Dashboard nicht aktivierbar (/api/agents/activate antwortet 404).`,
+        `${REGISTER_HERKUNFT}. Wert: ${register ?? "nicht eingetragen"}.`,
+      ].join("\n"),
+    };
+  }
+  const abweichung = register !== null && modellKern(register) !== modellKern(dashboardModell);
+  return {
+    text: `Dashboard: ${dashboardModell}`,
+    register: abweichung ? `Register: ${register} — weicht ab` : null,
+    abweichung,
+    ohnePrompt: false,
+    titel: [
+      `Modell beim Aufruf über das Dashboard: ${dashboardModell}. Quelle: ${DASHBOARD_MODELL_QUELLE}.`,
+      `${REGISTER_HERKUNFT}. Wert: ${register ?? "nicht eingetragen"}${abweichung ? " — weicht vom Dashboard-Modell ab" : ""}.`,
+      "Das je Lauf aufgerufene Modell steht in metadata.model der Bus-Nachricht.",
+    ].join("\n"),
+  };
+}
+
+export type ModellGruppe = ModellKlasse | "ohne Prompt";
+
+export interface ModellUebersicht {
+  /** Klassen nach Dashboard-Modell: Sonnet, Haiku, andere, ohne Prompt (in dieser Folge). */
+  klassen: { klasse: ModellGruppe; anzahl: number }[];
+  /** Dashboard-Modelle (volle ID) mit Anzahl, in der Reihenfolge des ersten Auftretens. */
+  modelle: { modell: string; anzahl: number }[];
+  /** Agenten, deren Register ein anderes Modell nennt. */
+  abweichend: { id: string; name: string; register: string; dashboard: string }[];
+  /** Agenten ohne Dashboard-Prompt, mit Registerwert. */
+  ohnePrompt: { id: string; name: string; register: string | null }[];
+}
+
+/** Übersicht für /metrics; modellVon = dashboardModellFuer aus lib/agent-modelle.ts. */
+export function modellUebersicht(
+  agents: readonly Pick<Agent, "id" | "name" | "llm_model">[],
+  modellVon: (id: string) => string | null,
+): ModellUebersicht {
+  const anzahl: Record<ModellGruppe, number> = { Sonnet: 0, Haiku: 0, andere: 0, "ohne Prompt": 0 };
+  const modelle = new Map<string, number>();
+  const abweichend: ModellUebersicht["abweichend"] = [];
+  const ohnePrompt: ModellUebersicht["ohnePrompt"] = [];
+  for (const a of agents) {
+    const id = String(a.id ?? "");
+    const name = typeof a.name === "string" && a.name ? a.name : id;
+    const dashboard = modellVon(id);
+    const register = registerModellText(a.llm_model);
+    if (dashboard === null) {
+      anzahl["ohne Prompt"]++;
+      ohnePrompt.push({ id, name, register });
+      continue;
+    }
+    anzahl[modellKlasse(dashboard)]++;
+    modelle.set(dashboard, (modelle.get(dashboard) ?? 0) + 1);
+    if (register !== null && modellKern(register) !== modellKern(dashboard)) abweichend.push({ id, name, register, dashboard });
+  }
+  const folge: ModellGruppe[] = ["Sonnet", "Haiku", "andere", "ohne Prompt"];
+  return {
+    klassen: folge.map((klasse) => ({ klasse, anzahl: anzahl[klasse] })),
+    modelle: [...modelle].map(([modell, n]) => ({ modell, anzahl: n })),
+    abweichend,
+    ohnePrompt,
+  };
+}
+
+/** KPI-Unterzeile auf /metrics: Klassen nach Dashboard-Modell; "andere" und "ohne Prompt" nur, wenn belegt. */
+export function modellKlassenText(u: ModellUebersicht): string {
+  const teile = u.klassen
+    .filter((k) => k.klasse === "Sonnet" || k.klasse === "Haiku" || k.anzahl > 0)
+    .map((k) => `${k.klasse} ${k.anzahl}`);
+  const register = u.abweichend.length > 0 ? ` · Register weicht bei ${u.abweichend.length} ab` : "";
+  return `Dashboard-Modell: ${teile.join(" · ")}${register}`;
+}
+
+// ── Kosten-Untergrenze je Agent — Tor-Prüfung 07.11.2026 (F3, F4) ──
+// Vorher: agents.total_cost_usd mit "≥". Die Juli-Läufe waren mit der alten Tabelle geschätzt
+// (Sonnet 3/15 USD je Mio. Tokens, gemessen per SQL am 07.11.2026: publisher 0,4441 statt
+// 0,296054 nach der aktuellen Tabelle), und die Spalte rundet jeden Lauf auf 4 Stellen — die
+// "Untergrenze" lag so bis zu 0,0001 USD über der Summe der Einzelschätzungen. Jetzt: Tokens der
+// Spalten × Listenpreis laut aktueller Tabelle; die Zahl passt zum Etikett.
+// Nachprüfung 07.11.2026 (Befund ehrlichkeit-2): Der Preis des Dashboard-Modells galt für alle
+// Tokens, ohne Prüfung, auf welchem Modell die Läufe liefen. Nach einem Modellwechsel in
+// lib/agent-modelle.ts stand so eine zu hohe "Untergrenze" mit dem neuen Modell im Etikett (Sonde:
+// scribe-Läufe auf Haiku, Dashboard-Modell auf Sonnet gestellt → "≥ $0,2668" statt 0,1334). Jetzt
+// rechnet jeder geladene Lauf mit seinem metadata.model. "≥" steht nur, wenn die geladenen Läufe
+// die Summen in agents genau ergeben; sonst "≈" mit Begründung im title.
+
+export interface KostenUntergrenze {
+  /** "≥ $0,2960", "≈ $0,2960" (nicht jeder Lauf geprüft), "≈ $0,4441" (Rückfall), "nicht gemessen". */
+  text: string;
+  /** Sichtbares Etikett: woraus die Zahl gerechnet ist. */
+  etikett: string;
+  titel: string;
+}
+
+/** Die auf /agents/[id] geladenen Nachrichten von oder an den Agenten (neueste zuerst). */
+export interface KostenNachrichten {
+  liste: readonly Pick<Message, "from_agent" | "metadata">[];
+  /** Abfragegrenze (DETAIL_NACHRICHTEN_GRENZE). */
+  grenze: number;
+  /** Lesefehler der Nachrichten: dann ist kein Lauf geprüft. */
+  fehler: string | null;
+}
+
+/** Im Code schreibt nur api/agents/activate die Token-Summen in agents fort, zusammen mit einer
+ *  Bus-Nachricht dieser source (model, input_tokens, output_tokens im metadata). */
+const SUMMEN_QUELLE = "activation-api";
+
+function tokenZahl(wert: unknown): number | null {
+  return typeof wert === "number" && Number.isFinite(wert) && wert >= 0 ? wert : null;
+}
+
+/** Nur ein echter Tabellenpreis: preisJeMillion("__proto__") liefert sonst Object.prototype. */
+function istPreis(p: unknown): p is PreisJeMillion {
+  if (typeof p !== "object" || p === null) return false;
+  const { input, output } = p as Record<string, unknown>;
+  return typeof input === "number" && Number.isFinite(input) && typeof output === "number" && Number.isFinite(output);
+}
+
+interface ModellTokens {
+  modell: string;
+  laeufe: number;
+  ein: number;
+  aus: number;
+}
+
+/** Läufe des Agenten (source activation-api, mit Modell und beiden Token-Zahlen) in den geladenen
+ *  Nachrichten, je Basismodell summiert, in der Folge des ersten Auftretens. */
+function summenLaeufeJeModell(liste: KostenNachrichten["liste"], agentId: string): ModellTokens[] {
+  const je = new Map<string, ModellTokens>();
+  for (const m of liste) {
+    if (m.from_agent !== agentId) continue;
+    const meta = alsJsonObjekt(m.metadata);
+    if (meta?.source !== SUMMEN_QUELLE) continue;
+    const modell = typeof meta.model === "string" ? meta.model.trim() : "";
+    const ein = tokenZahl(meta.input_tokens);
+    const aus = tokenZahl(meta.output_tokens);
+    if (!modell || ein === null || aus === null) continue;
+    const kern = modellKern(modell);
+    const e = je.get(kern) ?? { modell, laeufe: 0, ein: 0, aus: 0 };
+    e.laeufe += 1;
+    e.ein += ein;
+    e.aus += aus;
+    je.set(kern, e);
+  }
+  return [...je.values()];
+}
+
+const laeufeWort = (n: number): string => (n === 1 ? "Lauf" : "Läufe");
+
+/**
+ * Kosten eines Agenten für /agents/[id]. modell = Dashboard-Modell (null = kein Dashboard-Prompt),
+ * preisVon = preisJeMillion aus lib/kosten.ts, preisStandAb = PREIS_STAND_AB, nachrichten = die
+ * geladenen Nachrichten. Jeder geladene Lauf rechnet mit seinem metadata.model × aktueller Tabelle,
+ * der Rest der Summen in agents mit dem Dashboard-Modell. "≥" (abgerundet) nur, wenn die geladenen
+ * Läufe die Summen genau ergeben; sonst "≈". Ohne Tokens, Dashboard-Modell oder Tabellenpreis:
+ * Rückfall auf die gespeicherte Summe mit "≈" — sie ist je Lauf gerundet und nach der damals
+ * gültigen Tabelle geschätzt.
+ */
+export function kostenUntergrenzeAnzeige(
+  agent: Pick<Agent, "id" | "total_input_tokens" | "total_output_tokens" | "total_cost_usd">,
+  modell: string | null,
+  preisVon: (modell: string) => PreisJeMillion | null,
+  preisStandAb: string,
+  nachrichten: KostenNachrichten,
+): KostenUntergrenze {
+  const ein = tokenZahl(agent.total_input_tokens);
+  const aus = tokenZahl(agent.total_output_tokens);
+  const tokensDa = ein !== null && aus !== null && ein + aus > 0;
+  const gespeichert = typeof agent.total_cost_usd === "number" && Number.isFinite(agent.total_cost_usd) ? agent.total_cost_usd : null;
+  const tabelle = tagAnzeige(preisStandAb);
+  const gespeichertZeile =
+    gespeichert !== null && gespeichert > 0
+      ? `Gespeicherte Summe agents.total_cost_usd: ${formatiereUsd4(gespeichert)} — je Lauf mit der damals gültigen Preistabelle geschätzt (vor dem ${tabelle} die alte: Sonnet zu hoch, Haiku zu niedrig) und je Lauf auf 4 Stellen gerundet; nicht angezeigt.`
+      : null;
+  const zeilen = (...z: (string | null)[]): string => z.filter(Boolean).join("\n");
+  const preisText = (p: PreisJeMillion): string => `Input ${formatiereUsd(p.input)} · Output ${formatiereUsd(p.output)} je Mio. Tokens`;
+
+  const rueckfall = (grund: string, ohneSumme: string): KostenUntergrenze => {
+    if (gespeichert !== null && gespeichert > 0) {
+      return {
+        text: `≈ ${formatiereUsd4(gespeichert)}`,
+        etikett: "gespeicherte Summe, Preistabelle je Lauf",
+        titel: zeilen(
+          grund,
+          gespeichertZeile,
+          "≈ statt ≥: Die Rundung je Lauf kann die Summe um bis zu 0,00005 USD je Lauf über die Einzelschätzungen heben.",
+        ),
+      };
+    }
+    if (tokensDa) return { text: "nicht schätzbar", etikett: ohneSumme, titel: zeilen(grund, "Keine gespeicherte Summe in agents.total_cost_usd.") };
+    return { text: "nicht gemessen", etikett: "keine Tokens und keine Kosten eingetragen", titel: "agents: Tokens und Kosten 0 oder fehlend (DB-Default), keine Messung." };
+  };
+
+  const preisDashboard = modell === null ? null : preisVon(modell);
+  if (modell === null) return rueckfall("Kein Dashboard-Modell: nicht mit der aktuellen Tabelle umrechenbar.", "kein Dashboard-Modell");
+  if (!istPreis(preisDashboard)) return rueckfall(`Kein Tabellenpreis für ${modell}: nicht umrechenbar.`, `kein Tabellenpreis für ${modell}`);
+  if (!tokensDa || ein === null || aus === null) return rueckfall("Tokens fehlen: nicht mit der aktuellen Tabelle umrechenbar.", "Tokens fehlen");
+
+  // Nicht lesbare Nachrichten: kein Lauf geprüft, auch wenn noch eine ältere Liste da ist.
+  const geladen = nachrichten.fehler === null ? summenLaeufeJeModell(nachrichten.liste, String(agent.id ?? "")) : [];
+  const preise: PreisJeMillion[] = [];
+  for (const g of geladen) {
+    const p = preisVon(g.modell);
+    if (!istPreis(p)) return rueckfall(`Kein Tabellenpreis für ${g.modell} (Modell eines geladenen Laufs): nicht umrechenbar.`, `kein Tabellenpreis für ${g.modell}`);
+    preise.push(p);
+  }
+  const geprueftEin = geladen.reduce((s, g) => s + g.ein, 0);
+  const geprueftAus = geladen.reduce((s, g) => s + g.aus, 0);
+  const laeufe = geladen.reduce((s, g) => s + g.laeufe, 0);
+  const restEin = ein - geprueftEin;
+  const restAus = aus - geprueftAus;
+  const vollstaendig = restEin === 0 && restAus === 0;
+  const wert =
+    (geladen.reduce((s, g, i) => s + g.ein * preise[i].input + g.aus * preise[i].output, 0) +
+      Math.max(0, restEin) * preisDashboard.input +
+      Math.max(0, restAus) * preisDashboard.output) /
+    1_000_000;
+  const nurDashboardModell = geladen.every((g) => modellKern(g.modell) === modellKern(modell));
+  const jeModell = geladen.map(
+    (g, i) => `  ${g.modell}: ${g.laeufe} ${laeufeWort(g.laeufe)}, ${formatiereZahl(g.ein)} ein / ${formatiereZahl(g.aus)} aus × ${preisText(preise[i])}`,
+  );
+
+  if (vollstaendig && nurDashboardModell) {
+    return {
+      text: formatiereUsdUntergrenze(wert, 4),
+      etikett: `Tokens × aktuelle Preistabelle (${modell})`,
+      titel: zeilen(
+        `Tokens aus agents (${formatiereZahl(ein)} ein / ${formatiereZahl(aus)} aus) × Listenpreis ${modell} laut lib/kosten.ts (Tabelle ab ${tabelle}): ${preisText(preisDashboard)}.`,
+        `Modell je Lauf geprüft: ${laeufe} ${laeufeWort(laeufe)} (source activation-api) in den neuesten ${nachrichten.grenze} Nachrichten, alle auf ${modell} (metadata.model); ihre Tokens ergeben genau die Summen in agents.`,
+        gespeichertZeile,
+      ),
+    };
+  }
+  if (vollstaendig) {
+    return {
+      text: formatiereUsdUntergrenze(wert, 4),
+      etikett: "Tokens je Lauf × aktuelle Preistabelle (Modell je Lauf)",
+      titel: zeilen(
+        `Tokens je Lauf × Listenpreis seines Modells (metadata.model) laut lib/kosten.ts (Tabelle ab ${tabelle}); die ${laeufe} ${laeufeWort(laeufe)} (source activation-api) in den neuesten ${nachrichten.grenze} Nachrichten ergeben genau die Summen in agents:`,
+        ...jeModell,
+        `Dashboard-Modell heute: ${modell} — nicht jeder Lauf lief darauf.`,
+        gespeichertZeile,
+      ),
+    };
+  }
+  const grund =
+    nachrichten.fehler !== null
+      ? `Nachrichten nicht lesbar (${nachrichten.fehler}): Modell je Lauf nicht geprüft.`
+      : restEin < 0 || restAus < 0
+        ? `Die geladenen Läufe (${formatiereZahl(geprueftEin)} ein / ${formatiereZahl(geprueftAus)} aus) passen nicht zu den Summen in agents (${formatiereZahl(ein)} ein / ${formatiereZahl(aus)} aus).`
+        : `Geprüft: ${laeufe} ${laeufeWort(laeufe)} (source activation-api) in den neuesten ${nachrichten.grenze} Nachrichten mit ${formatiereZahl(geprueftEin)} ein / ${formatiereZahl(geprueftAus)} aus; für den Rest der Summen in agents (${formatiereZahl(restEin)} ein / ${formatiereZahl(restAus)} aus) ist kein Lauf geladen.`;
+  return {
+    text: `≈ ${formatiereUsd4(wert)}`,
+    etikett: "Tokens × aktuelle Preistabelle · nicht jeder Lauf geprüft",
+    titel: zeilen(
+      grund,
+      ...jeModell,
+      `Ohne geladenen Lauf mit dem Dashboard-Modell ${modell} gerechnet (${preisText(preisDashboard)}, Tabelle ab ${tabelle}) — ≈ statt ≥: Liefen diese Läufe auf einem günstigeren Modell, läge der Betrag darunter.`,
+      gespeichertZeile,
+    ),
+  };
 }
 
 /** Zeilengrenze der Abfrage in useMetrics: Alle Zahlen gelten "in den neuesten 200 Zeilen". */
@@ -973,10 +1354,51 @@ export function werteAktivierungAus(httpOk: boolean, httpStatus: number, daten: 
 
 // ── Metadaten einer Bus-Nachricht als Text — Stufe 1 (06.11.2026) ──
 
+/**
+ * metadata.source der bezahlten Läufe über das Dashboard, mit Art für die Anzeige. Dieselben
+ * Quellen wie KOSTEN_QUELLEN in lib/status-server.ts (Server-Datei, hier nicht importierbar;
+ * tests/u-tor-anzeige.test.mjs prüft die Gleichheit). Alle drei Schreiber setzen seit dem
+ * 06.11.2026 metadata.preis_stand (activate, delegate).
+ */
+export const LAUF_QUELLEN: Readonly<Record<string, string>> = {
+  "activation-api": "Aktivierung",
+  "delegate-plan": "Planung",
+  fehllauf: "Fehllauf",
+};
+
+/**
+ * Welche Preistabelle hinter metadata.cost_usd steht (Tor-Prüfung 07.11.2026, F6). null = die
+ * aktuelle (preis_stand = preisStandAb). Ohne preis_stand: bei Dashboard-Läufen die alte Tabelle
+ * (geschrieben vor dem Deploy der Tabelle vom preisStandAb, dieselbe Regel wie werteKostenAus in
+ * lib/status-server.ts), bei anderen Quellen unbekannt.
+ */
+export function preisTabelleHinweis(meta: unknown, preisStandAb: string): string | null {
+  const m = alsJsonObjekt(meta);
+  const stand = typeof m?.preis_stand === "string" && m.preis_stand.trim() ? m.preis_stand.trim() : null;
+  if (stand === preisStandAb) return null;
+  if (stand !== null) return `Preistabelle ${tagAnzeige(stand)}, nicht die aktuelle`;
+  const quelle = typeof m?.source === "string" ? m.source : "";
+  return Object.hasOwn(LAUF_QUELLEN, quelle) ? `alte Preistabelle vor ${tagAnzeige(preisStandAb)}` : "Preistabelle unbekannt";
+}
+
+/** Kontext für metaWertText: die ganzen Metadaten der Nachricht und PREIS_STAND_AB (lib/kosten.ts). */
+export interface MetaKontext {
+  meta: unknown;
+  preisStandAb: string;
+}
+
 /** Leere Werte heißen "nicht gemessen", Objekte erscheinen als JSON, cost_usd trägt
- *  "(geschätzt)" — die Kosten sind Schätzungen aus lib/kosten.ts. */
-export function metaWertText(schluessel: string, wert: unknown): string {
-  const name = schluessel === "cost_usd" ? "cost_usd (geschätzt)" : schluessel;
+ *  "(geschätzt)" — die Kosten sind Schätzungen aus lib/kosten.ts. Tor-Prüfung 07.11.2026 (F6):
+ *  cost_usd als Zahl einheitlich wie formatiereUsd4 (vorher Rohwert mit Gleitkomma-Rest wie
+ *  0.0015056000000000002), dazu die Preistabelle, wenn es nicht die aktuelle ist — ohne kontext
+ *  ist sie unbekannt. */
+export function metaWertText(schluessel: string, wert: unknown, kontext?: MetaKontext): string {
+  let name = schluessel;
+  if (schluessel === "cost_usd") {
+    const tabelle = kontext ? preisTabelleHinweis(kontext.meta, kontext.preisStandAb) : "Preistabelle unbekannt";
+    name = tabelle === null ? "cost_usd (geschätzt)" : `cost_usd (geschätzt, ${tabelle})`;
+    if (typeof wert === "number" && Number.isFinite(wert)) return `${name}: ${formatiereUsd4(wert)}`;
+  }
   let text: string;
   if (wert === null || wert === undefined) text = "nicht gemessen";
   else if (typeof wert === "object") {
@@ -1037,6 +1459,54 @@ export function nachrichtInhaltText(inhalt: unknown): string {
  */
 export function istFehllaufNachricht(m: { metadata?: unknown }): boolean {
   return alsJsonObjekt(m.metadata)?.source === "fehllauf";
+}
+
+// ── Zähler auf /messages — Tor-Prüfung 07.11.2026 (F5) ──
+// Vorher zählte die Seite nur task, response, broadcast und alert: Gemessen am 07.11.2026 ergaben
+// die Zähler 46 neben "48 Nachrichten" (je 1 plan und plan_run aus /api/donna/delegate fehlten).
+// Jetzt fällt jede Nachricht in genau einen Zähler; die Summe ist die Zahl der Liste.
+
+/** Zähler in Anzeigefolge; "fehllauf" und "andere" sind keine message_type-Werte. */
+export const BUS_ZAEHLER = ["task", "response", "broadcast", "alert", "plan", "plan_run", "fehllauf", "andere"] as const;
+export type BusZaehler = (typeof BUS_ZAEHLER)[number];
+
+const BUS_TYPEN: readonly string[] = ["task", "response", "broadcast", "alert", "plan", "plan_run"];
+
+/** Zähler einer Nachricht: ein Fehllauf zählt immer als Fehllauf, ein unbekannter Typ als "andere". */
+export function busZaehlerVon(m: { message_type?: unknown; metadata?: unknown }): BusZaehler {
+  if (istFehllaufNachricht(m)) return "fehllauf";
+  return typeof m.message_type === "string" && BUS_TYPEN.includes(m.message_type) ? (m.message_type as BusZaehler) : "andere";
+}
+
+// ── Modell des letzten Laufs auf /agents/[id] — Tor-Prüfung 07.11.2026 (F7) ──
+// Vorher zählte nur source activation-api: Für L.I.S.A. stand "nicht in den neuesten 20
+// Nachrichten", obwohl ihr Planungslauf (delegate-plan, claude-sonnet-5) darunter lag. Jetzt
+// zählen alle bezahlten Läufe über das Dashboard (LAUF_QUELLEN), mit Art und Quelle.
+
+export function letzterLaufAnzeige(
+  messages: readonly Pick<Message, "from_agent" | "metadata" | "created_at">[],
+  agentId: string,
+  grenze: number,
+  fehler: string | null,
+): { text: string; titel: string } {
+  const gezaehlt = "gezählt: source activation-api (Aktivierung), delegate-plan (L.I.S.A.-Planung), fehllauf (bezahlt, ohne verwertbare Antwort)";
+  if (fehler) return { text: "nicht lesbar", titel: `Nachrichten nicht lesbar: ${fehler}` };
+  for (const m of messages) {
+    if (m.from_agent !== agentId) continue;
+    const meta = alsJsonObjekt(m.metadata);
+    const quelle = typeof meta?.source === "string" ? meta.source : "";
+    const modell = typeof meta?.model === "string" ? meta.model.trim() : "";
+    if (!Object.hasOwn(LAUF_QUELLEN, quelle) || !modell) continue;
+    const art = quelle === "fehllauf" ? (meta?.art === "planung" ? "Fehllauf der Planung" : "Fehllauf") : LAUF_QUELLEN[quelle];
+    return {
+      text: `${modell} · ${art}`,
+      titel: `Quelle: metadata.model der jüngsten Lauf-Nachricht dieses Agenten (source ${quelle}), ${datumZeit(m.created_at) ?? "Zeit unlesbar"}, in den neuesten ${grenze} Nachrichten; ${gezaehlt}`,
+    };
+  }
+  return {
+    text: `kein Lauf in den neuesten ${grenze} Nachrichten`,
+    titel: `Keine Nachricht dieses Agenten mit metadata.model in den neuesten ${grenze} Nachrichten; ${gezaehlt}`,
+  };
 }
 
 // ── Nachbesserung 06.11.2026 (Prüfrunde nach Stufe 1) ──

@@ -5,12 +5,20 @@
 // Protocol hat nichts mit Trading zu tun); COMPANY_CONTEXT ohne Umsatzziel und Agentenzahl,
 // Vorschläge statt autonomer Entscheidungen; der COUNSEL-Rahmentext nennt die Plattform
 // "Steinadel" statt ihres internen Namens. Das Regelpaket selbst bleibt unverändert.
+// Nachprüfung 07.11.2026 (Befund sicherheit-1): "server-only" ist der harte Riegel — importiert
+// eine Client-Komponente diese Datei (statisch oder per import()), bricht next build ab, statt
+// alle System-Prompts ins öffentliche JS-Bundle zu legen. Next.js löst das Paket selbst auf
+// (node_modules/next/dist/docs/01-app/01-getting-started/05-server-and-client-components.md);
+// Node-Tests bilden es auf die leere Server-Fassung ab (tests/u-tor-anzeige, tests/z-routen).
 
+import "server-only";
 import { STEINADEL_REGELPAKET } from "./steinadel-regelpaket";
+import { AGENT_MODELLE, type DashboardModell } from "./agent-modelle";
 
 export interface AgentPrompt {
   systemPrompt: string;
-  model: "claude-sonnet-5" | "claude-haiku-4-5-20251001";
+  /** Aus lib/agent-modelle.ts (einzige Quelle, auch für die Anzeige im Browser). */
+  model: DashboardModell;
   maxTokens: number;
 }
 
@@ -29,7 +37,7 @@ export const AGENT_PROMPTS: Record<string, AgentPrompt> = {
   // ═══════════════════════════════════════════════════════════════
 
   strategist: {
-    model: "claude-sonnet-5",
+    model: AGENT_MODELLE.strategist,
     // Sonnet-5: adaptives Thinking teilt sich max_tokens mit dem Text (vgl. Delegate-Fix).
     // 6000 reichte empirisch NICHT (Publisher-QS: 6000 Tokens Thinking, 0 Text) → 12000.
     maxTokens: 12000,
@@ -86,7 +94,7 @@ Kommunikationsstil: Direkt, entschlossen, zahlengetrieben. Erst die Entscheidung
 
   donna: {
     // Interner Slug bleibt "donna" (Routen/IDs) — Persona + Anzeigename sind L.I.S.A.
-    model: "claude-sonnet-5",
+    model: AGENT_MODELLE.donna,
     // Sonnet-5: adaptives Thinking teilt sich max_tokens mit dem Text (vgl. Delegate-Fix).
     // 6000 reichte empirisch NICHT (Publisher-QS: 6000 Tokens Thinking, 0 Text) → 12000.
     maxTokens: 12000,
@@ -152,7 +160,7 @@ Kommunikationsstil: Wie eine exzellente COO — kurz, sicher, analytisch, lösun
   // ═══════════════════════════════════════════════════════════════
 
   oracle: {
-    model: "claude-sonnet-5",
+    model: AGENT_MODELLE.oracle,
     // Sonnet-5: adaptives Thinking teilt sich max_tokens mit dem Text (vgl. Delegate-Fix).
     // 6000 reichte empirisch NICHT (Publisher-QS: 6000 Tokens Thinking, 0 Text) → 12000.
     maxTokens: 12000,
@@ -206,7 +214,7 @@ Kommunikationsstil: Daten zuerst, Quellen nennen, probabilistisch denken. "BLUF:
   },
 
   operator: {
-    model: "claude-sonnet-5",
+    model: AGENT_MODELLE.operator,
     // Sonnet-5: adaptives Thinking teilt sich max_tokens mit dem Text (vgl. Delegate-Fix).
     // 6000 reichte empirisch NICHT (Publisher-QS: 6000 Tokens Thinking, 0 Text) → 12000.
     maxTokens: 12000,
@@ -261,7 +269,7 @@ Kommunikationsstil: Prozessorientiert, metriklastig, lösungsfokussiert. "Bottle
   },
 
   architect: {
-    model: "claude-sonnet-5",
+    model: AGENT_MODELLE.architect,
     // Sonnet-5: adaptives Thinking teilt sich max_tokens mit dem Text (vgl. Delegate-Fix).
     // 6000 reichte empirisch NICHT (Publisher-QS: 6000 Tokens Thinking, 0 Text) → 12000.
     maxTokens: 12000,
@@ -323,7 +331,7 @@ Kommunikationsstil: Technisch aber verständlich. In Systemen und Trade-offs den
   },
 
   treasurer: {
-    model: "claude-haiku-4-5-20251001",
+    model: AGENT_MODELLE.treasurer,
     maxTokens: 1024,
     systemPrompt: `${COMPANY_CONTEXT}
 
@@ -379,7 +387,7 @@ Kommunikationsstil: Zahlen zuerst, konservative Schätzungen, ROI-fokussiert. "A
   },
 
   publisher: {
-    model: "claude-sonnet-5",
+    model: AGENT_MODELLE.publisher,
     // Sonnet-5: adaptives Thinking teilt sich max_tokens mit dem Text (vgl. Delegate-Fix).
     // 6000 reichte empirisch NICHT (Publisher-QS: 6000 Tokens Thinking, 0 Text) → 12000.
     maxTokens: 12000,
@@ -444,7 +452,7 @@ VERÖFFENTLICHUNGS-REGEL (HART, NICHT VERHANDELBAR — Betreiber-Entscheid 29.07
   },
 
   counsel: {
-    model: "claude-haiku-4-5-20251001",
+    model: AGENT_MODELLE.counsel,
     // 4096: Pipeline-Review wurde bei 2048 mitten im Text gekappt → URTEIL-Zeile
     // fehlte → fail-closed-Ablehnung trotz inhaltlichem PASS (Studio-Lauf 27.07.)
     maxTokens: 4096,
@@ -519,7 +527,7 @@ ${STEINADEL_REGELPAKET}`,
   // ═══════════════════════════════════════════════════════════════
 
   amplifier: {
-    model: "claude-haiku-4-5-20251001",
+    model: AGENT_MODELLE.amplifier,
     // 2048: Distribution-Empfehlungen schnitten bei 1024 die letzte Zeile ab (E-Lauf 27.07.)
     maxTokens: 2048,
     systemPrompt: `${COMPANY_CONTEXT}
@@ -578,7 +586,7 @@ Kommunikationsstil: Metrikgetrieben, plattformspezifisch, immer am Testen. "Expe
   },
 
   merchant: {
-    model: "claude-haiku-4-5-20251001",
+    model: AGENT_MODELLE.merchant,
     maxTokens: 1024,
     systemPrompt: `${COMPANY_CONTEXT}
 
@@ -638,7 +646,7 @@ Kommunikationsstil: Kunde-zuerst, datengestützt, immer an Conversion denkend. "
   },
 
   researcher: {
-    model: "claude-sonnet-5",
+    model: AGENT_MODELLE.researcher,
     // Sonnet-5: adaptives Thinking teilt sich max_tokens mit dem Text (vgl. Delegate-Fix).
     // 6000 reichte empirisch NICHT (Publisher-QS: 6000 Tokens Thinking, 0 Text) → 12000.
     maxTokens: 12000,
@@ -702,7 +710,7 @@ Kommunikationsstil: Gründlich, gut quellenbelegt, strukturiert. Executive Summa
   // ═══════════════════════════════════════════════════════════════
 
   scribe: {
-    model: "claude-haiku-4-5-20251001",
+    model: AGENT_MODELLE.scribe,
     // 8000: Bei 2048 brach ein 10-Slide-Instagram-Carousel mitten im Wort ab
     // ("⚠️ Modellrech", Lauf #7 am 30.07.) → COUNSEL lehnte den fragmentarischen
     // Disclaimer zu Recht ab. Kosten fallen nur fuer generierte Tokens an.
@@ -774,7 +782,7 @@ VERÖFFENTLICHUNGS-REGEL (HART, NICHT VERHANDELBAR — Betreiber-Entscheid 29.07
   // activate antwortet für trader deshalb mit 404.
 
   guardian: {
-    model: "claude-haiku-4-5-20251001",
+    model: AGENT_MODELLE.guardian,
     maxTokens: 1024,
     systemPrompt: `${COMPANY_CONTEXT}
 
@@ -838,7 +846,7 @@ Kommunikationsstil: Alert-getrieben, statusfokussiert. "SYSTEM OK: SLO 99.95% (B
   },
 
   concierge: {
-    model: "claude-haiku-4-5-20251001",
+    model: AGENT_MODELLE.concierge,
     maxTokens: 1024,
     systemPrompt: `${COMPANY_CONTEXT}
 
@@ -899,7 +907,7 @@ Kommunikationsstil: Warm, hilfsbereit, lösungsorientiert. Empathisch aber effiz
   },
 
   localizer: {
-    model: "claude-haiku-4-5-20251001",
+    model: AGENT_MODELLE.localizer,
     maxTokens: 1024,
     systemPrompt: `${COMPANY_CONTEXT}
 

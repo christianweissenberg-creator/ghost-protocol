@@ -680,10 +680,10 @@ const zeile = (job, begonnen, ergebnis = "ok", extra = {}) => ({
   ...extra,
 });
 
-test("T-A1 Anzeige (Erzeuger → Leser): 'Crons · aus seit 30.07.2026' bernstein, Quelle und ehrlicher Tooltip je Job", async () => {
+test("T-A1 Anzeige (Erzeuger → Leser): 'Crons · laut Plan aus seit 30.07.2026 · VPS-Crontab' bernstein, Quelle und ehrlicher Tooltip je Job", async () => {
   const s = await statusAbruf();
   const z = cronsZeile({ erzeugt_am: s.erzeugt_am, crons: s.crons });
-  assert.equal(z.text, "aus seit 30.07.2026");
+  assert.equal(z.text, "laut Plan aus seit 30.07.2026 · VPS-Crontab"); // Tor-Prüfung 07.11.2026 (T2): Planwert und Umfang sichtbar
   assert.equal(z.farbe, "var(--gp-amber)");
   assert.ok(z.title.startsWith(`Quelle: ${Q_CRONS}\n`), z.title);
   for (const [job, nr] of [
@@ -691,7 +691,7 @@ test("T-A1 Anzeige (Erzeuger → Leser): 'Crons · aus seit 30.07.2026' bernstei
     ["Briefing abends (briefing-abend)", 24],
     ["Content Auto-Produce (content-auto-produce)", 27],
   ]) {
-    assert.ok(z.title.includes(`${job}: aus seit 30.07.2026 — Crons abgeschaltet (Betreiber-Entscheid)`), z.title);
+    assert.ok(z.title.includes(`${job}: laut Plan aus seit 30.07.2026 — Crons abgeschaltet (Betreiber-Entscheid)`), z.title);
     assert.ok(z.title.includes(`Fundstelle: GG/decisions_log.md Abschnitt 30.07.2026; scripts/setup-vps-crons.sh:${nr}`), z.title);
   }
   // Prüfbefund B1: kein Beobachtungsfenster, solange NACHWEIS_SEIT nicht festgehalten ist.
@@ -732,7 +732,7 @@ test("T-A2 Anzeige: Texte je Lage — ok, teilweise, fehlgeschlagen, überfälli
   const freitag = zeile("briefing-morgen", "2026-11-06T07:03:10.000Z");
   assert.equal(anzeige(cronsMesswert(plan, [freitag], mo1004), mo1004), "Briefing morgens: überfällig seit Mo 09.11. 08:03 · letzter Lauf vor 3 Tagen");
   assert.equal(anzeige(cronsMesswert(totmann.TOTMANN_PLAN, [abend], ZEIT)), "Briefing abends: lief zuletzt am 09.11.2026 18:03, obwohl als aus geführt");
-  assert.equal(anzeige(cronsMesswert(totmann.TOTMANN_PLAN, [], ZEIT, "relation does not exist")), "aus seit 30.07.2026 · Nachweis nicht lesbar");
+  assert.equal(anzeige(cronsMesswert(totmann.TOTMANN_PLAN, [], ZEIT, "relation does not exist")), "laut Plan aus seit 30.07.2026 · VPS-Crontab · Nachweis nicht lesbar");
   assert.equal(anzeige(cronsMesswert([aktiv(MORGEN), ABEND, AUTO], [], ZEIT, "relation does not exist")), "Briefing morgens: Nachweis nicht lesbar");
   // Mehrere schlechteste Jobs mit verschiedenen Texten: der erste und die Zahl der weiteren.
   assert.equal(
@@ -987,7 +987,7 @@ test("T-A6 Anzeige (Prüfbefund B5): Rangfolge von Client und Server gleich; war
   assert.deepEqual(m.wert.jobs.map((j) => j.status), ["warnung", "nicht_gemessen", "ok"]);
   assert.equal(m.status, "warnung");
   const z = cronsZeile({ erzeugt_am: jetzt, crons: m });
-  assert.equal(z.text, "Briefing morgens: aus seit 30.07.2026");
+  assert.equal(z.text, "Briefing morgens: laut Plan aus seit 30.07.2026 · VPS-Crontab");
   assert.equal(z.farbe, "var(--gp-amber)");
 });
 
@@ -1134,12 +1134,12 @@ test("T-A11 Anzeige (Prüfbefund anzeige-2): erster Sollzeitpunkt steht aus — 
   const jetzt = "2026-11-16T06:00:00.000Z"; // Mo 07:00 Berlin, Tabelle leer
   // d1: nur Briefing morgens aktiv — die Zeile nennt die bernsteinfarbenen Jobs, der Tooltip die Lage.
   const d1 = cronsZeile({ erzeugt_am: jetzt, crons: cronsMesswert([aktiv(MORGEN, seit), ABEND, AUTO], [], jetzt) });
-  assert.equal(d1.text, "2 von 3 Jobs: aus seit 30.07.2026");
+  assert.equal(d1.text, "2 von 3 Jobs: laut Plan aus seit 30.07.2026 · VPS-Crontab");
   assert.equal(d1.farbe, "var(--gp-amber)");
   assert.ok(d1.title.includes("Briefing morgens (briefing-morgen): laut Plan aktiv seit 16.11.2026 00:00:00 (Europe/Berlin)\n  Lage: erster Sollzeitpunkt steht aus\n"), d1.title);
   assert.ok(d1.title.includes("\n  Erster zählender Sollzeitpunkt: Mo 16.11. 08:03 (Europe/Berlin), Urteil ab 10:03\n"), d1.title);
   assert.ok(d1.title.includes("Letzter Lauf: keiner in lauf_nachweis (laut Plan aktiv seit 16.11.2026 00:00:00, Europe/Berlin)"), d1.title);
-  assert.ok(d1.title.includes("Briefing abends (briefing-abend): aus seit 30.07.2026 — Crons abgeschaltet (Betreiber-Entscheid)\n  Lage: aus seit 30.07.2026\n"), d1.title);
+  assert.ok(d1.title.includes("Briefing abends (briefing-abend): laut Plan aus seit 30.07.2026 — Crons abgeschaltet (Betreiber-Entscheid)\n  Lage: laut Plan aus seit 30.07.2026 · VPS-Crontab\n"), d1.title);
   // Ein S vor aktiv_seit heißt nicht mehr "Sollzeitpunkt".
   assert.doesNotMatch(d1.title, /Sollzeitpunkt: Fr 13\.11\./);
   // d2: alle drei aktiv — die Zeile grau, im Tooltip je Job erster zählender Sollzeitpunkt und Urteil.
@@ -1173,7 +1173,7 @@ test("T-A12 Anzeige (Prüfbefund anzeige-3): Die Quittung des Stolperdrahts steh
   assert.equal(abend.stolperdraht_quittiert_bis_berlin, "21.11.2026 00:00");
   assert.equal(m.wert.jobs[0].stolperdraht_quittiert_bis_berlin, null);
   const z = cronsZeile({ erzeugt_am: jetzt, crons: m });
-  assert.equal(z.text, "aus seit 30.07.2026");
+  assert.equal(z.text, "laut Plan aus seit 30.07.2026 · VPS-Crontab"); // Tor-Prüfung 07.11.2026 (T2): Planwert und Umfang sichtbar
   assert.ok(z.title.includes("\n  Stolperdraht quittiert bis 21.11.2026 00:00 (Europe/Berlin, Plan lib/totmann.ts) — Läufe davor lösen nicht aus\n"), z.title);
   // Auch im Hinweis der Messung — den liest ein Bundle von vor dieser Änderung (Prüfbefund B7).
   assert.equal(m.hinweis, "alle 3 Jobs laut Plan aus seit 30.07.2026 · Stolperdraht Briefing abends laut Plan quittiert bis 21.11.2026 00:00 (Europe/Berlin)");
