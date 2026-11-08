@@ -40,6 +40,8 @@ const regeln = await import("../src/lib/freigabe-regeln.ts");
 const hooksStatus = await import("../src/lib/hooks-status.ts");
 const kosten = await import("../src/lib/kosten.ts");
 const statusRoute = await import(pathToFileURL(process.env.G_ROUTE_STATUS ?? path.join(SITE, "src/app/api/status/route.ts")).href);
+// Objekt-Studio Schritt 2: /expose importiert next/link und die Studio-Allow-List.
+const studioObjekte = await import("../src/lib/studio/objekte.ts");
 
 const ECHT = { react: React, "react/jsx-runtime": jsxRuntime };
 const ent = (html) => html.replace(/&quot;/g, '"').replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&#x27;/g, "'");
@@ -672,7 +674,13 @@ test("G-X1 /expose: laden() übernimmt die Ursache in die Anzeige (401, fehlende
     for (const [antwort, kopf, fehlertext] of faelle) {
       globalThis.fetch = async () => antwort();
       const lz = effektLaufzeit();
-      const E = ladeTsx("app/expose/page.tsx", { ...lz.attrappen, "@/lib/freigabe-regeln": regeln, "@/lib/hooks-status": hooksStatus });
+      const E = ladeTsx("app/expose/page.tsx", {
+        ...lz.attrappen,
+        "next/link": { __esModule: true, default: ({ href, children, ...rest }) => lz.attrappen["react/jsx-runtime"].jsx("a", { href, ...rest, children }) },
+        "@/lib/freigabe-regeln": regeln,
+        "@/lib/hooks-status": hooksStatus,
+        "@/lib/studio/objekte": studioObjekte,
+      });
       lz.rendere(E.default);
       lz.effekte();
       for (let i = 0; i < 10; i += 1) await new Promise((fertig) => setImmediate(fertig));

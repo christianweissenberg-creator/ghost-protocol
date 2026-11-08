@@ -16,10 +16,16 @@
 // Exposé, Kampagne) wird nur gezeigt, wenn seine URL den geschützten Namen nicht enthält; sonst
 // steht dort ein Hinweis statt des Links. Ob der Export den Namen enthält, ist nicht gemessen.
 
+// Objekt-Studio Schritt 2 (08.11.2026): Objekte der Studio-Allow-List (lib/studio/objekte.ts)
+// bekommen den Link "Im Studio öffnen" auf /studio/<slug>. Der Knopf "Kampagnen-Ablauf ansehen"
+// bleibt: Er zeigt nur die feste Vorlage, beauftragt nichts und nennt keine Zahl.
+
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { enthaeltGeschuetztenNamen, maskiereGeschuetzteNamen } from "@/lib/freigabe-regeln";
 import { objekteFehlerAnzeige, objekteFehlerArt, objektFehlerText } from "@/lib/hooks-status";
 import type { ObjekteFehlerArt } from "@/lib/hooks-status";
+import { istStudioObjekt, studioPfad } from "@/lib/studio/objekte";
 
 type Kennzahl = { label: string; wert: string };
 type Kampagne = { kampagne: string; lpUrl: string; lpVariant: string };
@@ -341,6 +347,19 @@ export default function ExposePage() {
                             farbe="var(--gp-cyan)"
                           />
                         ))}
+                      </div>
+                    )}
+
+                    {istStudioObjekt(o.slug) && (
+                      <div className="mt-4">
+                        <Link
+                          href={studioPfad(o.slug)}
+                          className="mono-label"
+                          style={{ color: "var(--gp-gold-hi)" }}
+                          data-studio-link
+                        >
+                          Im Studio öffnen →
+                        </Link>
                       </div>
                     )}
 

@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { STUDIO_EINSTIEG } from "@/lib/studio/objekte";
 
 // Prototyp-Vorbild: Gold-Diamant-Logo, gruppierte Nav mit Icons,
 // Aktiv-Item = Gold-Linksbalken + Gold-Text + getönte Pille.
@@ -25,6 +26,8 @@ const NAV_GROUPS: { title: string; items: { href: string; label: string; glyph: 
     title: "Produktion",
     items: [
       { href: "/expose", label: "Exposé-Engine", glyph: "⌂" },
+      // Objekt-Studio Schritt 2 (08.11.2026): ein Objekt der Allow-List (lib/studio/objekte.ts), nur lesend.
+      { href: STUDIO_EINSTIEG, label: "Objekt-Studio", glyph: "◫" },
       { href: "/content", label: "Content-Pipeline", glyph: "▣" },
       { href: "/academy", label: "Academy", glyph: "◉" },
     ],

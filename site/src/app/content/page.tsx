@@ -1,22 +1,29 @@
 "use client";
 
 import { Suspense, useCallback, useEffect, useRef, useState } from "react";
-import type { ReactNode } from "react";
 import { useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import { KPICard } from "@/components/ui/KPICard";
 import { objekteFehlerArt, objektFehlerText, useFreigaben } from "@/lib/hooks-status";
 import type { ObjekteFehlerArt } from "@/lib/hooks-status";
-import { werteCounselAus } from "@/lib/counsel-urteil";
-import type { CounselAuswertung } from "@/lib/counsel-urteil";
-import {
-  MIN_FREIGABE_ZEICHEN,
-  enthaeltGeschuetztenNamen,
-  maskiereGeschuetzteNamen,
-  pruefeFreigabe,
-} from "@/lib/freigabe-regeln";
-import type { FreigabePruefung } from "@/lib/freigabe-regeln";
+import { enthaeltGeschuetztenNamen, maskiereGeschuetzteNamen } from "@/lib/freigabe-regeln";
 import type { CounselUrteil } from "@/lib/status-types";
+import { BelegKette } from "@/components/studio/BelegKette";
+import { FreigebenKnopf } from "@/components/studio/FreigabeKnopf";
+import {
+  FARBE_BERNSTEIN,
+  FARBE_ROT,
+  STATUS_MIT_TEXT,
+  alsObjekt,
+  fassungsBezug,
+  freigabeLageGemerkt,
+  istObjekt,
+  maskiert,
+  maskiertWert,
+  urteilAnzeige,
+  zeitText,
+} from "@/components/studio/beleg-hilfen";
+import type { ContentMetadata, CounselVermerk, FassungsBezug, FreigabeLage, Vermerk } from "@/components/studio/beleg-hilfen";
 
 // Stufe 1 (05.11.2026) — Freigabe mit Beleg-Kette:
 // - Die Kachel "Zur Freigabe" zählt über /api/freigaben (alle wartenden Einträge), nicht
@@ -61,70 +68,14 @@ import type { CounselUrteil } from "@/lib/status-types";
 // Posten" zählt jetzt nur Einträge mit Vermerk; die übrigen stehen als "freigegeben ohne
 // Betreiber-Vermerk (Altbestand)" da, in der Kachel und am Eintrag. Nur Anzeige: Freigabe-Regel
 // (pruefeFreigabe), Status-Route und Datenbank bleiben unverändert.
+//
+// Objekt-Studio Schritt 2 (08.11.2026): Freigeben-Knopf (components/studio/FreigabeKnopf.tsx),
+// Beleg-Kette (components/studio/BelegKette.tsx) und ihre Hilfen, Typen und Farben
+// (components/studio/beleg-hilfen.ts) sind ausgelagert; das Objekt-Studio nutzt dieselbe Beleg-Kette.
+// Der Code ist unverändert übernommen, diese Seite rendert byte-gleich
+// (tests/s-content-unveraendert.test.mjs).
 
 // ═══ TYPES ═══
-
-/** Vermerk mit Stufe und Grund, wie die Pipeline ihn in metadata schreibt (seit Stufe 1). */
-interface Vermerk {
-  stufe?: string;
-  grund?: string;
-  detail?: string;
-  am?: string;
-}
-
-interface CounselVermerk {
-  urteil?: string;
-  zeile?: string | null;
-  grund?: string;
-  geprueft?: string;
-  am?: string;
-}
-
-/** Betreiber-Entscheidung aus /api/content/status (metadata.freigabe, metadata.gepostet). */
-interface AktionsVermerk {
-  aktion?: string;
-  am?: string;
-  durch?: string;
-  grund?: string;
-  published_url?: string;
-}
-
-interface ObjektSnapshot {
-  abgerufen_am?: string;
-  export?: { version?: string | null; quelle?: string | null; generiert_am?: string | null } | null;
-  objekt?: Record<string, unknown> | null;
-}
-
-interface StepEintrag {
-  agent: string;
-  status?: string;
-  output?: string;
-  fehler?: string;
-  cost?: number | null;
-  duration_ms?: number;
-}
-
-interface ContentMetadata {
-  thema?: string;
-  objekt_slug?: string | null;
-  utm_content?: string | null;
-  kampagne?: string | null;
-  cta_link?: string | null;
-  amplifier_empfehlung?: string;
-  /** Vor Stufe 1 ein Text, seit Stufe 1 ein Vermerk mit Stufe und Grund. */
-  fehler?: string | Vermerk;
-  warnungen?: Vermerk[];
-  steps?: StepEintrag[];
-  counsel?: CounselVermerk;
-  regelpaket?: { version?: string | null; stand?: string | null };
-  objekt_snapshot?: ObjektSnapshot | null;
-  researcher_quellen?: string;
-  freigabe_hinweis?: { geprueft?: string; zur_freigabe?: string; identisch?: boolean };
-  freigabe?: AktionsVermerk;
-  gepostet?: AktionsVermerk;
-  abgelehnt_durch?: string;
-  metriken_verlauf?: unknown[];
-}
 
 interface ContentItem {
   id: number;
@@ -234,21 +185,8 @@ type LaufAusgang =
 
 type LaufMeldung = Exclude<LaufAusgang, { art: "ergebnis" }>;
 
-/** Bezug des COUNSEL-Urteils zum Freigabetext (body). */
-type FassungsBezug = "identisch" | "abweichend" | "nicht_pruefbar" | "kein_text";
-
 /** Was der Pipeline-Fluss gerade zeigen kann. */
 type FlussLage = "kein_lauf" | "laeuft" | "ergebnis" | "unbekannt";
-
-interface FreigabeLage {
-  counsel: CounselAuswertung;
-  pruefung: FreigabePruefung;
-  bezug: FassungsBezug;
-  /** Von COUNSEL geprüfter Text (metadata.steps[1].output, SCRIBE); null = nicht gespeichert. */
-  geprueftText: string | null;
-  /** Der Freigabetext enthält den geschützten Namen. */
-  nameImText: boolean;
-}
 
 // ═══ CONSTANTS ═══
 
@@ -342,25 +280,6 @@ const LISTE_LIMIT = 50;
 /** Höchstlänge des Ablehnungsgrunds — gleich wie in /api/content/status. */
 const GRUND_MAX = 500;
 
-/** Status, in denen ein Text zur Freigabe (body) erwartet wird. */
-const STATUS_MIT_TEXT = ["zur_freigabe", "freigegeben", "gepostet"];
-
-/** Felder des Objekt-Snapshots in der Reihenfolge, wie buildObjektBlock sie nutzt. */
-const SNAPSHOT_ZEILEN: [string, string][] = [
-  ["name", "Name"],
-  ["untertitel", "Untertitel"],
-  ["tagline", "Tagline"],
-  ["ort", "Ort"],
-  ["baujahr", "Baujahr"],
-  ["preis", "Preis"],
-  ["kurzbeschreibung", "Kurzbeschreibung"],
-  ["statusBadge", "Status"],
-  ["afaProzent", "AfA-Satz"],
-  ["istDenkmal", "Denkmal"],
-  ["kennzahlen", "Kennzahlen"],
-  ["kampagnen", "Kampagnen"],
-];
-
 // Gegencheck 06.11.2026: 502 hat keine eigene Bezeichnung mehr. "Quelle nicht erreichbar" stand
 // vor jeder 502 der Pipeline, auch bei fehlendem Token oder unvollständigem Objekt, wo die
 // Quelle erreichbar war oder gar nicht abgefragt wurde. Die Ursache steht im Fehlertext.
@@ -381,10 +300,6 @@ const STUFEN = ["researcher", "scribe", "counsel", "publisher", "amplifier"] as 
 const LAUF_ID_MUSTER = /^[A-Za-z0-9:_-]{8,80}$/;
 
 const AUSGANG_UNBEKANNT = "Ausgang unbekannt — der Lauf kann noch laufen, Content-Tab prüfen";
-
-const FARBE_GRUEN = "var(--gp-emerald)";
-const FARBE_ROT = "var(--gp-rose)";
-const FARBE_BERNSTEIN = "var(--gp-amber)";
 
 // body an Tweet-Grenzen splitten: Zeilen die mit "N/" oder "**N/M**" beginnen,
 // Markdown-Bold-Sterne entfernen. Ohne Treffer: gesamter Body als ein Block.
@@ -413,15 +328,6 @@ function charCountColor(len: number): string {
 }
 
 // ═══ HILFSFUNKTIONEN (Stufe 1, 05.11.2026) ═══
-
-function istObjekt(wert: unknown): wert is Record<string, unknown> {
-  return typeof wert === "object" && wert !== null && !Array.isArray(wert);
-}
-
-/** Wie istObjekt, behält aber den deklarierten Typ (metadata kommt ungeprüft aus der DB). */
-function alsObjekt<T extends object>(wert: T | string | null | undefined): T | null {
-  return typeof wert === "object" && wert !== null && !Array.isArray(wert) ? wert : null;
-}
 
 /**
  * Freigabe durch den Betreiber vermerkt? /api/content/status schreibt seit Stufe 1 beim Freigeben
@@ -457,12 +363,6 @@ function vermerkText(v: unknown): string | null {
   return maskiert(`${stufe}${v.grund}${detail}`);
 }
 
-function zeitText(iso: unknown): string {
-  if (typeof iso !== "string" || !iso) return "nicht gespeichert";
-  const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? maskiert(iso) : d.toLocaleString("de-DE", { dateStyle: "short", timeStyle: "short" });
-}
-
 function istHttpUrl(wert: string): boolean {
   try {
     const url = new URL(wert.trim());
@@ -470,17 +370,6 @@ function istHttpUrl(wert: string): boolean {
   } catch {
     return false;
   }
-}
-
-/** Für die Anzeige: geschützten Namen ersetzen. Gilt für alle Texte außer dem Freigabetext (body). */
-function maskiert(text: string): string {
-  return maskiereGeschuetzteNamen(text);
-}
-
-/** Wert aus DB oder Server für die Anzeige: maskiert; null/undefined ergeben einen leeren Text. */
-function maskiertWert(wert: unknown): string {
-  if (wert === null || wert === undefined) return "";
-  return maskiert(typeof wert === "string" ? wert : String(wert));
 }
 
 /** Fehlertext einer JSON-Antwort (Feld fehler, sonst error); null, wenn keiner. */
@@ -493,25 +382,6 @@ function serverText(daten: unknown): string | null {
 
 function fehlerMeldung(status: number, daten: unknown): string {
   return maskiert(`${HTTP_ART[status] ?? "Fehler"} (HTTP ${status}): ${serverText(daten) ?? "ohne Fehlertext"}`);
-}
-
-/** Ein Snapshot-Feld als Textzeilen; Fehlendes heißt "nicht im Export", nie ein Ersatzwert. */
-function snapshotWert(feld: string, wert: unknown): string[] {
-  if (wert === null || wert === undefined || wert === "") return ["nicht im Export"];
-  if (typeof wert === "boolean") return [wert ? "ja" : "nein"];
-  if (feld === "afaProzent" && typeof wert === "number") return [`${wert} %`];
-  if (Array.isArray(wert)) {
-    if (wert.length === 0) return ["keine"];
-    return wert.map((e) => {
-      if (!istObjekt(e)) return String(e);
-      const teil = (k: string) => (e[k] === undefined || e[k] === null || e[k] === "" ? "fehlt" : String(e[k]));
-      if (feld === "kennzahlen") return `${teil("label")}: ${teil("wert")}`;
-      if (feld === "kampagnen") return `${teil("kampagne")} (${teil("lpVariant")}): ${teil("lpUrl")}`;
-      return JSON.stringify(e);
-    });
-  }
-  if (typeof wert === "object") return [JSON.stringify(wert)];
-  return [String(wert)];
 }
 
 /**
@@ -792,57 +662,6 @@ function alsUrteil(wert: unknown): CounselUrteil {
   return wert === "FREIGABE" || wert === "ABLEHNUNG" ? wert : "UNKLAR";
 }
 
-/** Von COUNSEL geprüfter Text: metadata.steps[1].output (SCRIBE); null, wenn nicht gespeichert. */
-function geprueftenText(meta: ContentMetadata): string | null {
-  const schritt: unknown = Array.isArray(meta.steps) ? meta.steps[1] : undefined;
-  if (!istObjekt(schritt) || typeof schritt.output !== "string") return null;
-  if (typeof schritt.agent === "string" && schritt.agent.toLowerCase() !== "scribe") return null;
-  return schritt.output;
-}
-
-/**
- * Hat COUNSEL genau den Freigabetext geprüft? Gleichheit nur durch direkten Vergleich mit dem
- * gespeicherten geprüften Text; der Hinweis aus der Pipeline kann nur eine Abweichung belegen.
- */
-function fassungsBezug(
-  body: string | null | undefined,
-  geprueft: string | null,
-  hinweis: { identisch?: boolean } | null | undefined
-): FassungsBezug {
-  const text = typeof body === "string" ? body.trim() : "";
-  if (!text) return "kein_text";
-  if (geprueft !== null) return geprueft.trim() === text ? "identisch" : "abweichend";
-  return istObjekt(hinweis) && hinweis.identisch === false ? "abweichend" : "nicht_pruefbar";
-}
-
-function freigabeLage(item: Pick<ContentItem, "body" | "review_notes" | "metadata">): FreigabeLage {
-  const meta = alsObjekt(item.metadata) ?? {};
-  const counsel = werteCounselAus(item.review_notes);
-  const geprueftText = geprueftenText(meta);
-  return {
-    counsel,
-    pruefung: pruefeFreigabe(counsel, item.body),
-    bezug: fassungsBezug(item.body, geprueftText, alsObjekt(meta.freigabe_hinweis)),
-    geprueftText,
-    nameImText: enthaeltGeschuetztenNamen(item.body),
-  };
-}
-
-// Nachprüfung 06.11.2026: Die Namensprüfung faltet den Text Zeichen für Zeichen; die Liste rief
-// freigabeLage bei jedem Render für jede Zeile auf, auch bei jedem Tastendruck in einem Feld der
-// Seite (laut Gesamtprüfung rund 23 ms je Render bei 50 Zeilen à 8.000 Zeichen, im Browser nicht
-// gemessen). Die Lage hängt nur am Eintrag, und Einträge werden nie verändert, sondern ersetzt
-// (setContent mit neuen Objekten) — ein Merker je Objekt reicht.
-const LAGE_JE_EINTRAG = new WeakMap<object, FreigabeLage>();
-
-function freigabeLageGemerkt(item: Pick<ContentItem, "body" | "review_notes" | "metadata">): FreigabeLage {
-  const gemerkt = LAGE_JE_EINTRAG.get(item);
-  if (gemerkt) return gemerkt;
-  const lage = freigabeLage(item);
-  LAGE_JE_EINTRAG.set(item, lage);
-  return lage;
-}
-
 /** Status, in denen der Freigabetext kopiert werden darf (veröffentlicht wird von Hand per Kopieren). */
 const STATUS_KOPIERBAR = ["freigegeben", "gepostet"];
 
@@ -876,37 +695,6 @@ function ergebnisBezug(r: PipelineResult): FassungsBezug {
 }
 
 /**
- * COUNSEL-Urteil bezogen auf den Freigabetext (R2): grünes FREIGABE nur, wenn COUNSEL genau
- * diesen Text geprüft hat. Welche Fassung freigegeben wird, entscheidet der Inhaber.
- */
-function urteilAnzeige(urteil: CounselUrteil, bezug: FassungsBezug): { text: string; farbe: string; erklaerung: string | null } {
-  if (urteil === "ABLEHNUNG") return { text: "ABLEHNUNG", farbe: FARBE_ROT, erklaerung: null };
-  if (urteil !== "FREIGABE") return { text: urteil, farbe: FARBE_BERNSTEIN, erklaerung: null };
-  switch (bezug) {
-    case "identisch":
-      return { text: "FREIGABE", farbe: FARBE_GRUEN, erklaerung: "COUNSEL hat genau den Freigabetext geprüft." };
-    case "abweichend":
-      return {
-        text: "COUNSEL prüfte die Vorfassung · Freigabetext ungeprüft",
-        farbe: FARBE_BERNSTEIN,
-        erklaerung: "Das Urteil FREIGABE gilt der Vorfassung (SCRIBE), nicht dem Freigabetext.",
-      };
-    case "kein_text":
-      return {
-        text: "FREIGABE der geprüften Fassung · kein Freigabetext",
-        farbe: FARBE_BERNSTEIN,
-        erklaerung: "Es gibt keinen Freigabetext, für den das Urteil gelten könnte.",
-      };
-    default:
-      return {
-        text: "FREIGABE der geprüften Fassung · Bezug zum Freigabetext nicht prüfbar",
-        farbe: FARBE_BERNSTEIN,
-        erklaerung: "Der geprüfte Text ist nicht gespeichert; ob er dem Freigabetext entspricht, ist nicht prüfbar.",
-      };
-  }
-}
-
-/**
  * Ausgabe einer Stufe im Pipeline-Ergebnis (R24). Roh bleibt nur der Freigabetext: die
  * PUBLISHER-Ausgabe eines Laufs, der zur Freigabe gelangt ist (laufZurFreigabe, Stufe "done").
  * Jede andere Ausgabe wird maskiert — auch eine PUBLISHER-Ausgabe aus einem abgebrochenen Lauf:
@@ -926,13 +714,6 @@ function stufenAusgabe(step: PipelineStep, laufStatus: unknown): { text: string;
     else warnung = "PUBLISHER-Ausgabe enthält einen geschützten Namen — nicht als Freigabetext bestätigt.";
   }
   return { text: voll.length > 2000 ? `${voll.slice(0, 2000)}...` : voll, warnung };
-}
-
-/** Hinweis am Freigeben-Knopf, wenn freigebbar, aber COUNSEL nicht genau diesen Text geprüft hat. */
-function bezugHinweis(bezug: FassungsBezug): string | null {
-  if (bezug === "abweichend") return "Freigabetext ungeprüft — COUNSEL prüfte die Vorfassung";
-  if (bezug === "nicht_pruefbar") return "Bezug zur geprüften Fassung nicht prüfbar";
-  return null;
 }
 
 /**
@@ -1030,43 +811,6 @@ function PipelineFluss({ lage, ergebnis }: { lage: FlussLage; ergebnis: Pipeline
   );
 }
 
-/** Freigeben-Knopf mit Sperre (R4): gesperrt, solange pruefeFreigabe sperrt; Grund sichtbar. */
-function FreigebenKnopf({
-  lage,
-  pending,
-  onFreigeben,
-}: {
-  lage: FreigabeLage;
-  pending: boolean;
-  onFreigeben: () => void;
-}) {
-  const gesperrt = !lage.pruefung.freigebbar;
-  const grund = gesperrt ? maskiert(lage.pruefung.grund ?? "ohne Grund") : null;
-  const hinweis = gesperrt ? null : bezugHinweis(lage.bezug);
-  return (
-    <div className="flex flex-wrap items-center gap-2">
-      <button
-        onClick={onFreigeben}
-        disabled={pending || gesperrt}
-        title={grund ? `Freigeben gesperrt: ${grund}` : undefined}
-        className="px-4 py-2 rounded-lg text-xs font-medium bg-green-500/20 text-green-400 hover:bg-green-500/30 transition-all disabled:opacity-40"
-      >
-        Freigeben
-      </button>
-      {grund && (
-        <span className="text-[10px]" style={{ color: FARBE_ROT }}>
-          Freigeben gesperrt: {grund}
-        </span>
-      )}
-      {hinweis && (
-        <span className="text-[10px]" style={{ color: FARBE_BERNSTEIN }}>
-          {hinweis}
-        </span>
-      )}
-    </div>
-  );
-}
-
 /** Meldung nach einem Klick ohne Ergebnis (R10): nur echte 4xx heißen "abgewiesen". */
 function LaufMeldungAnzeige({
   meldung,
@@ -1098,238 +842,6 @@ function LaufMeldungAnzeige({
           {contentId !== null ? `Eintrag #${contentId} im Content-Tab öffnen` : "Content-Tab öffnen"}
         </button>
       )}
-    </div>
-  );
-}
-
-// ═══ BELEG-KETTE ═══
-
-function BelegZeile({ titel, vermerk, children }: { titel: string; vermerk?: string; children: ReactNode }) {
-  return (
-    <div className="grid gap-1 sm:grid-cols-[150px_1fr] sm:gap-3 py-2 border-t" style={{ borderColor: "var(--gp-hairline)" }}>
-      <div className="mono-label pt-0.5">{titel}</div>
-      <div className="min-w-0 text-xs text-text-secondary space-y-1">
-        {children}
-        {vermerk && <p className="text-[10px] text-text-muted">{vermerk}</p>}
-      </div>
-    </div>
-  );
-}
-
-function BelegKette({
-  item,
-  kopiere,
-  kopierStatus,
-}: {
-  item: ContentItem;
-  kopiere: (key: string, text: string) => void;
-  kopierStatus: (key: string) => string;
-}) {
-  const meta = alsObjekt(item.metadata) ?? {};
-  // Urteil aus dem gespeicherten COUNSEL-Text abgeleitet — dieselbe Auswertung wie in der
-  // Pipeline (lib/counsel-urteil.ts), kein eigenes Feld. Grün nur, wenn COUNSEL genau den
-  // Freigabetext geprüft hat (R2).
-  const lage = freigabeLageGemerkt(item);
-  const counsel = lage.counsel;
-  const anzeige = urteilAnzeige(counsel.urteil, lage.bezug);
-  const counselUnvollstaendig = alsObjekt(meta.fehler)?.stufe === "counsel";
-  const regel = alsObjekt(meta.regelpaket);
-  const snapshot = alsObjekt(meta.objekt_snapshot);
-  const snapshotObjekt = alsObjekt(snapshot?.objekt);
-  const exportKopf = alsObjekt(snapshot?.export);
-  const researcherSchritt: unknown = Array.isArray(meta.steps) ? meta.steps[0] : undefined;
-  const researcherText =
-    istObjekt(researcherSchritt) && typeof researcherSchritt.output === "string" ? researcherSchritt.output : null;
-  const ctaLink = typeof meta.cta_link === "string" && meta.cta_link ? meta.cta_link : null;
-  // Gesamtprüfung 06.11.2026: Ein CTA-Link mit geschütztem Namen wird nie kopiert (fail-closed).
-  const ctaMitNamen = ctaLink !== null && enthaeltGeschuetztenNamen(ctaLink);
-  const ctaKey = `${item.id}-cta`;
-  const freigabe = alsObjekt(meta.freigabe);
-  const gepostet = alsObjekt(meta.gepostet);
-  const mitText = STATUS_MIT_TEXT.includes(item.status);
-
-  const kopfZeilen: [string, string][] = [
-    ["Export-Version", exportKopf?.version ?? "nicht im Export-Kopf"],
-    ["Export-Quelle", exportKopf?.quelle ?? "nicht im Export-Kopf"],
-    ["Export erzeugt", exportKopf?.generiert_am ? zeitText(exportKopf.generiert_am) : "nicht im Export-Kopf"],
-    ["Abgerufen", zeitText(snapshot?.abgerufen_am)],
-  ];
-
-  return (
-    <div className="rounded-lg px-3 pt-3 pb-1" style={{ border: "1px solid var(--gp-hairline)", background: "rgba(11, 12, 16, 0.4)" }}>
-      <h4 className="mono-label mb-1" style={{ color: "var(--gp-gold)" }}>
-        Beleg-Kette
-      </h4>
-
-      <BelegZeile titel="COUNSEL-Urteil" vermerk="abgeleitet aus dem COUNSEL-Text">
-        <p>
-          <span
-            className="font-semibold font-[family-name:var(--font-jbmono)]"
-            style={{ color: anzeige.farbe }}
-            data-urteil-anzeige={lage.bezug}
-          >
-            {anzeige.text}
-          </span>
-          <span className="text-text-muted"> · {counsel.grund}</span>
-        </p>
-        {anzeige.erklaerung && <p className="text-[10px] text-text-muted">{anzeige.erklaerung}</p>}
-        {counsel.zeile && (
-          <p className="font-[family-name:var(--font-jbmono)] text-[11px] break-words">{maskiert(counsel.zeile)}</p>
-        )}
-        {meta.counsel?.geprueft && (
-          <p className="text-[10px] text-text-muted">
-            geprüft: {maskiert(String(meta.counsel.geprueft))}
-            {meta.counsel.am ? ` · ${zeitText(meta.counsel.am)}` : ""}
-          </p>
-        )}
-        {counselUnvollstaendig && (
-          <p className="text-[10px]" style={{ color: "var(--gp-amber)" }}>
-            COUNSEL-Antwort unvollständig (siehe Fehler) — das Urteil ist nicht maßgeblich.
-          </p>
-        )}
-      </BelegZeile>
-
-      {mitText && (
-        <BelegZeile
-          titel="Prüfregel"
-          vermerk={`Für Freigeben: COUNSEL-Urteil FREIGABE, Text ab ${MIN_FREIGABE_ZEICHEN} Zeichen, kein geschützter Name.`}
-        >
-          {lage.pruefung.freigebbar ? (
-            <p style={{ color: FARBE_GRUEN }}>erfüllt</p>
-          ) : (
-            <p style={{ color: FARBE_ROT }}>nicht erfüllt: {maskiert(lage.pruefung.grund ?? "ohne Grund")}</p>
-          )}
-        </BelegZeile>
-      )}
-
-      <BelegZeile titel="Regelpaket">
-        {regel ? (
-          <p className="font-[family-name:var(--font-jbmono)]">
-            {maskiertWert(regel.version ?? "Version nicht lesbar")} · Stand {maskiertWert(regel.stand ?? "nicht lesbar")}
-          </p>
-        ) : (
-          <p>nicht gespeichert (Lauf vor Stufe 1)</p>
-        )}
-      </BelegZeile>
-
-      <BelegZeile titel="Objekt-Snapshot">
-        {snapshot ? (
-          <div className="overflow-x-auto">
-            <table className="w-full text-[11px]">
-              <tbody>
-                {kopfZeilen.map(([label, wert]) => (
-                  <tr key={label} className="align-top">
-                    <th scope="row" className="text-left font-normal text-text-muted pr-3 py-0.5 whitespace-nowrap">
-                      {label}
-                    </th>
-                    <td className="py-0.5 font-[family-name:var(--font-jbmono)] break-words">{maskiert(wert)}</td>
-                  </tr>
-                ))}
-                {snapshotObjekt ? (
-                  SNAPSHOT_ZEILEN.map(([feld, label]) => (
-                    <tr key={feld} className="align-top border-t" style={{ borderColor: "var(--gp-hairline)" }}>
-                      <th scope="row" className="text-left font-normal text-text-muted pr-3 py-0.5 whitespace-nowrap">
-                        {label}
-                      </th>
-                      <td className="py-0.5 font-[family-name:var(--font-jbmono)] break-words">
-                        {snapshotWert(feld, snapshotObjekt[feld]).map((zeile, i) => (
-                          <div key={i}>{maskiert(zeile)}</div>
-                        ))}
-                      </td>
-                    </tr>
-                  ))
-                ) : (
-                  <tr>
-                    <td colSpan={2} className="py-0.5">Snapshot ohne Objektfelder</td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        ) : (
-          <p>{meta.objekt_slug ? "kein Snapshot gespeichert" : "kein Snapshot gespeichert (Lauf ohne Objekt)"}</p>
-        )}
-      </BelegZeile>
-
-      <BelegZeile titel="RESEARCHER-Quellen" vermerk="Modellangabe, ungeprüft">
-        <p>{typeof meta.researcher_quellen === "string" ? maskiert(meta.researcher_quellen) : "kein Vermerk gespeichert (Lauf vor Stufe 1)"}</p>
-        {researcherText ? (
-          <details>
-            <summary className="cursor-pointer text-[10px] text-text-muted hover:text-foreground">
-              RESEARCHER-Text anzeigen
-            </summary>
-            <pre className="mt-2 text-xs whitespace-pre-wrap bg-surface-elevated rounded-lg p-3 max-h-[260px] overflow-y-auto font-mono leading-relaxed">
-              {maskiert(researcherText)}
-            </pre>
-          </details>
-        ) : (
-          <p className="text-[10px] text-text-muted">RESEARCHER-Text nicht gespeichert</p>
-        )}
-      </BelegZeile>
-
-      <BelegZeile titel="CTA-Link" vermerk="Nur als Text: Prüf-Klicks würden die Steinadel-Zählung verfälschen.">
-        {ctaLink ? (
-          <>
-            {ctaMitNamen && (
-              <p role="alert" data-cta-sperre="name" style={{ color: FARBE_ROT }}>
-                CTA-Link enthält einen geschützten Namen — nicht verwenden. Kopieren gesperrt.
-              </p>
-            )}
-            <div className="flex items-start gap-2">
-              <code
-                className={`break-all font-[family-name:var(--font-jbmono)] text-[11px]${ctaMitNamen ? "" : " select-all"}`}
-                style={{ color: "var(--gp-gold-hi)" }}
-              >
-                {maskiert(ctaLink)}
-              </code>
-              <button
-                onClick={() => {
-                  if (!ctaMitNamen) kopiere(ctaKey, ctaLink);
-                }}
-                disabled={ctaMitNamen}
-                title={ctaMitNamen ? "CTA-Link enthält einen geschützten Namen — Kopieren gesperrt" : undefined}
-                className="shrink-0 text-[10px] px-2 py-1 rounded bg-surface-elevated text-text-muted hover:text-foreground transition-colors disabled:opacity-40"
-              >
-                {kopierStatus(ctaKey)}
-              </button>
-            </div>
-          </>
-        ) : (
-          <p>kein CTA-Link gespeichert</p>
-        )}
-        {meta.utm_content && (
-          <p>
-            <span className="text-text-muted">utm_content: </span>
-            <span className="font-mono">{maskiertWert(meta.utm_content)}</span>
-          </p>
-        )}
-      </BelegZeile>
-
-      {/* Betreibertexte (Grund, URL) wie alle übrigen Texte maskiert — wie in ablehnungText (R24) */}
-      <BelegZeile titel="Betreiber">
-        {freigabe ? (
-          <p>
-            {freigabe.aktion === "ablehnen"
-              ? "abgelehnt"
-              : freigabe.aktion === "freigeben"
-                ? "freigegeben"
-                : maskiertWert(freigabe.aktion ?? "Aktion")}
-            {" · "}
-            {zeitText(freigabe.am)} · {maskiertWert(freigabe.durch ?? "unbekannt")}
-            {freigabe.grund ? ` · Grund: ${maskiertWert(freigabe.grund)}` : ""}
-          </p>
-        ) : (
-          <p>keine Entscheidung gespeichert</p>
-        )}
-        {gepostet && (
-          <p>
-            gepostet · {zeitText(gepostet.am)}
-            {gepostet.published_url ? (
-              <span className="font-[family-name:var(--font-jbmono)] break-all"> · {maskiertWert(gepostet.published_url)}</span>
-            ) : null}
-          </p>
-        )}
-      </BelegZeile>
     </div>
   );
 }

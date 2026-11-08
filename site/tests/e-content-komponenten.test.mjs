@@ -12,12 +12,17 @@
 // übersetzt; die Laufzeit-Importe ersetzt der Test, lib/counsel-urteil.ts und
 // lib/freigabe-regeln.ts laufen unverändert mit.
 // E_CONTENT_SEITE=<pfad> prüft statt der Repo-Datei eine Kopie (Mutationstests im Scratchpad).
+// Objekt-Studio Schritt 2 (08.11.2026): Freigeben-Knopf, Beleg-Kette und Freigabe-Lage liegen in
+// components/studio/; die Seite importiert sie. ladeSeite lädt die echten Dateien mit denselben
+// Attrappen (tests/harness/studio.mjs) — A.FreigebenKnopf, A.BelegKette, A.freigabeLage und
+// A.freigabeLageGemerkt sind dieselben Funktionen, die die Seite rendert.
 import { test, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { createRequire, registerHooks } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { ladeStudioBausteine } from "./harness/studio.mjs";
 
 // Nachprüfung 06.11.2026: Die Seite nutzt objektFehlerText aus lib/hooks-status.ts; der Test
 // nimmt die echte Funktion. hooks-status.ts importiert "./freigabe-regeln" ohne Endung.
@@ -47,7 +52,7 @@ const ENTHAELT_NAMEN = /imm[ou][\s._-]*nexus/i;
 const LAUF_ID = /^[A-Za-z0-9:_-]{8,80}$/;
 const AUSGANG_UNBEKANNT = "Ausgang unbekannt — der Lauf kann noch laufen, Content-Tab prüfen";
 
-const INTERN = ["ContentSeite", "FreigebenKnopf", "BelegKette", "PipelineFluss", "LaufMeldungAnzeige", "freigabeLage", "freigabeLageGemerkt"];
+const INTERN = ["ContentSeite", "PipelineFluss", "LaufMeldungAnzeige"];
 const UEBERSETZT = ts.transpileModule(readFileSync(SEITE, "utf8"), {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.ReactJSX },
   fileName: "page.tsx",
@@ -55,17 +60,26 @@ const UEBERSETZT = ts.transpileModule(readFileSync(SEITE, "utf8"), {
 
 /** Lädt die übersetzte Seite mit den gegebenen Attrappen; jeder andere Import ist ein Fehler. */
 function ladeSeite(attrappen) {
+  const studio = ladeStudioBausteine(attrappen);
+  const alle = { ...attrappen, ...studio.module };
   const modul = { exports: {} };
   const anfordern = (name) => {
-    if (!(name in attrappen)) throw new Error(`unerwarteter Laufzeit-Import in page.tsx: ${name}`);
-    return attrappen[name];
+    if (!(name in alle)) throw new Error(`unerwarteter Laufzeit-Import in page.tsx: ${name}`);
+    return alle[name];
   };
   new Function("require", "module", "exports", `${UEBERSETZT}\nmodule.exports.__intern = { ${INTERN.join(", ")} };`)(
     anfordern,
     modul,
     modul.exports
   );
-  return { ContentPage: modul.exports.default, ...modul.exports.__intern };
+  return {
+    ContentPage: modul.exports.default,
+    ...modul.exports.__intern,
+    FreigebenKnopf: studio.knopf.FreigebenKnopf,
+    BelegKette: studio.kette.BelegKette,
+    freigabeLage: studio.hilfen.freigabeLage,
+    freigabeLageGemerkt: studio.hilfen.freigabeLageGemerkt,
+  };
 }
 
 // fetch gehört dem Test: Jeder Test setzt seine Attrappe, danach gilt wieder das Original.
