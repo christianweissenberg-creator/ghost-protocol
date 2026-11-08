@@ -238,6 +238,32 @@ test("S-B2 Abnahme Kopf: 'Ersterwähnung 1335' (Objekt-Ausnahme, Exportfeld bauj
   assert.doesNotMatch(JSON.stringify(o), /MARKER-FREITEXT/);
 });
 
+test("S-B2b Export-Abruf über /api/objekte: Sitzung weitergereicht, ohne Cache, Zeitlimit über dem von /api/objekte (15 s)", async () => {
+  standardWelt();
+  const original = AbortSignal.timeout;
+  const msJeSignal = new WeakMap();
+  AbortSignal.timeout = (ms) => {
+    const s = original.call(AbortSignal, ms);
+    msJeSignal.set(s, ms);
+    return s;
+  };
+  const harnessFetch = globalThis.fetch;
+  const abrufe = [];
+  globalThis.fetch = async (input, init = {}) => {
+    const url = String(typeof input === "string" ? input : input.url);
+    if (url.endsWith("/api/objekte")) abrufe.push({ url, cookie: new Headers(init.headers).get("cookie"), cache: init.cache, ms: msJeSignal.get(init.signal) ?? null });
+    return harnessFetch(input, init);
+  };
+  try {
+    const r = await hole(SLUG, { cookie: "gp-auth=sitzung-123" });
+    assert.equal(r.body.objekt.status, "ok");
+  } finally {
+    globalThis.fetch = harnessFetch;
+    AbortSignal.timeout = original;
+  }
+  assert.deepEqual(abrufe, [{ url: "http://harness.local/api/objekte", cookie: "gp-auth=sitzung-123", cache: "no-store", ms: 20_000 }]);
+});
+
 test("S-B3 Kopf: Ausnahme greift nur beim Exportwert 1335; fehlende Felder heißen 'nicht im Export', kein Ersatzwert", async () => {
   const ohne = { ...RITTERGUT };
   delete ohne.baujahr;
@@ -284,7 +310,12 @@ test("S-B4 Abnahme Assets: Anzahl aus der DB-Abfrage (Zählung), nur Zeilen mit 
 
 test("S-B5 Asset-Felder: Art, Kanal, Format, Status, COUNSEL-Urteil und Sperrgrund wie /api/freigaben, Beleg-Daten", async () => {
   standardWelt();
+  // Geprüft und regelkonform, aber nicht im Status zur_freigabe: gesperrt wegen des Status.
+  lauf(7, { status: "counsel_geprueft", steps: NEU_VOLL, body: TEXT, review_notes: FREIGABE, am: "2026-11-07T09:00:00Z" });
   const a = (await hole()).body.assets.wert;
+  const sieben = a.find((x) => x.id === 7);
+  assert.equal(sieben.counsel.urteil, "FREIGABE");
+  assert.equal(sieben.freigabe_sperre, 'Status "counsel_geprueft" — freigebbar ist nur "zur_freigabe"');
   const zwei = a.find((x) => x.id === 2);
   assert.equal(zwei.art, "text");
   assert.equal(zwei.kanal, "x");
@@ -309,6 +340,10 @@ test("S-B5 Asset-Felder: Art, Kanal, Format, Status, COUNSEL-Urteil und Sperrgru
   assert.equal(eintrag.counsel.urteil, zwei.counsel.urteil);
   assert.equal(eintrag.counsel.zeile, zwei.counsel.zeile);
   assert.equal(eintrag.freigabe_sperre, zwei.freigabe_sperre);
+  const haengend = stapel.haengend.find((e) => e.id === "7");
+  assert.ok(haengend, "Zeile 7 hängt im Stapel");
+  assert.equal(haengend.counsel.urteil, sieben.counsel.urteil);
+  assert.equal(haengend.freigabe_sperre, sieben.freigabe_sperre);
 });
 
 test("S-B6 Abnahme Kosten: USD-Schätzung aus metadata.steps[].cost mit 'n Läufe ohne Kostenangabe'", async () => {
@@ -563,6 +598,14 @@ test("S-C2 Abnahme Seite: Asset-Anzahl aus der Antwort (DB-Zählung), je Asset K
   const t = sichtbar(html);
   assert.ok(t.includes("#8 Zur Freigabe Text · newsletter · newsletter_issue"), t.slice(0, 3000));
   assert.ok(t.includes("COUNSEL-Urteil (abgeleitet) ABLEHNUNG"));
+  // Abgeschnitten: Die Kachel nennt die Zählung der Abfrage (501), nicht die geladenen Zeilen (500).
+  zuruecksetzen();
+  welt.objekteAntwort = exportAntwort();
+  for (let i = 1; i <= 501; i++) lauf(i, { steps: ALT });
+  const lang = await studioHtml((await hole()).body);
+  const kachelLang = /data-teil="assets"[^>]*>.*?<\/div><\/div>/s.exec(lang)?.[0] ?? "";
+  assert.ok(sichtbar(kachelLang).includes("Assets (Text) 501 Zählung der Abfrage · Supabase · content · 500 geladen"), sichtbar(kachelLang));
+  assert.ok(sichtbar(lang).includes("nur 500 von 501 Zeilen geladen"));
 });
 
 test("S-C3 Abnahme Seite: Kosten als USD-Schätzung mit 'n Läufe ohne Kostenangabe'", async () => {
