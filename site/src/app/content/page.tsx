@@ -2,7 +2,17 @@
 
 import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { supabase } from "@/lib/supabase";
+import {
+  CONTENT_ABRUF_GRENZE_MS,
+  CONTENT_LISTE_GRENZE,
+  CONTENT_LISTE_PFAD,
+  CONTENT_TAKT_MS,
+  contentEintragPfad,
+  leseEintragAntwort,
+  leseListenAntwort,
+  standZeit,
+} from "@/lib/content-liste";
+import type { EintragLesung, ListenLesung } from "@/lib/content-liste";
 import { KPICard } from "@/components/ui/KPICard";
 import { objekteFehlerArt, objektFehlerText, useFreigaben } from "@/lib/hooks-status";
 import type { ObjekteFehlerArt } from "@/lib/hooks-status";
@@ -74,6 +84,16 @@ import type { ContentMetadata, CounselVermerk, FassungsBezug, FreigabeLage, Verm
 // (components/studio/beleg-hilfen.ts) sind ausgelagert; das Objekt-Studio nutzt dieselbe Beleg-Kette.
 // Der Code ist unverändert übernommen, diese Seite rendert byte-gleich
 // (tests/s-content-unveraendert.test.mjs).
+//
+// Objekt-Studio Schritt 3 (08.11.2026): Die Seite liest content nur noch über den Server —
+// GET /api/content/liste (die Liste) und GET /api/content/eintrag/<id> (eine Zeile neu laden), beide
+// mit der Service-Rolle; Grenze, Takt und Leser der Antworten in lib/content-liste.ts. Der
+// Realtime-Kanal entfällt: Die Liste wird alle 15 s neu abgefragt, die Zeile "Liste: Stand …" nennt
+// den Zeitpunkt der letzten erfolgreichen Abfrage. Scheitert eine spätere Abfrage, bleibt die Liste
+// stehen und der Fehler steht darüber; ohne gelesene Liste gilt wie vorher "Content nicht lesbar".
+// Im verborgenen Tab fragt der Takt nicht ab; beim Zurückkehren und nach jedem Pipeline-Lauf liest die
+// Seite sofort neu. Sonst rendert sie unverändert (tests/s-content-unveraendert.test.mjs, angepasst
+// nur um die Stand-Zeile).
 
 // ═══ TYPES ═══
 
@@ -274,8 +294,8 @@ function plattformOhneFormat(plattform: string): string | null {
 
 const TWEET_MAX = 280;
 
-/** So viele Zeilen lädt die Liste; die Kacheln außer "Zur Freigabe" zählen nur darin. */
-const LISTE_LIMIT = 50;
+/** So viele Zeilen lädt die Liste; die Kacheln außer "Zur Freigabe" zählen nur darin. Seit Schritt 3 die Grenze der Route. */
+const LISTE_LIMIT = CONTENT_LISTE_GRENZE;
 
 /** Höchstlänge des Ablehnungsgrunds — gleich wie in /api/content/status. */
 const GRUND_MAX = 500;
@@ -869,9 +889,10 @@ function ContentLaedt() {
 
 function ContentSeite() {
   const [content, setContent] = useState<ContentItem[]>([]);
-  // Prüflauf 06.11.2026: Hat die Abfrage die Grenze erreicht (ältere Zeilen abgeschnitten)?
-  // Realtime-Einfügungen ändern das nicht — vorher galt die Liste schon durch sie als voll.
+  // Prüflauf 06.11.2026: Hat die Abfrage die Grenze erreicht (ältere Zeilen abgeschnitten)? Seit
+  // Schritt 3 meldet das die Route (abgeschnitten); jede Abfrage ersetzt die ganze Liste.
   const [listeAbgeschnitten, setListeAbgeschnitten] = useState(false);
+  // Lesefehler, solange noch keine Liste gelesen ist (dann steht er statt der Liste).
   const [contentFehler, setContentFehler] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   // Starttab aus ?tab=content|pipeline|calendar (R38); ein Klick gilt, bis sich ?tab= ändert.
@@ -920,25 +941,67 @@ function ContentSeite() {
     neuLaden: freigabenNeuLaden,
   } = useFreigaben();
 
-  useEffect(() => {
-    async function fetchContent() {
-      const { data, error } = await supabase
-        .from("content")
-        .select("*")
-        .order("created_at", { ascending: false })
-        .limit(LISTE_LIMIT);
-      // Stufe 1: Lesefehler anzeigen statt als leere Liste ("Keine Inhalte") auszugeben.
-      if (error) {
-        setContentFehler(error.message);
-      } else {
-        const zeilen = (data ?? []) as ContentItem[];
-        setContent(zeilen);
-        setListeAbgeschnitten(zeilen.length >= LISTE_LIMIT);
-        setContentFehler(null);
-      }
-      setLoading(false);
-    }
+  // Objekt-Studio Schritt 3: Liste über den Server statt Supabase im Browser, Takt statt Realtime.
+  // listeStand: gelesen_am der letzten erfolgreichen Abfrage (Uhr des Servers). abfrageFehler: die
+  // letzte Abfrage scheiterte, nachdem schon eine Liste gelesen war — die Liste bleibt stehen.
+  const [listeStand, setListeStand] = useState<string | null>(null);
+  const [abfrageFehler, setAbfrageFehler] = useState<string | null>(null);
+  // nr: Jede Abfrage und das Verlassen der Seite erhöhen sie; nur die jüngste Abfrage setzt etwas
+  // (wie R29 in lib/hooks-status.ts), eine neue bricht die vorige ab. lokal: Zahl der lokal ersetzten
+  // Zeilen (Aktion, Neuladen einer Zeile) — eine Abfrage, die davor begann, könnte die Änderung
+  // zurücksetzen und wird verworfen; der nächste Takt liest neu. gelesen: Eine Abfrage war erfolgreich.
+  const abruf = useRef<{ nr: number; lokal: number; gelesen: boolean; steuerung: AbortController | null }>({
+    nr: 0,
+    lokal: 0,
+    gelesen: false,
+    steuerung: null,
+  });
 
+  const listeLaden = useCallback(async (): Promise<void> => {
+    const a = abruf.current;
+    a.steuerung?.abort();
+    const nr = ++a.nr;
+    const lokal = a.lokal;
+    const steuerung = new AbortController();
+    a.steuerung = steuerung;
+    let zeitUeberschritten = false;
+    const wecker = setTimeout(() => {
+      zeitUeberschritten = true;
+      steuerung.abort();
+    }, CONTENT_ABRUF_GRENZE_MS);
+    let lesung: ListenLesung;
+    try {
+      const res = await fetch(CONTENT_LISTE_PFAD, { cache: "no-store", signal: steuerung.signal });
+      const daten: unknown = await res.json().catch(() => null);
+      lesung = leseListenAntwort(res.status, daten);
+    } catch (e) {
+      lesung = { ok: false, fehler: `Server nicht erreichbar (${e instanceof Error ? e.message : "unbekannter Fehler"})` };
+    } finally {
+      clearTimeout(wecker);
+    }
+    if (zeitUeberschritten) lesung = { ok: false, fehler: `keine Antwort binnen ${CONTENT_ABRUF_GRENZE_MS / 1000} s` };
+    // Überholt (neuere Abfrage) oder Seite verlassen: nichts setzen.
+    if (nr !== a.nr) return;
+    a.steuerung = null;
+    if (lesung.ok) {
+      if (lokal !== a.lokal) return;
+      a.gelesen = true;
+      setContent(lesung.zeilen as unknown as ContentItem[]);
+      setListeAbgeschnitten(lesung.abgeschnitten);
+      setListeStand(lesung.gelesenAm);
+      setContentFehler(null);
+      setAbfrageFehler(null);
+    } else if (a.gelesen) {
+      // Die zuletzt gelesene Liste bleibt sichtbar; der Fehler steht darüber, nie still.
+      setAbfrageFehler(lesung.fehler);
+    } else {
+      // Stufe 1: Lesefehler anzeigen statt als leere Liste ("Keine Inhalte") auszugeben.
+      setContentFehler(lesung.fehler);
+    }
+    setLoading(false);
+  }, []);
+
+  useEffect(() => {
     async function fetchCalendar() {
       try {
         const res = await fetch("/api/content/pipeline");
@@ -983,33 +1046,32 @@ function ContentSeite() {
       }
     }
 
-    fetchContent();
+    void listeLaden();
     fetchCalendar();
     fetchObjekte();
 
-    const channel = supabase
-      .channel("content-realtime")
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "content" },
-        (payload) => {
-          if (payload.eventType === "INSERT") {
-            setContent((prev) => [payload.new as ContentItem, ...prev]);
-          } else if (payload.eventType === "UPDATE") {
-            setContent((prev) =>
-              prev.map((c) =>
-                c.id === (payload.new as ContentItem).id ? (payload.new as ContentItem) : c
-              )
-            );
-          }
-        }
-      )
-      .subscribe();
+    // Schritt 3: Neuabfrage im Takt statt Realtime. Verborgener Tab (visibilityState "hidden"): Der
+    // Takt fragt nicht ab, die Stand-Zeile zeigt das Alter der Liste; beim Zurückkehren sofort eine
+    // Abfrage, danach wieder im Takt. Ohne document (Server, Tests ohne DOM) läuft nur der Takt.
+    const a = abruf.current;
+    const verborgen = () => typeof document !== "undefined" && document.visibilityState === "hidden";
+    const takt = setInterval(() => {
+      if (!verborgen()) void listeLaden();
+    }, CONTENT_TAKT_MS);
+    const beiSichtwechsel = () => {
+      if (!verborgen()) void listeLaden();
+    };
+    if (typeof document !== "undefined") document.addEventListener("visibilitychange", beiSichtwechsel);
 
     return () => {
-      supabase.removeChannel(channel);
+      clearInterval(takt);
+      if (typeof document !== "undefined") document.removeEventListener("visibilitychange", beiSichtwechsel);
+      // Laufende Abfrage abbrechen; späte Antworten zählen nicht mehr.
+      a.nr += 1;
+      a.steuerung?.abort();
+      a.steuerung = null;
     };
-  }, []);
+  }, [listeLaden]);
 
   // Ein Lauf je Klick mit lauf_id (R10). Nach unbekanntem Ausgang sendet der nächste Klick
   // dieselbe ID: Läuft der Lauf schon, antwortet der Server 409 statt einen zweiten bezahlten
@@ -1046,26 +1108,38 @@ function ContentSeite() {
       } finally {
         laufAktiv.current = false;
         setPipelineRunning(false);
+        // Schritt 3: Ein Lauf schreibt oder ändert eine content-Zeile — sofort neu lesen, nicht erst
+        // im nächsten Takt (vorher brachte der Realtime-Kanal die Zeile).
+        void listeLaden();
       }
     },
-    [offeneLaufId]
+    [offeneLaufId, listeLaden]
   );
 
   // Eine Zeile neu lesen (nach 409 oder wenn die Antwort keine Zeile mitbringt). null nur, wenn
   // die Zeile gelesen und ersetzt wurde. Gegencheck 06.11.2026: Liefert das Lesen keine Zeile
   // (gelöscht oder nicht lesbar), bleibt die Anzeige alt — das steht jetzt da, statt
-  // "Eintrag neu geladen".
+  // "Eintrag neu geladen". Schritt 3: über GET /api/content/eintrag/<id> statt Supabase im Browser.
   const ladeEintrag = useCallback(async (id: number): Promise<string | null> => {
-    const { data, error } = await supabase.from("content").select("*").eq("id", id).maybeSingle();
-    if (error) return `Neu laden fehlgeschlagen: ${error.message}`;
-    if (!data) return "Neu laden lieferte keine Zeile";
-    setContent((prev) => prev.map((c) => (c.id === id ? (data as ContentItem) : c)));
+    let lesung: EintragLesung;
+    try {
+      const res = await fetch(contentEintragPfad(id), { cache: "no-store" });
+      const daten: unknown = await res.json().catch(() => null);
+      lesung = leseEintragAntwort(res.status, daten, id);
+    } catch (e) {
+      lesung = { art: "fehler", fehler: `Server nicht erreichbar (${e instanceof Error ? e.message : "unbekannter Fehler"})` };
+    }
+    if (lesung.art === "fehler") return `Neu laden fehlgeschlagen: ${lesung.fehler}`;
+    if (lesung.art === "keine") return "Neu laden lieferte keine Zeile";
+    const zeile = lesung.zeile as unknown as ContentItem;
+    abruf.current.lokal += 1;
+    setContent((prev) => prev.map((c) => (c.id === id ? zeile : c)));
     return null;
   }, []);
 
   // Aktion an /api/content/status senden. Stufe 1 (05.11.2026): Antwort auswerten —
   // Fehler (400/409/500) stehen sichtbar an der Zeile; bei Erfolg kommt die geänderte
-  // Zeile aus der Antwort (Realtime bleibt zusätzlich aktiv).
+  // Zeile aus der Antwort (die nächste Abfrage im Takt liest sie ebenfalls).
   const sendStatusAction = useCallback(
     async (id: number, aktion: string, extra?: Record<string, unknown>): Promise<boolean> => {
       setActionPending(id);
@@ -1088,6 +1162,7 @@ function ContentSeite() {
         }
         const eintrag = istObjekt(daten) ? daten.eintrag : null;
         if (istObjekt(eintrag) && eintrag.id === id) {
+          abruf.current.lokal += 1;
           setContent((prev) => prev.map((c) => (c.id === id ? (eintrag as unknown as ContentItem) : c)));
         } else {
           const nachladeFehler = await ladeEintrag(id);
@@ -1150,7 +1225,8 @@ function ContentSeite() {
   const hinweisWartend = wartendHinweis({
     wartendGesamt,
     lesefehler: freigabeLesefehler,
-    listeFehler: contentFehler,
+    // Schritt 3: Auch eine gescheiterte Neuabfrage ist ein Lesefehler der Liste (sie ist dann veraltet).
+    listeFehler: contentFehler ?? abfrageFehler,
     listeLaedt: loading,
     inListe: statusCounts["zur_freigabe"] ?? 0,
     stand: freigaben?.erzeugt_am ?? null,
@@ -1627,6 +1703,22 @@ function ContentSeite() {
       {/* ═══ TAB: CONTENT — FREIGABE-ANSICHT ═══ */}
       {activeTab === "content" && (
         <div className="space-y-6">
+          {/* Schritt 3: Zeitpunkt der letzten erfolgreichen Abfrage (gelesen_am der Route, Uhr des Servers) */}
+          {listeStand && (
+            <p
+              className="text-[10px] text-text-muted"
+              data-liste-stand
+              title="Liste und Kacheln außer „Zur Freigabe“ stammen aus dieser Abfrage. Im verborgenen Tab fragt die Seite nicht ab; beim Zurückkehren sofort."
+            >
+              Liste: Stand {standZeit(listeStand)} (letzte erfolgreiche Abfrage über den Server) · neue Abfrage alle {CONTENT_TAKT_MS / 1000} s
+            </p>
+          )}
+          {abfrageFehler && listeStand && (
+            <div className="card-ghost p-4 text-xs" role="alert" data-abfrage-fehler style={{ color: "var(--gp-rose)" }}>
+              Neue Abfrage fehlgeschlagen: {maskiert(abfrageFehler)} — angezeigt bleibt der Stand {standZeit(listeStand)}; nächster
+              Versuch im Takt.
+            </div>
+          )}
           {/* KPIs */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
             <KPICard label="Zur Freigabe" value={zurFreigabeWert} subtitle={zurFreigabeUntertitel} color="var(--gp-amber)" />
@@ -1651,6 +1743,9 @@ function ContentSeite() {
           {contentFehler ? (
             <div className="card-ghost p-6 text-sm" role="alert" style={{ color: "var(--gp-rose)" }}>
               Content nicht lesbar: {maskiert(contentFehler)}
+              <span className="block mt-1 text-[11px] text-text-muted" data-neuer-versuch>
+                Neuer Versuch automatisch alle {CONTENT_TAKT_MS / 1000} s.
+              </span>
             </div>
           ) : loading ? (
             <div className="space-y-2">

@@ -16,7 +16,13 @@
 // components/studio/; die Seite importiert sie. ladeSeite lädt die echten Dateien mit denselben
 // Attrappen (tests/harness/studio.mjs) — A.FreigebenKnopf, A.BelegKette, A.freigabeLage und
 // A.freigabeLageGemerkt sind dieselben Funktionen, die die Seite rendert.
-import { test, afterEach } from "node:test";
+// Objekt-Studio Schritt 3 (08.11.2026): Die Seite liest content über den Server — die Liste per
+// GET /api/content/liste, eine Zeile per GET /api/content/eintrag/<id> — und fragt alle 15 s neu ab
+// (setInterval). Die Simulation beantwortet beide Abrufe in fetch statt einer Supabase-Attrappe; den
+// Takt steuern Attrappen-Uhren von node:test (je Test neu), und nach jedem Test wird jede Seite
+// abgebaut (Effekte aufgeräumt), damit kein Takt in den nächsten Test läuft. Der Prüflauf zur
+// 50er-Grenze stellt statt einer Realtime-Einfügung eine Neuabfrage im Takt nach.
+import { test, afterEach, beforeEach, mock } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { createRequire, registerHooks } from "node:module";
@@ -45,6 +51,7 @@ const { renderToStaticMarkup } = req("react-dom/server");
 const counselModul = await import(pathToFileURL(path.join(SITE, "src/lib/counsel-urteil.ts")).href);
 const regelnModul = await import(pathToFileURL(path.join(SITE, "src/lib/freigabe-regeln.ts")).href);
 const { objekteFehlerArt, objektFehlerText } = await import(pathToFileURL(path.join(SITE, "src/lib/hooks-status.ts")).href);
+const contentListeModul = await import(pathToFileURL(path.join(SITE, "src/lib/content-liste.ts")).href);
 const { NAMENS_ERSATZ } = regelnModul;
 
 const NAME = ["Immo", "Nexus"].join("");
@@ -83,8 +90,16 @@ function ladeSeite(attrappen) {
 }
 
 // fetch gehört dem Test: Jeder Test setzt seine Attrappe, danach gilt wieder das Original.
+// Schritt 3: setInterval der Seite läuft auf einer Attrappen-Uhr; nach dem Test werden alle Seiten
+// abgebaut, dann gilt wieder die echte Uhr.
 const ORIGINAL_FETCH = globalThis.fetch;
+const offeneSeiten = [];
+beforeEach(() => {
+  mock.timers.enable({ apis: ["setInterval"] });
+});
 afterEach(() => {
+  for (const lz of offeneSeiten.splice(0)) lz.abbauen();
+  mock.timers.reset();
   globalThis.fetch = ORIGINAL_FETCH;
 });
 
@@ -150,7 +165,7 @@ function attrappenEcht({ suche = "", freigaben = null, useSearchParams } = {}) {
     react: React,
     "react/jsx-runtime": jsxRuntime,
     "next/navigation": { useSearchParams: useSearchParams ?? (() => new URLSearchParams(suche)) },
-    "@/lib/supabase": { supabase: {} },
+    "@/lib/content-liste": contentListeModul,
     "@/components/ui/KPICard": {
       KPICard: ({ label, value, subtitle }) =>
         React.createElement("div", { "data-kpi": label }, `${label}: ${String(value)} · ${subtitle ?? ""}`),
@@ -413,6 +428,16 @@ function hookLaufzeit() {
     }
     return baum;
   }
+  /** Seite verlassen (Schritt 3): Aufräumfunktion jedes Effekts einmal, wie beim Unmount. */
+  function abbauen() {
+    for (const slot of z.hooks) {
+      if (slot && typeof slot.aufraeumen === "function") {
+        const aufraeumen = slot.aufraeumen;
+        slot.aufraeumen = undefined;
+        aufraeumen();
+      }
+    }
+  }
   return {
     attrappen: { react, "react/jsx-runtime": { jsx, jsxs: jsx, Fragment } },
     jsx,
@@ -421,6 +446,7 @@ function hookLaufzeit() {
     },
     rendere,
     ruhe,
+    abbauen,
   };
 }
 
@@ -462,7 +488,11 @@ const json = (status, koerper) => () => antwort(status, koerper);
 
 /**
  * Seite mit Attrappen: fetch beantwortet die Pipeline- und Status-Aufrufe aus den vorbereiteten
- * Listen; Supabase liefert die Zeilen; jeder andere Aufruf wirft.
+ * Listen, die Liste (GET /api/content/liste) aus zeilen und das Neuladen einer Zeile
+ * (GET /api/content/eintrag/<id>) aus nachladen; jeder andere Aufruf wirft.
+ * nachladen steht weiter in der Form der früheren Supabase-Antwort ({data, error}) und wird so
+ * beantwortet wie von der Route: Zeile → 200 {eintrag}, keine Zeile → 404 nicht_gefunden,
+ * Lesefehler → 502 supabase mit dem Grund (tests/r-content-server.test.mjs prüft die Route selbst).
  */
 function baueSimulation({
   suche = "",
@@ -476,11 +506,30 @@ function baueSimulation({
   nachladen = { data: null, error: null },
 } = {}) {
   const lz = hookLaufzeit();
+  offeneSeiten.push(lz);
   const pipelineAufrufe = [];
   const statusAufrufe = [];
   const offenePipeline = [...pipelineAntworten];
   const offeneStatus = [...statusAntworten];
+  let listenZeilen = zeilen;
+  let abfragen = 0;
   globalThis.fetch = async (url, init = {}) => {
+    if (url === "/api/content/liste" && !init.method) {
+      abfragen += 1;
+      return antwort(200, {
+        zeilen: listenZeilen,
+        grenze: 50,
+        abgeschnitten: listenZeilen.length >= 50,
+        gelesen_am: new Date(Date.UTC(2026, 10, 8, 21, 0, abfragen)).toISOString(),
+        quelle: "Test",
+      });
+    }
+    const eintrag = /^\/api\/content\/eintrag\/(\d+)$/.exec(url);
+    if (eintrag && !init.method) {
+      if (nachladen.error) return antwort(502, { fehler: nachladen.error.message, fehler_art: "supabase" });
+      if (!nachladen.data) return antwort(404, { fehler: `Eintrag ${eintrag[1]} nicht gefunden`, fehler_art: "nicht_gefunden" });
+      return antwort(200, { eintrag: nachladen.data, gelesen_am: "2026-11-08T21:00:00Z", quelle: "Test" });
+    }
     if (url === "/api/content/pipeline" && init.method === "POST") {
       const koerper = JSON.parse(init.body);
       pipelineAufrufe.push(koerper);
@@ -501,27 +550,10 @@ function baueSimulation({
     }
     throw new Error(`Test: unerwarteter Abruf ${url}`);
   };
-  const kette = {
-    select: () => kette,
-    order: () => kette,
-    eq: () => kette,
-    limit: async () => ({ data: zeilen, error: null }),
-    maybeSingle: async () => nachladen,
-  };
-  // Realtime-Handler werden mitgeschnitten (sim.realtime), damit Tests Einfügungen nachstellen können.
-  const realtimeHandler = [];
-  const kanal = {
-    on: (_ereignis, _filter, rueckruf) => {
-      if (typeof rueckruf === "function") realtimeHandler.push(rueckruf);
-      return kanal;
-    },
-    subscribe: () => kanal,
-  };
-  const supabase = { from: () => kette, channel: () => kanal, removeChannel: () => {} };
   const seite = ladeSeite({
     ...lz.attrappen,
     "next/navigation": { useSearchParams: () => new URLSearchParams(suche) },
-    "@/lib/supabase": { supabase },
+    "@/lib/content-liste": contentListeModul,
     "@/components/ui/KPICard": {
       KPICard: ({ label, value, subtitle }) => lz.jsx("div", { "data-kpi": label, children: `${label}: ${String(value)} · ${subtitle ?? ""}` }),
     },
@@ -543,9 +575,13 @@ function baueSimulation({
     },
     rendere: () => lz.rendere(),
     ruhe: (runden) => lz.ruhe(runden),
-    /** Realtime-Ereignis an alle mitgeschnittenen Handler, dann warten. */
-    async realtime(payload) {
-      for (const rueckruf of realtimeHandler) rueckruf(payload);
+    /** Schritt 3: Zeilen, die die nächste Abfrage der Liste liefert. */
+    setzeZeilen(neu) {
+      listenZeilen = neu;
+    },
+    /** Schritt 3: ein Takt (15 s) vergeht, dann warten, bis die Abfrage verarbeitet ist. */
+    async takt() {
+      mock.timers.tick(contentListeModul.CONTENT_TAKT_MS);
       return lz.ruhe();
     },
     /** Klick und warten, bis alle Antworten verarbeitet sind. */
@@ -1187,17 +1223,25 @@ test("Prüflauf: Wiederholung mit offener Lauf-ID — eine 5xx der Route verwirf
   assert.notEqual(sim.pipelineAufrufe[3].lauf_id, sim.pipelineAufrufe[0].lauf_id);
 });
 
-test("Prüflauf: 50er-Grenze als Ursache nur, wenn die Abfrage 50 Zeilen lieferte — nicht durch Realtime-Einfügungen", async () => {
+test("Prüflauf: 50er-Grenze als Ursache nur, wenn die Abfrage sie meldet — auch nach Neuabfragen im Takt (Schritt 3: statt Realtime)", async () => {
   const freigaben = { erzeugt_am: "2026-11-06T09:00:00Z", wartend: [], wartend_gesamt: 7, haengend: [], haengend_gesamt: 0, quelle: "x", fehler: null };
   const zeilenMit = (n) => Array.from({ length: n }, (_, i) => zeile(100 + i, { status: i === 0 ? "zur_freigabe" : "gepostet" }));
   const voll = baueSimulation({ suche: "tab=content", freigaben, zeilen: zeilenMit(50) });
   const tVoll = text(await voll.start());
   assert.ok(tVoll.includes("Die Liste zeigt nur die letzten 50 Einträge; insgesamt warten 7 auf Freigabe"), tVoll.slice(0, 500));
   const kurz = baueSimulation({ suche: "tab=content", freigaben, zeilen: zeilenMit(49) });
-  await kurz.start();
-  const nachRealtime = text(await kurz.realtime({ eventType: "INSERT", new: zeile(999, { status: "gepostet" }) }));
-  assert.ok(nachRealtime.includes("Liste und Server-Zählung weichen ab"), nachRealtime.slice(0, 500));
-  assert.ok(!nachRealtime.includes("Die Liste zeigt nur die letzten 50 Einträge"));
+  const tKurz = text(await kurz.start());
+  assert.ok(tKurz.includes("Liste und Server-Zählung weichen ab"), tKurz.slice(0, 500));
+  assert.ok(!tKurz.includes("Die Liste zeigt nur die letzten 50 Einträge"));
+  // Neuabfrage im Takt mit einer Zeile mehr: Jetzt meldet die Abfrage selbst die Grenze.
+  kurz.setzeZeilen([zeile(999, { status: "gepostet" }), ...zeilenMit(49)]);
+  const tVoller = text(await kurz.takt());
+  assert.ok(tVoller.includes("Die Liste zeigt nur die letzten 50 Einträge; insgesamt warten 7 auf Freigabe"), tVoller.slice(0, 500));
+  // Wieder 49 Zeilen: Die Grenze gilt nicht mehr — jede Abfrage ersetzt die Liste samt Angabe.
+  kurz.setzeZeilen(zeilenMit(49));
+  const tWieder = text(await kurz.takt());
+  assert.ok(tWieder.includes("Liste und Server-Zählung weichen ab"), tWieder.slice(0, 500));
+  assert.ok(!tWieder.includes("Die Liste zeigt nur die letzten 50 Einträge"));
 });
 
 test("Nachprüfung: freigabeLage je Eintrag gemerkt — gleicher Eintrag gleiche Lage, ersetzter Eintrag neu", () => {

@@ -16,6 +16,15 @@
 // Gilt für Schritt 2. Ändert ein späterer Schritt /content absichtlich, wird dieser Vergleich
 // bewusst angepasst oder entfernt. S_CONTENT_SEITE=<pfad> prüft statt der Repo-Seite eine Kopie;
 // die Bausteine lassen sich über Z_TSX_COMPONENTS_STUDIO_* tauschen (Mutationstests).
+//
+// Objekt-Studio Schritt 3 (08.11.2026, R4) — bewusst angepasst, sonst unverändert:
+// - Die Seite liest die Liste über GET /api/content/liste (fetch) statt mit Supabase im Browser. Die
+//   fetch-Attrappe beantwortet diesen Abruf mit denselben Zeilen, die die Supabase-Attrappe der
+//   Vorher-Fassung liefert; den Takt (setInterval, 15 s) ersetzen Attrappen-Uhren von node:test.
+// - Einzige gewollte Abweichung im Markup ist die neue Stand-Zeile der Liste (<p data-liste-stand>,
+//   Zeitpunkt der letzten erfolgreichen Abfrage). Sie wird nur im Content-Tab nach geladener Liste
+//   gezeigt; ohneStandZeile prüft, dass sie genau einmal mit dem erwarteten Text dasteht, und nimmt
+//   genau sie heraus. Alles andere bleibt byte-gleich verglichen.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -45,6 +54,7 @@ const BLOB_E9C17C5 = "8bb9491cf978dc48342de74a95a8f847f55e09bd";
 const counselModul = await import(pathToFileURL(path.join(SITE, "src/lib/counsel-urteil.ts")).href);
 const regelnModul = await import(pathToFileURL(path.join(SITE, "src/lib/freigabe-regeln.ts")).href);
 const { objekteFehlerArt, objektFehlerText } = await import(pathToFileURL(path.join(SITE, "src/lib/hooks-status.ts")).href);
+const contentListeModul = await import(pathToFileURL(path.join(SITE, "src/lib/content-liste.ts")).href);
 
 const NAME = ["Immo", "Nexus"].join("");
 const VORHER_QUELLE = readFileSync(VORHER_DATEI);
@@ -201,6 +211,7 @@ function echteAttrappen({ suche = "", freigaben = null } = {}) {
     },
     "@/lib/counsel-urteil": counselModul,
     "@/lib/freigabe-regeln": regelnModul,
+    "@/lib/content-liste": contentListeModul,
   };
 }
 
@@ -288,6 +299,7 @@ function simulation(fassung, suche) {
     },
     "@/lib/counsel-urteil": counselModul,
     "@/lib/freigabe-regeln": regelnModul,
+    "@/lib/content-liste": contentListeModul,
   };
   const seiten = beideSeiten(attrappen);
   lz.setzeWurzel(seiten[fassung].ContentPage);
@@ -323,12 +335,31 @@ function kartenKopf(baum, id) {
   return finde(karte, (k) => k.type === "div" && typeof k.props.onClick === "function" && String(k.props.className ?? "").includes("cursor-pointer"))[0];
 }
 
+/** Zeitpunkt der Listen-Abfrage in der fetch-Attrappe (gelesen_am der Route). */
+const STAND = "2026-11-08T21:30:05.123Z";
+const STAND_ZEILE = /<p [^>]*data-liste-stand="true"[^>]*>([^<]*)<\/p>/g;
+
+/** Nachher-Markup ohne die Stand-Zeile — nur, wenn sie genau einmal mit dem erwarteten Text dasteht. */
+function ohneStandZeile(markup) {
+  const treffer = [...markup.matchAll(STAND_ZEILE)];
+  assert.equal(treffer.length, 1, "genau eine Stand-Zeile");
+  assert.equal(
+    treffer[0][1],
+    `Liste: Stand ${contentListeModul.standZeit(STAND)} (letzte erfolgreiche Abfrage über den Server) · neue Abfrage alle 15 s`,
+  );
+  return markup.replace(STAND_ZEILE, "");
+}
+
 async function mitFetch(lauf) {
   const vorher = globalThis.fetch;
   globalThis.fetch = async (url, init = {}) => {
     if (url === "/api/content/pipeline" && !init.method) return antwort(200, { launch_calendar: null });
     if (url === "/api/content/pipeline" && init.method === "POST") return antwort(200, ERGEBNIS);
     if (url === "/api/objekte") return antwort(200, { objekte: [] });
+    // Schritt 3: die Nachher-Fassung liest dieselben Zeilen über den Server.
+    if (url === "/api/content/liste" && !init.method) {
+      return antwort(200, { zeilen: ZEILEN, grenze: 50, abgeschnitten: false, gelesen_am: STAND, quelle: "Test" });
+    }
     throw new Error(`Test: unerwarteter Abruf ${url}`);
   };
   try {
@@ -338,7 +369,8 @@ async function mitFetch(lauf) {
   }
 }
 
-test("S-U3 /content byte-gleich: Content-Tab mit geladenen Einträgen, jeder Eintrag aufgeklappt", async () => {
+test("S-U3 /content byte-gleich: Content-Tab mit geladenen Einträgen, jeder Eintrag aufgeklappt", async (t) => {
+  t.mock.timers.enable({ apis: ["setInterval"] });
   await mitFetch(async () => {
     const alt = simulation("vorher", "tab=content");
     const neu = simulation("nachher", "tab=content");
@@ -346,7 +378,7 @@ test("S-U3 /content byte-gleich: Content-Tab mit geladenen Einträgen, jeder Ein
     neu.rendere();
     let baumAlt = await alt.ruhe();
     let baumNeu = await neu.ruhe();
-    assert.equal(alsMarkup(baumNeu), alsMarkup(baumAlt), "geladen, zugeklappt");
+    assert.equal(ohneStandZeile(alsMarkup(baumNeu)), alsMarkup(baumAlt), "geladen, zugeklappt");
     let verglichen = 0;
     for (const z of ZEILEN) {
       kartenKopf(baumAlt, z.id).props.onClick();
@@ -355,14 +387,15 @@ test("S-U3 /content byte-gleich: Content-Tab mit geladenen Einträgen, jeder Ein
       baumNeu = await neu.ruhe(2);
       const markupAlt = alsMarkup(baumAlt);
       assert.ok(markupAlt.includes("Beleg-Kette"), `Eintrag ${z.id} aufgeklappt`);
-      assert.equal(alsMarkup(baumNeu), markupAlt, `Eintrag ${z.id} aufgeklappt`);
+      assert.equal(ohneStandZeile(alsMarkup(baumNeu)), markupAlt, `Eintrag ${z.id} aufgeklappt`);
       verglichen += markupAlt.length;
     }
     assert.ok(verglichen > 100_000, `verglichen: ${verglichen} Zeichen`);
   });
 });
 
-test("S-U4 /content byte-gleich: Pipeline-Ergebnis mit Urteilsanzeige und Fassungsbezug", async () => {
+test("S-U4 /content byte-gleich: Pipeline-Ergebnis mit Urteilsanzeige und Fassungsbezug", async (t) => {
+  t.mock.timers.enable({ apis: ["setInterval"] });
   await mitFetch(async () => {
     const laeufe = {};
     for (const fassung of ["vorher", "nachher"]) {

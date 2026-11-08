@@ -12,6 +12,8 @@
 // Objekt-Studio Schritt 2 (08.11.2026): Freigabe-Lage, Urteilsanzeige und Zeit-/Maskierungshilfen
 // liegen in components/studio/beleg-hilfen.ts; die Seite importiert sie. Der Test lädt die echte
 // Datei mit (tests/harness/studio.mjs) und prüft dieselben Funktionen wie vorher (AUSGELAGERT).
+// Objekt-Studio Schritt 3 (08.11.2026): Die Seite importiert lib/content-liste.ts (Grenze, Takt, Leser
+// der Server-Antworten); der Test reicht die echte Datei durch.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -26,6 +28,7 @@ const ts = createRequire(path.join(SITE, "package.json"))("typescript");
 
 const counselModul = await import(pathToFileURL(path.join(SITE, "src/lib/counsel-urteil.ts")).href);
 const regelnModul = await import(pathToFileURL(path.join(SITE, "src/lib/freigabe-regeln.ts")).href);
+const contentListeModul = await import(pathToFileURL(path.join(SITE, "src/lib/content-liste.ts")).href);
 const { NAMENS_ERSATZ, MIN_FREIGABE_ZEICHEN } = regelnModul;
 
 /** Seit Schritt 2 in components/studio/beleg-hilfen.ts statt in page.tsx. */
@@ -72,6 +75,7 @@ function ladeSeite(datei) {
     "@/lib/hooks-status": { objektFehlerText: (f) => String(f), objekteFehlerArt: () => "unbekannt", useFreigaben: () => ({}) },
     "@/lib/counsel-urteil": counselModul,
     "@/lib/freigabe-regeln": regelnModul,
+    "@/lib/content-liste": contentListeModul,
   };
   const studio = ladeStudioBausteine(attrappen);
   Object.assign(attrappen, studio.module);

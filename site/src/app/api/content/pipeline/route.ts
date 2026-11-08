@@ -158,8 +158,8 @@ interface Vermerk {
   am: string;
 }
 
-// Grund und Detail landen in metadata (per Anon-Key lesbar) und in der Antwort: deshalb
-// immer bereinigt (R17). Für feste Texte ändert fehlerText nichts.
+// Grund und Detail landen in metadata (angezeigt in /content und im Objekt-Studio) und in der
+// Antwort: deshalb immer bereinigt (R17). Für feste Texte ändert fehlerText nichts.
 function vermerk(stufe: Vermerk["stufe"], grund: string, detail?: string): Vermerk {
   const am = new Date().toISOString();
   return detail ? { stufe, grund: fehlerText(grund), detail: fehlerText(detail), am } : { stufe, grund: fehlerText(grund), am };
