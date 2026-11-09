@@ -8,7 +8,9 @@
 //   Segment-Config. Dazu: Die Middleware (nur gelesen) schützt beide Pfade.
 // Teil S — die Seite mit Hook-Laufzeit, fetch-Attrappe und Attrappen-Uhren von node:test: erste
 //   Abfrage, Takt 15 s, Stand-Zeile, Fehler mit und ohne gelesene Liste, verborgener Tab, Abbau,
-//   Vorrang lokaler Änderungen, Überholen, Zeitlimit, Neulesen nach einem Lauf, Neuladen einer Zeile.
+//   Vorrang lokaler Änderungen, Überholen, Zeitlimit, Neulesen nach einem Lauf, Neuladen einer Zeile;
+//   seit der Prüfung vom 09.11.2026 auch: sofort neu lesen nach einer verworfenen Abfrage, keine Abfrage
+//   nach dem Verlassen, Abbau und Wiederaufbau wie im Strict Mode.
 // Teil Z — Simulation: Der Supabase-Client des Browsers hat keine Rechte auf content (anon und
 //   authenticated). Jeder Zugriff scheitert wie bei PostgREST ohne Recht (42501, HTTP 401), Realtime
 //   liefert nichts. /content und das Objekt-Studio zeigen trotzdem alle Zeilen — über die echten Routen
@@ -420,10 +422,14 @@ const T1 = "2026-11-08T21:00:01.000Z";
 const T2 = "2026-11-08T21:00:16.000Z";
 const T3 = "2026-11-08T21:00:31.000Z";
 
+/** Vorbereitete Pipeline-Antwort: Der Lauf bleibt offen, bis der Test ihn beantwortet (n.pipeline()). */
+const OFFEN = Symbol("offen");
+
 /**
  * fetch-Attrappe der Seite. Liste und Zeile beantwortet der Test (antworte/wirf), auch später; ein
  * Abbruch über das Signal lehnt ab wie fetch (AbortError). Kalender und Objekte beantwortet sie
- * selbst, Status und Pipeline aus vorbereiteten Antworten; alles andere wirft.
+ * selbst, Status und Pipeline aus vorbereiteten Antworten ([Status, Daten]; für die Pipeline auch ein
+ * Error = Netzfehler oder OFFEN); alles andere wirft.
  */
 function netz({ statusAntworten = [], pipelineAntworten = [] } = {}) {
   const abrufe = [];
@@ -449,8 +455,9 @@ function netz({ statusAntworten = [], pipelineAntworten = [] } = {}) {
         else a.wirf(new Error("Test: keine Status-Antwort vorbereitet"));
       } else if (url === "/api/content/pipeline" && init.method === "POST") {
         const naechste = offen.pipeline.shift();
-        if (naechste) a.antworte(...naechste);
-        else a.wirf(new Error("Test: keine Pipeline-Antwort vorbereitet"));
+        if (naechste instanceof Error) a.wirf(naechste);
+        else if (Array.isArray(naechste)) a.antworte(...naechste);
+        else if (naechste !== OFFEN) a.wirf(new Error("Test: keine Pipeline-Antwort vorbereitet"));
       } else if (url !== "/api/content/liste" && !/^\/api\/content\/eintrag\/\d+$/.test(url)) {
         a.wirf(new Error(`Test: unerwarteter Abruf ${url}`));
       }
@@ -459,6 +466,7 @@ function netz({ statusAntworten = [], pipelineAntworten = [] } = {}) {
     abrufe,
     liste: () => abrufe.filter((a) => a.url === "/api/content/liste"),
     eintrag: () => abrufe.filter((a) => a.url.startsWith("/api/content/eintrag/")),
+    pipeline: () => abrufe.filter((a) => a.url === "/api/content/pipeline" && a.init.method === "POST"),
   };
 }
 
@@ -709,7 +717,7 @@ test("R3-S6 Seite verlassen: Takt gestoppt, Lauscher entfernt, laufende Abfrage 
   assert.equal(alsMarkup(nachher), markup, "der Abbruch setzt keinen Fehler und keinen Stand");
 });
 
-test("R3-S7 Lokale Änderung hat Vorrang: Eine Abfrage, die vor einer Aktion begann, setzt die Zeile nicht zurück; der nächste Takt liest neu", async (t) => {
+test("R3-S7 Lokale Änderung hat Vorrang: Eine Abfrage, die vor einer Aktion begann, setzt die Zeile nicht zurück; die Seite liest sofort neu", async (t) => {
   t.mock.timers.enable({ apis: ["setInterval", "setTimeout"] });
   const freigegeben = { ...z(2, { status: "freigegeben", extra: { freigabe: VERMERK } }) };
   const n = netz({ statusAntworten: [[200, { eintrag: freigegeben }]] });
@@ -726,8 +734,8 @@ test("R3-S7 Lokale Änderung hat Vorrang: Eine Abfrage, die vor einer Aktion beg
   baum = await lz.ruhe();
   assert.ok(kachel(baum, "Freigegeben").startsWith("Freigegeben: 1 · 1 bereit zum Posten"), "ältere Abfrage verworfen");
   assert.equal(standZeile(baum), await standText(T1), "Stand bleibt bei der zuletzt übernommenen Abfrage");
-  t.mock.timers.tick(15_000);
-  await lz.ruhe();
+  // Prüfung 09.11.2026: Nach dem Verwerfen sofort die nächste Abfrage, nicht erst im Takt.
+  assert.equal(n.liste().length, 3, "sofort neu gelesen, ohne auf den Takt zu warten");
   n.liste()[2].antworte(200, liste([freigegeben], T3));
   baum = await lz.ruhe();
   assert.equal(standZeile(baum), await standText(T3));
@@ -745,13 +753,16 @@ test("R3-S8 Eine neuere Abfrage überholt die ältere: Die ältere wird abgebroc
   s.setze("visible");
   await lz.ruhe();
   t.mock.timers.tick(5_000);
-  await lz.ruhe();
+  let baum = await lz.ruhe();
   const [, aelter, neuer] = n.liste();
   assert.equal(n.liste().length, 3);
   assert.equal(aelter.init.signal.aborted, true, "ältere abgebrochen");
   assert.equal(neuer.init.signal.aborted, false);
+  // Prüfung 09.11.2026: schon vor der Antwort der neueren — die abgebrochene meldet keinen Fehler.
+  assert.equal(alarm(baum), null, "der Abbruch der älteren ist kein Fehler");
+  assert.equal(standZeile(baum), await standText(T1));
   neuer.antworte(200, liste([z(9), z(1)], T3));
-  const baum = await lz.ruhe();
+  baum = await lz.ruhe();
   assert.equal(alarm(baum), null, "Überholen ist kein Fehler");
   assert.equal(standZeile(baum), await standText(T3));
   assert.deepEqual(eintraege(baum).sort(), ["Eintrag 1", "Eintrag 9"]);
@@ -795,22 +806,36 @@ const ERGEBNIS = {
   summary: { total_cost_usd: 0.05, total_duration_ms: 1000, completed: "5/5" },
 };
 
-test("R3-S10 Nach einem Pipeline-Lauf liest die Seite sofort neu: Die neue Zeile steht im Content-Tab, ohne auf den Takt zu warten", async (t) => {
-  t.mock.timers.enable({ apis: ["setInterval", "setTimeout"] });
-  const n = netz({ pipelineAntworten: [[200, ERGEBNIS]] });
-  const lz = await contentSeite({ suche: "" });
-  let baum = await gestartet(n, lz, [z(1)]);
+/** Topic eintragen und "Content produzieren" klicken (Pipeline-Tab). */
+async function laufStarten(lz, baum) {
   const feld = finde(baum, (k) => k.type === "input" && String(k.props.placeholder ?? "").startsWith("z.B."))[0];
   feld.props.onChange({ target: { value: "KI-Agenten im Mittelstand" } });
   baum = await lz.ruhe(2);
-  baum = await klicke(lz, finde(baum, (k) => k.type === "button" && text(k) === "Content produzieren")[0]);
-  assert.ok(text(baum).includes("Pipeline-Ergebnis"));
-  assert.equal(n.liste().length, 2, "Neulesen direkt nach dem Lauf");
-  n.liste()[1].antworte(200, liste([z(50), z(1)], T2));
-  await lz.ruhe();
-  baum = await klicke(lz, finde(baum, (k) => k.type === "button" && text(k) === "Content")[0]);
-  assert.deepEqual(eintraege(baum).sort(), ["Eintrag 1", "Eintrag 50"]);
-  assert.equal(standZeile(baum), await standText(T2));
+  return klicke(lz, finde(baum, (k) => k.type === "button" && text(k) === "Content produzieren")[0]);
+}
+
+test("R3-S10 Nach jedem Pipeline-Lauf liest die Seite sofort neu — mit Ergebnis, nach unbekanntem Ausgang und bei 'Lauf existiert': Die Zeile steht im Content-Tab, ohne auf den Takt zu warten", async (t) => {
+  t.mock.timers.enable({ apis: ["setInterval", "setTimeout"] });
+  // Prüfung 09.11.2026: Die Pipeline legt die Zeile schon beim Start an — auch ohne Ergebnis kann es sie geben.
+  const ausgaenge = [
+    ["Ergebnis", [200, ERGEBNIS], "Pipeline-Ergebnis"],
+    ["unbekannter Ausgang (Netzfehler)", new TypeError("Failed to fetch"), "Netzwerkfehler: Failed to fetch"],
+    ["Lauf existiert (409)", [409, { fehler: "Lauf existiert bereits", content_id: 50, status: "zur_freigabe" }], "Lauf existiert bereits (#50, Zur Freigabe)"],
+  ];
+  for (const [name, antwort, meldung] of ausgaenge) {
+    const n = netz({ pipelineAntworten: [antwort] });
+    const lz = await contentSeite({ suche: "" });
+    let baum = await gestartet(n, lz, [z(1)]);
+    baum = await laufStarten(lz, baum);
+    assert.equal(n.pipeline().length, 1, name);
+    assert.ok(text(baum).includes(meldung), `${name}: ${text(baum).slice(0, 800)}`);
+    assert.equal(n.liste().length, 2, `${name}: Neulesen direkt nach dem Lauf`);
+    n.liste()[1].antworte(200, liste([z(50), z(1)], T2));
+    await lz.ruhe();
+    baum = await klicke(lz, finde(baum, (k) => k.type === "button" && text(k) === "Content")[0]);
+    assert.deepEqual(eintraege(baum).sort(), ["Eintrag 1", "Eintrag 50"], name);
+    assert.equal(standZeile(baum), await standText(T2), name);
+  }
 });
 
 test("R3-S11 Eine Zeile neu laden (nach 409): GET /api/content/eintrag/<id> ohne Cache; Ersatz der Zeile oder sichtbarer Grund, nie still", async (t) => {
@@ -861,6 +886,75 @@ test("R3-S12 Auch das Neuladen einer Zeile (nach 409) hat Vorrang vor einer Abfr
   baum = await lz.ruhe();
   assert.ok(kachel(baum, "Freigegeben").startsWith("Freigegeben: 1 · 1 bereit zum Posten"), "ältere Abfrage verworfen");
   assert.equal(standZeile(baum), await standText(T1));
+  assert.equal(n.liste().length, 3, "sofort neu gelesen (Prüfung 09.11.2026)");
+});
+
+test("R3-S13 Eine neue Zeile in einer verworfenen Antwort erscheint ohne weiteren Takt: Nach dem Verwerfen liest die Seite sofort neu", async (t) => {
+  t.mock.timers.enable({ apis: ["setInterval", "setTimeout"] });
+  const freigegeben = z(2, { status: "freigegeben", extra: { freigabe: VERMERK } });
+  const n = netz({ statusAntworten: [[200, { eintrag: freigegeben }]] });
+  const lz = await contentSeite();
+  let baum = await gestartet(n, lz, [z(2)]);
+  baum = await oeffne(lz, baum, 2);
+  t.mock.timers.tick(15_000);
+  await lz.ruhe();
+  const takt = n.liste()[1];
+  baum = await klicke(lz, freigebenKnopf(baum));
+  // Die Antwort des Takts bringt die neue Zeile 7, wird aber verworfen (Zeile 2 lokal ersetzt).
+  takt.antworte(200, liste([z(7), z(2)], T2));
+  baum = await lz.ruhe();
+  assert.deepEqual(eintraege(baum).sort(), ["Eintrag 2"], "verworfen");
+  assert.equal(standZeile(baum), await standText(T1));
+  assert.ok(kachel(baum, "Freigegeben").startsWith("Freigegeben: 1 · 1 bereit zum Posten"), "lokale Änderung bleibt");
+  assert.equal(n.liste().length, 3, "sofort die nächste Abfrage");
+  assert.equal(n.liste()[2].init.cache, "no-store");
+  n.liste()[2].antworte(200, liste([z(7), freigegeben], T3));
+  baum = await lz.ruhe();
+  assert.deepEqual(eintraege(baum).sort(), ["Eintrag 2", "Eintrag 7"], "neue Zeile ohne weiteren Takt");
+  assert.equal(standZeile(baum), await standText(T3));
+  assert.ok(kachel(baum, "Freigegeben").startsWith("Freigegeben: 1 · 1 bereit zum Posten"), kachel(baum, "Freigegeben"));
+  // Kein Doppel: Bis zum nächsten Takt keine weitere Abfrage.
+  t.mock.timers.tick(14_999);
+  await lz.ruhe();
+  assert.equal(n.liste().length, 3);
+});
+
+test("R3-S14 Ein Lauf, der erst nach dem Verlassen der Seite endet, startet keine Abfrage mehr", async (t) => {
+  t.mock.timers.enable({ apis: ["setInterval", "setTimeout"] });
+  const n = netz({ pipelineAntworten: [OFFEN] });
+  const lz = await contentSeite({ suche: "" });
+  const baum = await gestartet(n, lz, [z(1)]);
+  await laufStarten(lz, baum);
+  const [lauf] = n.pipeline();
+  assert.equal(lauf.erledigt, false, "Lauf offen");
+  assert.equal(n.liste().length, 1);
+  lz.abbauen();
+  lauf.antworte(200, ERGEBNIS);
+  await lz.ruhe();
+  t.mock.timers.tick(60_000);
+  await lz.ruhe();
+  assert.equal(n.liste().length, 1, "keine Abfrage nach dem Verlassen");
+});
+
+test("R3-S15 Abbauen und wieder aufbauen (Strict Mode im Entwicklungsmodus): Die Seite fragt danach wieder ab — sofort, im Takt und nach einem Lauf", async (t) => {
+  t.mock.timers.enable({ apis: ["setInterval", "setTimeout"] });
+  const n = netz({ pipelineAntworten: [[200, ERGEBNIS]] });
+  const lz = await contentSeite({ suche: "" });
+  let baum = await gestartet(n, lz, [z(1)]);
+  lz.abbauen();
+  lz.wiederAufbauen();
+  await lz.ruhe();
+  assert.equal(n.liste().length, 2, "Abfrage beim erneuten Aufbau");
+  n.liste()[1].antworte(200, liste([z(2), z(1)], T2));
+  baum = await lz.ruhe();
+  t.mock.timers.tick(15_000);
+  await lz.ruhe();
+  assert.equal(n.liste().length, 3, "Takt läuft wieder");
+  n.liste()[2].antworte(200, liste([z(2), z(1)], T3));
+  baum = await lz.ruhe();
+  baum = await laufStarten(lz, baum);
+  assert.ok(text(baum).includes("Pipeline-Ergebnis"));
+  assert.equal(n.liste().length, 4, "Neulesen nach dem Lauf");
 });
 
 // ═══ Teil Z: Browser-Client ohne Rechte auf content (Simulation) ═══

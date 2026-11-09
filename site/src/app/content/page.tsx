@@ -94,6 +94,11 @@ import type { ContentMetadata, CounselVermerk, FassungsBezug, FreigabeLage, Verm
 // Im verborgenen Tab fragt der Takt nicht ab; beim Zurückkehren und nach jedem Pipeline-Lauf liest die
 // Seite sofort neu. Sonst rendert sie unverändert (tests/s-content-unveraendert.test.mjs, angepasst
 // nur um die Stand-Zeile).
+//
+// Prüfung Schritt 3 (09.11.2026): Wird eine Abfrage verworfen, weil während ihres Laufs eine Zeile lokal
+// ersetzt wurde, liest die Seite sofort neu (vorher erst im nächsten Takt — eine neue Zeile aus der
+// verworfenen Antwort erschien dadurch einen Takt später). Nach dem Verlassen startet keine Abfrage mehr,
+// auch nicht aus einem Pipeline-Lauf, der erst danach endet.
 
 // ═══ TYPES ═══
 
@@ -949,16 +954,20 @@ function ContentSeite() {
   // nr: Jede Abfrage und das Verlassen der Seite erhöhen sie; nur die jüngste Abfrage setzt etwas
   // (wie R29 in lib/hooks-status.ts), eine neue bricht die vorige ab. lokal: Zahl der lokal ersetzten
   // Zeilen (Aktion, Neuladen einer Zeile) — eine Abfrage, die davor begann, könnte die Änderung
-  // zurücksetzen und wird verworfen; der nächste Takt liest neu. gelesen: Eine Abfrage war erfolgreich.
-  const abruf = useRef<{ nr: number; lokal: number; gelesen: boolean; steuerung: AbortController | null }>({
+  // zurücksetzen und wird verworfen; die Seite liest dann sofort neu. gelesen: Eine Abfrage war
+  // erfolgreich. verlassen: Die Seite ist abgebaut — es startet keine Abfrage mehr, auch nicht aus einem
+  // Pipeline-Lauf, der erst danach endet; der Aufbau setzt es zurück (Strict Mode baut ab und wieder auf).
+  const abruf = useRef<{ nr: number; lokal: number; gelesen: boolean; verlassen: boolean; steuerung: AbortController | null }>({
     nr: 0,
     lokal: 0,
     gelesen: false,
+    verlassen: false,
     steuerung: null,
   });
 
   const listeLaden = useCallback(async (): Promise<void> => {
     const a = abruf.current;
+    if (a.verlassen) return;
     a.steuerung?.abort();
     const nr = ++a.nr;
     const lokal = a.lokal;
@@ -984,7 +993,13 @@ function ContentSeite() {
     if (nr !== a.nr) return;
     a.steuerung = null;
     if (lesung.ok) {
-      if (lokal !== a.lokal) return;
+      if (lokal !== a.lokal) {
+        // Während der Abfrage wurde eine Zeile lokal ersetzt: Die Antwort könnte die Änderung zurücksetzen
+        // und wird verworfen. Sofort neu lesen — die neue Abfrage beginnt nach der Änderung, und neue
+        // Zeilen aus der verworfenen Antwort erscheinen ohne einen weiteren Takt.
+        void listeLaden();
+        return;
+      }
       a.gelesen = true;
       setContent(lesung.zeilen as unknown as ContentItem[]);
       setListeAbgeschnitten(lesung.abgeschnitten);
@@ -1046,6 +1061,9 @@ function ContentSeite() {
       }
     }
 
+    // Aufbau: Ein früheres Verlassen gilt nicht mehr (Strict Mode baut im Entwicklungsmodus ab und wieder auf).
+    const a = abruf.current;
+    a.verlassen = false;
     void listeLaden();
     fetchCalendar();
     fetchObjekte();
@@ -1053,7 +1071,6 @@ function ContentSeite() {
     // Schritt 3: Neuabfrage im Takt statt Realtime. Verborgener Tab (visibilityState "hidden"): Der
     // Takt fragt nicht ab, die Stand-Zeile zeigt das Alter der Liste; beim Zurückkehren sofort eine
     // Abfrage, danach wieder im Takt. Ohne document (Server, Tests ohne DOM) läuft nur der Takt.
-    const a = abruf.current;
     const verborgen = () => typeof document !== "undefined" && document.visibilityState === "hidden";
     const takt = setInterval(() => {
       if (!verborgen()) void listeLaden();
@@ -1066,7 +1083,8 @@ function ContentSeite() {
     return () => {
       clearInterval(takt);
       if (typeof document !== "undefined") document.removeEventListener("visibilitychange", beiSichtwechsel);
-      // Laufende Abfrage abbrechen; späte Antworten zählen nicht mehr.
+      // Laufende Abfrage abbrechen; späte Antworten zählen nicht mehr, und keine neue Abfrage startet.
+      a.verlassen = true;
       a.nr += 1;
       a.steuerung?.abort();
       a.steuerung = null;

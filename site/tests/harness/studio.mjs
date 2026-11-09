@@ -71,7 +71,7 @@ export function hookLaufzeit() {
       const i = z.index++;
       const alt = z.hooks[i];
       if (alt && gleich(alt.deps, deps)) return;
-      const slot = { deps, aufraeumen: alt?.aufraeumen };
+      const slot = { deps, aufraeumen: alt?.aufraeumen, effekt: fn };
       z.hooks[i] = slot;
       z.effekte.push(() => {
         if (typeof slot.aufraeumen === "function") slot.aufraeumen();
@@ -121,6 +121,18 @@ export function hookLaufzeit() {
       }
     }
   }
+  /**
+   * Nach abbauen() wieder aufbauen, wie React im Strict Mode (Entwicklungsmodus) eine Komponente ab- und
+   * wieder aufbaut: Zustand und Refs bleiben, jeder Effekt läuft erneut (Prüfung Schritt 3, 09.11.2026).
+   */
+  function wiederAufbauen() {
+    for (const slot of z.hooks) {
+      if (slot && typeof slot.effekt === "function") {
+        const r = slot.effekt();
+        slot.aufraeumen = typeof r === "function" ? r : undefined;
+      }
+    }
+  }
   return {
     attrappen: { react, "react/jsx-runtime": { jsx, jsxs: jsx, Fragment } },
     jsx,
@@ -131,6 +143,7 @@ export function hookLaufzeit() {
     rendere,
     ruhe,
     abbauen,
+    wiederAufbauen,
   };
 }
 

@@ -17,7 +17,12 @@
 /** So viele Zeilen liest die Liste (wie vorher LISTE_LIMIT der Seite); die Kacheln außer "Zur Freigabe" zählen nur darin. */
 export const CONTENT_LISTE_GRENZE = 50;
 
-/** Takt der Neuabfrage (Setzung für Schritt 3: 15 s). Neue Zeilen erscheinen spätestens nach einem Takt. */
+/**
+ * Takt der Neuabfrage (Setzung für Schritt 3: 15 s). Im sichtbaren Tab erscheint eine neue Zeile mit der
+ * ersten erfolgreichen, nicht verworfenen Abfrage, die nach ihrem Entstehen beginnt — ohne Fehler also
+ * spätestens einen Takt danach plus die Laufzeit der Abfrage. Wird eine Abfrage verworfen, weil während
+ * ihres Laufs eine Zeile lokal ersetzt wurde, folgt sofort die nächste.
+ */
 export const CONTENT_TAKT_MS = 15_000;
 
 /**
