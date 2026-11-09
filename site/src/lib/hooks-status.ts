@@ -23,6 +23,16 @@
 // Gesamtprüfung 06.11.2026: Antworten der Planung (POST /api/donna/delegate mit task) liest
 // lesePlanungsFehlschlag für Command Center und /donna gleich — Kosten des Fehlversuchs,
 // protokoll_fehler und der Hinweis, dass diese Kosten im Systemzustand fehlen.
+// Freigabe-Stapel sparsam (09.11.2026): usePoll pausiert im verborgenen Tab wie die Liste auf
+// /content — der erste Abruf beim Aufbau wie bisher, im Takt kein Abruf, solange
+// document.visibilityState "hidden" ist, beim Wechsel auf sichtbar sofort einer, danach wieder im
+// Takt; ohne document (Server, Tests ohne DOM) nur der Takt. Gilt für /api/status
+// (SystemStatusProvider, Rückfall in useSystemStatus) und /api/freigaben (useFreigaben).
+// Tests: tests/c-poll-sichtbarkeit.test.mjs.
+// Nebenwirkung (Prüfung 09.11.2026): Der Abruf bei der Rückkehr hat keinen Mindestabstand, wie auf
+// /content. Wer oft zwischen Tabs wechselt, löst daher mehr Abrufe aus als der Takt allein: bei 20 s
+// sichtbar und 10 s verborgen einen je Rückkehr, zwei je Minute statt einem (FS-H6). Ein Mindestabstand
+// wiche von /content ab und ist nicht umgesetzt.
 
 import { createContext, createElement, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
@@ -144,6 +154,11 @@ export function erzeugeAbrufFolge(): AbrufFolge {
 
 // ── Hooks ──
 
+/** Tab verborgen (document.visibilityState "hidden")? Ohne document (Server, Tests ohne DOM) nie. */
+function tabVerborgen(): boolean {
+  return typeof document !== "undefined" && document.visibilityState === "hidden";
+}
+
 function usePoll<T>(url: string, intervallMs: number, aktiv: boolean) {
   const [zustand, setZustand] = useState<PollZustand<T>>(startZustand);
   const [folge] = useState(erzeugeAbrufFolge);
@@ -160,12 +175,22 @@ function usePoll<T>(url: string, intervallMs: number, aktiv: boolean) {
   useEffect(() => {
     if (!aktiv) return;
     folge.oeffnen();
+    // Erster Abruf beim Aufbau wie bisher, auch im verborgenen Tab (wie die Liste auf /content).
     const start = setTimeout(laden, 0);
-    const takt = setInterval(laden, intervallMs);
+    // Verborgener Tab: Der Takt fragt nicht ab. Beim Zurückkehren sofort ein Abruf (ohne Mindestabstand,
+    // siehe Dateikopf), danach wieder im Takt. Ohne document (Server, Tests ohne DOM) läuft nur der Takt.
+    const takt = setInterval(() => {
+      if (!tabVerborgen()) void laden();
+    }, intervallMs);
+    const beiSichtwechsel = () => {
+      if (!tabVerborgen()) void laden();
+    };
+    if (typeof document !== "undefined") document.addEventListener("visibilitychange", beiSichtwechsel);
     return () => {
       folge.schliessen();
       clearTimeout(start);
       clearInterval(takt);
+      if (typeof document !== "undefined") document.removeEventListener("visibilitychange", beiSichtwechsel);
     };
   }, [laden, intervallMs, aktiv, folge]);
 
@@ -193,7 +218,7 @@ function alsStatusLesung(z: PollZustand<SystemStatus>, neuLaden: () => Promise<v
   return { status: z.daten, fehler: z.fehler, loading: z.loading, geladenAm: z.geladenAm, httpStatus: z.httpStatus, neuLaden };
 }
 
-/** Hält den einen Abruf von /api/status für alles darunter (R28). Eingebunden in der Shell. */
+/** Hält den einen Abruf von /api/status für alles darunter (R28), im verborgenen Tab pausiert. Eingebunden in der Shell. */
 export function SystemStatusProvider({ children, intervallMs = STATUS_TAKT_MS }: { children?: ReactNode; intervallMs?: number }) {
   const { zustand, laden } = usePoll<SystemStatus>(STATUS_URL, intervallMs, true);
   const wert = useMemo(() => alsStatusLesung(zustand, laden), [zustand, laden]);
@@ -230,7 +255,7 @@ export interface FreigabenLesung {
   neuLaden: () => Promise<void>;
 }
 
-/** Freigabe-Stapel alle 60 s (eigener Abruf je Aufrufer). */
+/** Freigabe-Stapel alle 60 s, im verborgenen Tab pausiert (eigener Abruf je Aufrufer). */
 export function useFreigaben(intervallMs = 60_000): FreigabenLesung {
   const { zustand, laden } = usePoll<FreigabenAntwort>("/api/freigaben", intervallMs, true);
   return {

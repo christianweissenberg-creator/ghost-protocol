@@ -70,9 +70,15 @@ const freigabenRoute = () => ladeModul("src/app/api/freigaben/route.ts");
 const objekteModul = () => ladeModul("src/lib/studio/objekte.ts");
 const regelnStudio = () => ladeModul("src/lib/studio/regeln.ts");
 
-beforeEach(() => {
+beforeEach(async () => {
   zuruecksetzen();
   process.env.SUPABASE_SERVICE_KEY = "service-test-key-1234567890abcdef";
+  // Freigabe-Stapel sparsam (09.11.2026): GET /api/freigaben hält einen Zwischenstand je Prozess
+  // (lib/freigaben-cache.ts; Verhalten in tests/r-freigaben-probe.test.mjs). Jeder Test beginnt ohne —
+  // sonst hinge, was die Route liest, vom Test davor ab. Fehlt das Modul (Stand davor), gibt es nichts
+  // zurückzusetzen.
+  const speicher = await ladeModul("src/lib/freigaben-cache.ts").catch(() => null);
+  speicher?.setzeFreigabenZurueck();
 });
 
 // ─── Testdaten ───────────────────────────────────────────────────────────────

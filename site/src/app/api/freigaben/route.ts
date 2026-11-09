@@ -18,6 +18,15 @@ import {
   textOderNull,
   zaehlung,
 } from "@/lib/status-server";
+import {
+  FREIGABEN_ABFRAGE_HEADER,
+  FREIGABEN_PROBE_SPALTEN,
+  freigabenKennung,
+  gueltigerFreigabenStand,
+  istZaehlung,
+  merkeFreigaben,
+} from "@/lib/freigaben-cache";
+import type { FreigabenAbfrageArt } from "@/lib/freigaben-cache";
 
 // GET /api/freigaben — Freigabe-Stapel (Objekt-Studio Stufe 1, 05.11.2026).
 //
@@ -34,8 +43,33 @@ import {
 // Alles oder nichts: scheitert eine der beiden Abfragen, sind beide Listen leer und
 // "fehler" ist gesetzt. Eine halbe Liste sähe sonst aus wie "nichts hängt".
 //
+// Änderungsprobe (Freigabe-Stapel sparsam, 09.11.2026): Jede Anfrage prüft zuerst, ob sich der
+// Stapel geändert hat.
+// - Hält lib/freigaben-cache.ts einen Zwischenstand, dessen volle Abfrage jünger als 30 min ist
+//   (FREIGABEN_VOLL_SPAETESTENS_MS), stellt die Route beide Abfragen mit denselben Filtern (die Grenze
+//   für "hängend" je Anfrage neu berechnet), derselben Sortierung, denselben Grenzen und count "exact",
+//   aber nur mit id und updated_at. Gleiche Kennung (je Liste Zählung und ids in Reihenfolge samt
+//   updated_at): Antwort aus den rohen Zeilen des Zwischenstands, ohne volle Abfrage; die abgeleiteten
+//   Felder (alter_stunden, COUNSEL-Urteil, Sperrgrund, Textlänge, Abweichung vom geprüften Text) neu
+//   berechnet mit der Uhr dieser Anfrage, erzeugt_am wie bisher (Header x-freigaben-abfrage:
+//   unveraendert).
+// - Sonst (kein Zwischenstand, abgelaufen, Kennung anders) die volle Abfrage wie bisher; ihr Ergebnis
+//   ersetzt den Zwischenstand, mit der Kennung aus den vollen Zeilen und Zählungen (Header
+//   x-freigaben-abfrage: voll).
+// Ein Eintrag, der die 2-h-Grenze überschreitet, ändert die Probe (neue Grenze je Anfrage) und führt zur
+// vollen Abfrage. Was die Kennung nicht erkennt — etwa Schreiben bei abgeschalteten Triggern oder
+// Änderungen am Aufbau der Tabelle (lib/content-liste-cache.ts) —, fängt die Höchstdauer von 30 min ab.
+// Fehler wie bisher alles oder nichts: Scheitert eine Probe-Abfrage (Lesefehler, Zeitüberschreitung,
+// Antwort ohne Zeilenliste, fehlende oder unlesbare Zählung, Zeile ohne id oder updated_at), antwortet
+// die Route mit 502 und leeren Listen, nie aus dem Zwischenstand. Scheitert die volle Abfrage, 502 wie
+// bisher; der Zwischenstand bleibt, wie er war.
+// Zeitlimit: Probe-Paar und volles Paar bekommen je ein eigenes Abbruchsignal mit ABFRAGE_TIMEOUT_MS
+// (8 s), die volle Abfrage also genau wie vor der Änderungsprobe. Braucht eine Anfrage beide Paare,
+// wartet sie bis zu 16 s auf Supabase.
+//
 // Segment-Config wie /api/status (geprüft in node_modules/next/dist/docs/01-app/):
-// nie statisch, jeder Abruf liest neu.
+// nie statisch, jeder Abruf liest neu. Die Datei exportiert nur GET und die Segment-Config;
+// Zwischenstand und Kennung liegen in lib/freigaben-cache.ts.
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
@@ -119,6 +153,44 @@ function fehlerAntwort(fehler: string): FreigabenAntwort {
   };
 }
 
+/** Antwort aus rohen Zeilen und Zählungen beider Listen (volle Abfrage oder Zwischenstand); abgeleitete Felder mit jetztMs. */
+function stapelAntwort(
+  wartend: unknown,
+  wartendGesamt: number,
+  haengend: unknown,
+  haengendGesamt: number,
+  jetztMs: number,
+): FreigabenAntwort {
+  return {
+    erzeugt_am: new Date().toISOString(),
+    wartend: zuListe(wartend, jetztMs),
+    wartend_gesamt: wartendGesamt,
+    haengend: zuListe(haengend, jetztMs),
+    haengend_gesamt: haengendGesamt,
+    quelle: QUELLE,
+    fehler: null,
+  };
+}
+
+/** Antwort 200 mit Diagnose-Header: nur Probe (unveraendert) oder volle Abfrage (voll). */
+function stapel200(antwort: FreigabenAntwort, art: FreigabenAbfrageArt) {
+  return NextResponse.json(antwort, { headers: { ...KEIN_CACHE, [FREIGABEN_ABFRAGE_HEADER]: art } });
+}
+
+/** Zählungen eines Abfrage-Paars; Lesefehler oder fehlende Zählung → LeseFehler (502). */
+function zaehlungenAus(
+  a: { error: { message: string } | null; count: number | null },
+  b: { error: { message: string } | null; count: number | null },
+): [number, number] {
+  try {
+    pruefeAntwort(a);
+    pruefeAntwort(b);
+    return [zaehlung(a), zaehlung(b)];
+  } catch (e) {
+    throw new LeseFehler(bereinigeFehler(e));
+  }
+}
+
 export async function GET() {
   const jetzt = new Date();
   try {
@@ -129,8 +201,60 @@ export async function GET() {
       throw new LeseFehler(bereinigeFehler(e));
     }
 
-    const signal = AbortSignal.timeout(ABFRAGE_TIMEOUT_MS);
     const grenze = new Date(jetzt.getTime() - HAENGEND_AB_MS).toISOString();
+
+    // Änderungsprobe. Der Zwischenstand wird einmal gelesen, vor der Probe: Eine gleichzeitige Anfrage
+    // kann ihn während der Probe ersetzen, auch durch einen älteren. Geantwortet wird mit genau dem Stand,
+    // gegen den die Probe verglichen hat.
+    const stand = gueltigerFreigabenStand(jetzt.getTime());
+    if (stand !== null) {
+      const probeSignal = AbortSignal.timeout(ABFRAGE_TIMEOUT_MS);
+      const [probeWartend, probeHaengend] = await Promise.all([
+        client
+          .from("content")
+          .select(FREIGABEN_PROBE_SPALTEN, { count: "exact" })
+          .eq("status", STATUS_WARTEND)
+          .order("created_at", { ascending: true })
+          .order("id", { ascending: true })
+          .limit(WARTEND_HOECHSTENS)
+          .abortSignal(probeSignal),
+        client
+          .from("content")
+          .select(FREIGABEN_PROBE_SPALTEN, { count: "exact" })
+          .in("status", [...STATUS_HAENGEND])
+          .or(haengendOderFilter(grenze))
+          .order("created_at", { ascending: true })
+          .order("id", { ascending: true })
+          .limit(HAENGEND_HOECHSTENS)
+          .abortSignal(probeSignal),
+      ]);
+      const [probeWartendGesamt, probeHaengendGesamt] = zaehlungenAus(probeWartend, probeHaengend);
+      if (!Array.isArray(probeWartend.data) || !Array.isArray(probeHaengend.data)) {
+        throw new LeseFehler("Änderungsprobe: Antwort ohne Zeilenliste");
+      }
+      if (!istZaehlung(probeWartendGesamt) || !istZaehlung(probeHaengendGesamt)) {
+        throw new LeseFehler("Änderungsprobe: Zählung unlesbar");
+      }
+      const kennung = freigabenKennung(
+        { zeilen: probeWartend.data, gesamt: probeWartendGesamt },
+        { zeilen: probeHaengend.data, gesamt: probeHaengendGesamt },
+      );
+      if (kennung === null) throw new LeseFehler("Änderungsprobe: Zeile ohne id oder updated_at");
+      if (kennung === stand.kennung) {
+        const gemerkt = stapelAntwort(
+          stand.wartend.zeilen,
+          stand.wartend.gesamt,
+          stand.haengend.zeilen,
+          stand.haengend.gesamt,
+          jetzt.getTime(),
+        );
+        return stapel200(gemerkt, "unveraendert");
+      }
+    }
+
+    // Volle Abfrage wie vor der Änderungsprobe, mit eigenem Zeitlimit.
+    const vollAm = Date.now();
+    const signal = AbortSignal.timeout(ABFRAGE_TIMEOUT_MS);
 
     // Dieselben Filter wie die Freigabe-Kachel in /api/status (lib/status-server.ts).
     const [wartend, haengend] = await Promise.all([
@@ -153,27 +277,14 @@ export async function GET() {
         .abortSignal(signal),
     ]);
 
-    let wartendGesamt: number;
-    let haengendGesamt: number;
-    try {
-      pruefeAntwort(wartend);
-      pruefeAntwort(haengend);
-      wartendGesamt = zaehlung(wartend);
-      haengendGesamt = zaehlung(haengend);
-    } catch (e) {
-      throw new LeseFehler(bereinigeFehler(e));
+    const [wartendGesamt, haengendGesamt] = zaehlungenAus(wartend, haengend);
+    const antwort = stapelAntwort(wartend.data, wartendGesamt, haengend.data, haengendGesamt, jetzt.getTime());
+    // Beide Listen sind gelesen (stapelAntwort wirft sonst): Zwischenstand ersetzen, Kennung aus genau
+    // diesen Zeilen und Zählungen.
+    if (Array.isArray(wartend.data) && Array.isArray(haengend.data)) {
+      merkeFreigaben({ zeilen: wartend.data, gesamt: wartendGesamt }, { zeilen: haengend.data, gesamt: haengendGesamt }, vollAm);
     }
-
-    const antwort: FreigabenAntwort = {
-      erzeugt_am: new Date().toISOString(),
-      wartend: zuListe(wartend.data, jetzt.getTime()),
-      wartend_gesamt: wartendGesamt,
-      haengend: zuListe(haengend.data, jetzt.getTime()),
-      haengend_gesamt: haengendGesamt,
-      quelle: QUELLE,
-      fehler: null,
-    };
-    return NextResponse.json(antwort, { headers: KEIN_CACHE });
+    return stapel200(antwort, "voll");
   } catch (e) {
     const lesefehler = e instanceof LeseFehler;
     const grund = lesefehler ? e.message : bereinigeFehler(e);
