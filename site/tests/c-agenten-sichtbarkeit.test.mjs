@@ -14,10 +14,14 @@
 //
 // Unverändert und hier mitgeprüft: die erste Lesung beim Aufbau (auch verborgen), ohne document nur der Takt, der
 // Realtime-Kanal, refetch und neuLaden (lesen auch im verborgenen Tab sofort) und das Fehlerverhalten (ein
-// Lesefehler lässt die Liste stehen und setzt error). Überlappende Lesungen (AS-U1 bis AS-U4): useAgents übernahm
-// jede Antwort, auch eine ältere, die nach einer neueren ankam (AS-U1 zeigt das im Takt allein); jetzt gilt nur die
-// zuletzt gestartete Lesung (wie R29 in lib/hooks-status.ts). useAgentDetail verwirft den älteren Lauf über die
-// Effekt-Bereinigung.
+// Lesefehler lässt die Liste stehen und setzt error). Überlappende Lesungen (AS-U1 bis AS-U7): useAgents übernahm
+// jede Antwort, auch eine ältere, die nach einer neueren ankam (AS-U1 zeigt das im Takt allein). Jetzt gilt eine
+// Antwort nur, solange keine jüngere Lesung übernommen ist (Prüfung 09.11.2026): Eine ältere überschreibt keine
+// neuere, und keine Antwort wird verworfen, nur weil schon die nächste Lesung läuft (AS-U5, AS-U6; mit "nur die
+// zuletzt gestartete Lesung gilt" wie R29 in lib/hooks-status.ts blieb die Anzeige stehen, wenn jede Lesung länger
+// brauchte als der Takt). useAgentDetail verwirft den älteren Lauf über die Effekt-Bereinigung (AS-U4, AS-U7).
+// Lebenszyklus (AS-L1 bis AS-L3): Doppellauf der Effekte im Strict Mode, Wechsel von abfragbar an einer laufenden
+// Seite, Abbau mit offenen Lesungen.
 // Jeder Test hat ein eigenes Zeitlimit: Wartet eine Abfrage auf eine Antwort, die kein Test gibt, wird der Test rot,
 // statt npm test aufzuhängen.
 import { test, afterEach } from "node:test";
@@ -102,8 +106,11 @@ function datenbank({ sofort = true } = {}) {
   return { supabase, abfragen, kanaele, an };
 }
 
-/** Baut eine Seite, die den Hook aufruft (lies), gegen die echte lib/hooks.ts; hält jede Lesung des Hooks fest. */
-function baue(lies, db) {
+/**
+ * Baut eine Seite, die den Hook aufruft (lies), gegen die echte lib/hooks.ts; hält jede Lesung des Hooks fest.
+ * props gehen an lies; wechsle(props) setzt neue, wirksam mit dem nächsten lz.rendere().
+ */
+function baue(lies, db, props = {}) {
   const lz = hookLaufzeit();
   offen.push(lz);
   const modul = ladeTsx("lib/hooks.ts", {
@@ -113,11 +120,12 @@ function baue(lies, db) {
     "./types": types,
   });
   const gelesen = [];
-  lz.setzeWurzel(() => {
-    gelesen.push(lies(modul));
+  const seite = (p) => {
+    gelesen.push(lies(modul, p));
     return null;
-  });
-  return { lz, gelesen, letzte: () => gelesen.at(-1) };
+  };
+  lz.setzeWurzel(seite, props);
+  return { lz, gelesen, letzte: () => gelesen.at(-1), wechsle: (p) => lz.setzeWurzel(seite, p) };
 }
 
 /**
@@ -385,7 +393,7 @@ test("AS-U1 useAgents: Überlappende Lesungen im Takt — kommt die Antwort eine
   assert.equal(letzte().loading, false);
 });
 
-test("AS-U2 useAgents: Rückkehr kurz vor dem Takt startet zwei Lesungen; es gilt nur die zuletzt gestartete, gleich in welcher Reihenfolge die Antworten ankommen", GRENZE, async (t) => {
+test("AS-U2 useAgents: Rückkehr kurz vor dem Takt startet zwei Lesungen; die ältere Antwort überschreibt die jüngere nie — kommt sie zuerst an, gilt sie, bis die jüngere da ist", GRENZE, async (t) => {
   t.mock.timers.enable({ apis: ["setInterval", "setTimeout"] });
   const s = sichtbarkeit("visible");
   const db = datenbank({ sofort: false });
@@ -421,10 +429,10 @@ test("AS-U2 useAgents: Rückkehr kurz vor dem Takt startet zwei Lesungen; es gil
   [, , , rueckkehr, takt] = db.an("agents");
   rueckkehr.antworte();
   await lz.ruhe();
-  assert.equal(letzte().agents[0].lesung, 3, "läuft schon eine jüngere Lesung, gilt die ältere Antwort nicht (wie R29)");
+  assert.equal(letzte().agents[0].lesung, 4, "die ältere Antwort kommt zuerst an und gilt, obwohl schon eine jüngere Lesung läuft");
   takt.antworte();
   await lz.ruhe();
-  assert.equal(letzte().agents[0].lesung, 5, "die Antwort der jüngsten Lesung gilt");
+  assert.equal(letzte().agents[0].lesung, 5, "danach gilt die Antwort der jüngeren Lesung");
   assert.equal(letzte().error, null);
   assert.equal(letzte().loading, false);
 });
@@ -492,4 +500,177 @@ test("AS-U4 useAgentDetail: Rückkehr kurz vor dem Takt startet zwei Läufe; der
   assert.equal(db.an("messages").length, 2, "der ältere Lauf liest keine Nachrichten mehr");
   assert.equal(letzte().agentFehler, null);
   assert.equal(letzte().loading, false);
+});
+
+test("AS-U5 useAgents: Braucht jede Lesung länger als der Takt (sichtbarer Tab), gilt trotzdem jede Antwort, sobald sie ankommt — loading endet mit der ersten; eine ältere Antwort, die nach einer jüngeren ankommt, gilt weiterhin nicht", GRENZE, async (t) => {
+  t.mock.timers.enable({ apis: ["setInterval", "setTimeout"] });
+  sichtbarkeit("visible");
+  const db = datenbank({ sofort: false });
+  const { lz, letzte } = baue((m) => m.useAgents(), db);
+  lz.rendere();
+  await lz.ruhe();
+  // Jede Antwort kommt 1 s nach dem nächsten Takt an: Dann läuft schon die nächste Lesung.
+  for (let nr = 1; nr <= 5; nr += 1) {
+    await warte(t, lz, nr === 1 ? TAKT : TAKT - 1_000);
+    assert.equal(db.an("agents").length, nr + 1, `Takt ${nr}: Lesung ${nr + 1} läuft`);
+    await warte(t, lz, 1_000);
+    db.an("agents")[nr - 1].antworte();
+    await lz.ruhe();
+    assert.equal(letzte().loading, false, "loading endet mit der ersten Antwort");
+    assert.equal(letzte().agents[0]?.lesung, nr, `die Antwort von Lesung ${nr} gilt, obwohl Lesung ${nr + 1} schon läuft`);
+  }
+  await warte(t, lz, TAKT - 1_000); // 360 s: Lesung 7, Lesung 6 noch offen
+  const [sechs, sieben] = db.an("agents").slice(5);
+  assert.ok(sechs.offen && sieben.offen, "zwei Lesungen offen");
+  sieben.antworte();
+  await lz.ruhe();
+  assert.equal(letzte().agents[0].lesung, 7);
+  sechs.antworte();
+  await lz.ruhe();
+  assert.equal(letzte().agents[0].lesung, 7, "die ältere Antwort kommt nach der jüngeren an und überschreibt sie nicht");
+});
+
+test("AS-U6 useAgents: Seite im verborgenen Tab geöffnet, Rückkehr vor der ersten Antwort — die Rückkehr liest sofort; die erste Antwort gilt, sobald sie ankommt (loading endet), die der Rückkehr-Lesung danach", GRENZE, async (t) => {
+  t.mock.timers.enable({ apis: ["setInterval", "setTimeout"] });
+  const s = sichtbarkeit("hidden");
+  const db = datenbank({ sofort: false });
+  const { lz, letzte } = baue((m) => m.useAgents(), db);
+  lz.rendere();
+  await lz.ruhe();
+  assert.equal(letzte().loading, true);
+  s.setze("visible");
+  await lz.ruhe();
+  assert.equal(db.an("agents").length, 2, "die Rückkehr liest sofort, auch während die erste Lesung läuft");
+  db.an("agents")[0].antworte();
+  await lz.ruhe();
+  assert.equal(letzte().loading, false, "loading endet mit der ersten Antwort");
+  assert.equal(letzte().agents[0]?.lesung, 1, "die Antwort der ersten Lesung gilt, obwohl die Rückkehr-Lesung schon läuft");
+  db.an("agents")[1].antworte();
+  await lz.ruhe();
+  assert.equal(letzte().agents[0].lesung, 2, "danach gilt die Antwort der Rückkehr-Lesung");
+  assert.equal(letzte().error, null);
+});
+
+test("AS-U7 useAgentDetail: Seite im verborgenen Tab geöffnet, Rückkehr während des ersten Laufs — der Rückkehr-Lauf löst ihn ab (Effekt-Bereinigung, wie bisher bei jedem Ladezähler): dessen späte Nachrichten-Antwort gilt nicht, loading bleibt bis zum Ende des Rückkehr-Laufs true; danach stammen Agent und Nachrichten aus demselben Lauf", GRENZE, async (t) => {
+  t.mock.timers.enable({ apis: ["setInterval", "setTimeout"] });
+  const s = sichtbarkeit("hidden");
+  const db = datenbank({ sofort: false });
+  const { lz, letzte } = baue((m) => m.useAgentDetail("oracle"), db);
+  lz.rendere();
+  await lz.ruhe();
+  db.an("agents")[0].antworte();
+  await lz.ruhe();
+  assert.equal(db.an("messages").length, 1, "der erste Lauf liest die Nachrichten");
+  s.setze("visible");
+  await lz.ruhe();
+  assert.equal(db.an("agents").length, 2, "die Rückkehr startet sofort einen neuen Lauf");
+  db.an("messages")[0].antworte();
+  await lz.ruhe();
+  assert.equal(letzte().loading, true, "die Nachrichten-Antwort des abgelösten ersten Laufs gilt nicht; loading bleibt true");
+  assert.deepEqual(letzte().messages, []);
+  db.an("agents")[1].antworte();
+  await lz.ruhe();
+  assert.equal(db.an("messages").length, 2, "der Rückkehr-Lauf liest die Nachrichten erneut");
+  db.an("messages")[1].antworte();
+  await lz.ruhe();
+  assert.equal(letzte().loading, false);
+  assert.equal(letzte().agent.lesung, 2);
+  assert.equal(letzte().messages[0].lesung, 2);
+});
+
+// ═══ Lebenszyklus ═══
+
+test("AS-L1 useAgents im Strict Mode (Effekte laufen beim Aufbau zweimal): danach genau ein Lauscher und ein Takt; die Antwort des abgebauten ersten Effektlaufs gilt nicht, auch wenn sie zuletzt ankommt; verborgen keine Lesung, die Rückkehr genau eine", GRENZE, async (t) => {
+  t.mock.timers.enable({ apis: ["setInterval", "setTimeout"] });
+  const s = sichtbarkeit("visible");
+  const db = datenbank({ sofort: false });
+  const { lz, letzte } = baue((m) => m.useAgents(), db);
+  lz.rendere();
+  await lz.ruhe();
+  lz.abbauen();
+  lz.wiederAufbauen();
+  await lz.ruhe();
+  assert.equal(db.an("agents").length, 2, "je Effektlauf eine erste Lesung, wie bisher im Strict Mode");
+  assert.equal(s.anmeldungen(), 2);
+  assert.equal(s.angemeldet(), 1, "der Lauscher des ersten Effektlaufs ist abgemeldet");
+  const [ersterLauf, zweiterLauf] = db.an("agents");
+  zweiterLauf.antworte();
+  await lz.ruhe();
+  assert.equal(letzte().agents[0].lesung, 2);
+  ersterLauf.antworte();
+  await lz.ruhe();
+  assert.equal(letzte().agents[0].lesung, 2, "die spätere Antwort des abgebauten ersten Effektlaufs gilt nicht");
+  await warte(t, lz, TAKT);
+  assert.equal(db.an("agents").length, 3, "ein Takt, eine Lesung: der Takt des ersten Effektlaufs ist gestoppt");
+  db.an("agents")[2].antworte();
+  await lz.ruhe();
+  assert.equal(letzte().agents[0].lesung, 3);
+  s.setze("hidden");
+  await takte(t, lz, 2);
+  assert.equal(db.an("agents").length, 3, "verborgen keine Lesung");
+  s.setze("visible");
+  await lz.ruhe();
+  assert.equal(db.an("agents").length, 4, "die Rückkehr liest genau einmal");
+  lz.abbauen();
+  assert.equal(s.angemeldet(), 0);
+});
+
+test("AS-L2 useAgentDetail: abfragbar wechselt an einer laufenden Seite (oracle → trader → oracle) — Lauscher 1 → 0 → 1; solange abfragbar false ist, lesen weder Takt noch Rückkehr, und der Ladezähler steht", GRENZE, async (t) => {
+  t.mock.timers.enable({ apis: ["setInterval", "setTimeout"] });
+  const s = sichtbarkeit("visible");
+  const db = datenbank();
+  const { lz, gelesen, letzte, wechsle } = baue((m, p) => m.useAgentDetail(p.id), db, { id: "oracle" });
+  lz.rendere();
+  await lz.ruhe();
+  assert.equal(s.angemeldet(), 1);
+  assert.equal(db.an("agents").length, 1);
+  wechsle({ id: "trader" });
+  lz.rendere();
+  await lz.ruhe();
+  assert.equal(letzte().abfragbar, false);
+  assert.equal(s.angemeldet(), 0, "abfragbar false: der Lauscher ist abgemeldet");
+  const darstellungen = gelesen.length;
+  s.setze("hidden");
+  s.setze("visible");
+  await takte(t, lz, 3);
+  assert.equal(db.an("agents").length, 1, "abfragbar false: keine Abfrage, weder im Takt noch bei der Rückkehr");
+  assert.equal(gelesen.length, darstellungen, "weder Takt noch Lauscher erhöhen den Ladezähler");
+  wechsle({ id: "oracle" });
+  lz.rendere();
+  await lz.ruhe();
+  assert.equal(s.angemeldet(), 1, "wieder abfragbar: genau ein Lauscher");
+  assert.equal(db.an("agents").length, 2, "der Wechsel lädt einmal");
+  await warte(t, lz, TAKT);
+  assert.equal(db.an("agents").length, 3, "der Takt läuft wieder");
+  s.setze("hidden");
+  await takte(t, lz, 2);
+  assert.equal(db.an("agents").length, 3, "verborgen kein Lauf");
+  s.setze("visible");
+  await lz.ruhe();
+  assert.equal(db.an("agents").length, 4, "die Rückkehr lädt einmal");
+  assert.equal(db.an("messages").length, 4, "je Lauf auch die Nachrichten");
+});
+
+test("AS-L3 useAgents: Abbau, während Lesungen offen sind (erste Lesung und Rückkehr-Lesung) — späte Antworten und Fehler ändern nichts mehr, kein Lauscher bleibt, keine weitere Lesung", GRENZE, async (t) => {
+  t.mock.timers.enable({ apis: ["setInterval", "setTimeout"] });
+  const s = sichtbarkeit("hidden");
+  const db = datenbank({ sofort: false });
+  const { lz, gelesen, letzte } = baue((m) => m.useAgents(), db);
+  lz.rendere();
+  await lz.ruhe();
+  s.setze("visible");
+  await lz.ruhe();
+  assert.equal(db.an("agents").length, 2, "erste Lesung und Rückkehr-Lesung offen");
+  const darstellungen = gelesen.length;
+  lz.abbauen();
+  assert.equal(s.angemeldet(), 0);
+  db.an("agents")[1].antworte();
+  db.an("agents")[0].scheitere();
+  await lz.ruhe();
+  assert.equal(gelesen.length, darstellungen, "nach dem Abbau keine Darstellung");
+  assert.equal(letzte().loading, true);
+  s.setze("hidden");
+  s.setze("visible");
+  await takte(t, lz, 2);
+  assert.equal(db.an("agents").length, 2, "nach dem Abbau keine Lesung");
 });

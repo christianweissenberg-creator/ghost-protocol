@@ -150,7 +150,11 @@ const AGENTEN_TAKT_MS = 60_000;
 // auf sichtbar sofort eine, danach weiter im alten Takt-Raster; ohne document (Server, Tests ohne DOM) nur
 // der Takt. Realtime-Kanäle, refetch und neuLaden sind unverändert.
 // Nebenwirkung wie bei usePoll: Die Lesung bei der Rückkehr hat keinen Mindestabstand; wer oft zwischen
-// Tabs wechselt, löst mehr Lesungen aus als der Takt allein. Tests: tests/c-agenten-sichtbarkeit.test.mjs.
+// Tabs wechselt, löst mehr Lesungen aus als der Takt allein. Gespart wird nur, wenn der Tab länger als ein
+// Takt verborgen ist: Jede Rückkehr kostet eine Lesung, eine Verbergung von h Sekunden spart im Mittel h/60
+// Takte. Kürzere Verbergungen lesen daher im Mittel öfter als vorher, bei einem Takt gleich oft (Prüfung
+// 09.11.2026; ein Mindestabstand wiche von usePoll und /content ab und ist nicht umgesetzt).
+// Tests: tests/c-agenten-sichtbarkeit.test.mjs.
 
 /** Tab verborgen (document.visibilityState "hidden")? Ohne document (Server, Tests ohne DOM) nie. */
 function tabVerborgen(): boolean {
@@ -202,15 +206,22 @@ export function useAgents() {
 
   useEffect(() => {
     let aktiv = true;
-    // Lesungen können sich überlappen (Rückkehr kurz vor dem Takt, eine langsame Antwort). Nur die zuletzt
-    // gestartete Lesung dieses Effektlaufs übernimmt ihre Antwort (wie R29 in lib/hooks-status.ts); eine
-    // ältere, die später ankommt, überschreibt die neuere nicht. refetch bleibt außerhalb dieser Folge.
-    let juengste = 0;
+    // Lesungen können sich überlappen (Rückkehr kurz vor dem Takt, eine Antwort langsamer als der Takt). Jede
+    // Lesung dieses Effektlaufs bekommt eine laufende Nummer; ihre Antwort gilt nur, solange keine jüngere
+    // übernommen ist. Eine ältere Antwort, die nach einer jüngeren ankommt, überschreibt diese also nicht;
+    // kommt sie vorher an, gilt sie bis dahin. So endet loading mit der ersten Antwort, auch wenn bei der
+    // Rückkehr schon die nächste Lesung läuft, und die Anzeige bleibt nicht stehen, wenn jede Lesung länger
+    // braucht als der Takt (Prüfung 09.11.2026: Mit "nur die zuletzt gestartete Lesung gilt" wie R29 in
+    // lib/hooks-status.ts wurde dann jede Antwort verworfen). refetch bleibt außerhalb dieser Folge.
+    let gestartet = 0;
+    let uebernommen = 0;
     const lesen = () => {
-      juengste += 1;
-      const nr = juengste;
+      gestartet += 1;
+      const nr = gestartet;
       return leseAgenten().then((lesung) => {
-        if (aktiv && nr === juengste) uebernehmen(lesung);
+        if (!aktiv || nr <= uebernommen) return;
+        uebernommen = nr;
+        uebernehmen(lesung);
       });
     };
     lesen();
@@ -423,6 +434,10 @@ export function useAgentDetail(agentId: string) {
   // Agenten sparsam (09.11.2026): im verborgenen Tab pausiert, bei der Rückkehr sofort Agent und
   // Nachrichten (sichtbarerTakt). Überlappen sich zwei Läufe, verwirft der Ladeeffekt den älteren: Jeder
   // neue Ladezähler beendet den vorigen Lauf (aktiv = false); dessen spätere Antwort wird nicht übernommen.
+  // Das gilt auch für den ersten Lauf: Kommt die Rückkehr, bevor er fertig ist (Seite im verborgenen Tab
+  // geöffnet, kurz darauf hingewechselt), bleibt loading bis zum Ende des Rückkehr-Laufs true, und dessen
+  // Abfragen kommen hinzu (Prüfung 09.11.2026, AS-U7). Ebenso verwirft der nächste Takt einen Lauf, der
+  // länger braucht als der Takt; das war schon vor der Pause im verborgenen Tab so.
   useEffect(() => {
     if (!abfragbar) return;
     return sichtbarerTakt(() => setLadeZaehler((n) => n + 1), AGENTEN_TAKT_MS);
