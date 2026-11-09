@@ -6,7 +6,9 @@
 // Browsers ohne Direktive (instrumentation-client.*, pages/** außer pages/api/**) und alles, was sie zur
 // Laufzeit importieren (import … from, export … from, import(), require; nicht import type) — so gelangt
 // Code ins Browser-Bundle. Ein app- oder pages-Ordner oder eine instrumentation-client-Datei neben src
-// wäre für den Wächter unsichtbar und ist deshalb selbst ein Befund (R5-W5).
+// wäre für den Wächter unsichtbar und ist deshalb selbst ein Befund (R5-W5). Seit der Änderungsprobe
+// (09.11.2026) prüfen R5-W2 und R5-W6 zusätzlich, dass der Zwischenspeicher der Listen-Route
+// (lib/content-liste-cache.ts) nur auf dem Server liegt: kein Client-Modul erreicht ihn.
 // Geprüft wird mit dem TypeScript-Parser aus node_modules; im Zweifel ist es ein Befund:
 // - .from(<Tabelle>) auf allem außer Array, Buffer und typisierten Arrays: Tabelle "content" ist ein
 //   Befund; eine Tabelle, die sich nicht statisch bestimmen lässt, ebenso. Der Methodenname darf über
@@ -411,6 +413,11 @@ test("R5-W2 /content erreicht den Supabase-Client des Browsers gar nicht mehr; L
   // lib/content-liste.ts läuft im Browser und hat keine Laufzeit-Importe (kein Server-Modul im Bundle).
   const sf = ts.createSourceFile("content-liste.ts", quelle, ts.ScriptTarget.Latest, true);
   assert.deepEqual(laufzeitImporte(sf), []);
+  // Änderungsprobe (09.11.2026): Der Zwischenspeicher der Listen-Route bleibt auf dem Server — weder /content
+  // noch ein anderes Client-Modul erreicht ihn (Riegel und Gegenprobe in R5-W6).
+  const cache = "lib/content-liste-cache.ts";
+  assert.ok(!nurSeite.erreicht.has(cache), `Kette: ${nurSeite.erreicht.get(cache)?.join(" → ")}`);
+  assert.ok(!BASIS.erreicht.has(cache), `Kette: ${BASIS.erreicht.get(cache)?.join(" → ")}`);
 });
 
 test("R5-W5 Neben src liegt kein app- oder pages-Ordner und keine instrumentation-client-Datei — der Wächter liest nur src", () => {
@@ -420,6 +427,25 @@ test("R5-W5 Neben src liegt kein app- oder pages-Ordner und keine instrumentatio
     einstiegNebenSrc(["src", "app", "pages", "instrumentation-client.ts", "instrumentation-client.js", "instrumentation.ts", "public", "tests", "next.config.ts"]),
     ["app", "instrumentation-client.js", "instrumentation-client.ts", "pages"],
   );
+});
+
+test('R5-W6 Zwischenspeicher der Listen-Route (lib/content-liste-cache.ts) nur auf dem Server: Riegel "server-only", die Route erreicht ihn, kein Client-Modul; Gegenprobe: ein Import aus Browser-Code wäre im Client-Graphen', () => {
+  const cache = "lib/content-liste-cache.ts";
+  assert.ok(QUELLBAUM.has(cache), `${cache} fehlt`);
+  // Riegel wie lib/agent-prompts.ts: Importiert eine Client-Komponente die Datei, bricht next build ab.
+  const sf = ts.createSourceFile(cache, QUELLBAUM.get(cache), ts.ScriptTarget.Latest, true);
+  assert.ok(
+    sf.statements.some((s) => ts.isImportDeclaration(s) && !s.importClause && ts.isStringLiteral(s.moduleSpecifier) && s.moduleSpecifier.text === "server-only"),
+    `${cache} ohne import "server-only"`,
+  );
+  // Positivkontrolle: Ab der Route (Server) erreicht der Graph den Zwischenspeicher.
+  const route = analysiere(QUELLBAUM, { nurWurzeln: ["app/api/content/liste/route.ts"] });
+  assert.ok(route.erreicht.has(cache), "die Listen-Route importiert den Zwischenspeicher");
+  assert.ok(!BASIS.erreicht.has(cache), `Kette: ${BASIS.erreicht.get(cache)?.join(" → ")}`);
+  // Gegenprobe: Importierte lib/content-liste.ts (läuft im Browser) den Zwischenspeicher, stünde er im Client-Graphen.
+  const mit = analysiere(mitAenderung({ "lib/content-liste.ts": { voran: 'import { CONTENT_PROBE_SPALTEN } from "./content-liste-cache";\nvoid CONTENT_PROBE_SPALTEN;\n' } }));
+  assert.ok(mit.erreicht.has(cache), "Gegenprobe: Client-Import erreicht den Zwischenspeicher");
+  assert.deepEqual(mit.erreicht.get(cache).slice(-2), ["lib/content-liste.ts", cache]);
 });
 
 // ═══ Gegenproben ═══

@@ -5,7 +5,8 @@
 // Teil R — GET /api/content/liste und GET /api/content/eintrag/[id] laufen im Prozess gegen die
 //   PostgREST-Attrappe aus tests/harness/fake.mjs: dieselbe Abfrage wie vorher im Browser (Spalten,
 //   Filter, Sortierung, Grenze), Service-Schlüssel, Fehler mit "fehler" und "fehler_art", no-store,
-//   Segment-Config. Dazu: Die Middleware (nur gelesen) schützt beide Pfade.
+//   Segment-Config. Dazu: Die Middleware (nur gelesen) schützt beide Pfade. Die Änderungsprobe der
+//   Listen-Route (Zwischenstand, Probe vor der vollen Abfrage) prüft tests/r-content-probe.test.mjs.
 // Teil S — die Seite mit Hook-Laufzeit, fetch-Attrappe und Attrappen-Uhren von node:test: erste
 //   Abfrage, Takt 15 s, Stand-Zeile, Fehler mit und ohne gelesene Liste, verborgener Tab, Abbau,
 //   Vorrang lokaler Änderungen, Überholen, Zeitlimit, Neulesen nach einem Lauf, Neuladen einer Zeile;
@@ -76,12 +77,19 @@ const contentListe = () => ladeModul("src/lib/content-liste.ts");
 const listeRoute = () => ladeModul("src/app/api/content/liste/route.ts");
 const eintragRoute = () => ladeModul("src/app/api/content/eintrag/[id]/route.ts");
 const studioRoute = () => ladeModul("src/app/api/studio/[objekt]/route.ts");
+const zwischenspeicher = () => ladeModul("src/lib/content-liste-cache.ts");
 
 const offeneSeiten = [];
-beforeEach(() => {
+beforeEach(async () => {
   zuruecksetzen();
   process.env.SUPABASE_SERVICE_KEY = SERVICE;
   globalThis.fetch = FAKE_FETCH;
+  // Änderungsprobe (09.11.2026): Die Listen-Route hält einen Zwischenstand je Prozess
+  // (lib/content-liste-cache.ts; Verhalten in tests/r-content-probe.test.mjs). Jeder Test beginnt ohne —
+  // sonst hinge die Zahl seiner Supabase-Anfragen vom Test davor ab. Fehlt das Modul (Stand davor), gibt
+  // es nichts zurückzusetzen.
+  const speicher = await zwischenspeicher().catch(() => null);
+  speicher?.setzeContentListeZurueck();
 });
 afterEach(() => {
   for (const lz of offeneSeiten.splice(0)) lz.abbauen();

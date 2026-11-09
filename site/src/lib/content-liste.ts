@@ -3,7 +3,9 @@
 // /content liest die Tabelle content nicht mehr im Browser, sondern über zwei Server-Routen mit der
 // Service-Rolle:
 // - GET /api/content/liste: alle Spalten der neuesten CONTENT_LISTE_GRENZE Zeilen, nach created_at
-//   absteigend, ohne Filter — dieselbe Abfrage, die die Seite bis Schritt 2 im Browser stellte.
+//   absteigend, ohne Filter — dieselbe Abfrage, die die Seite bis Schritt 2 im Browser stellte. Seit
+//   der Änderungsprobe (09.11.2026) fragt die Route vorher nur id und updated_at derselben Zeilen ab und
+//   antwortet ohne volle Abfrage mit ihrem Zwischenstand, wenn sich nichts geändert hat (nur Server).
 // - GET /api/content/eintrag/<id>: eine Zeile mit allen Spalten (Neuladen nach einer 409 oder wenn
 //   die Antwort einer Aktion keine Zeile mitbringt).
 // Statt eines Realtime-Kanals fragt die Seite alle CONTENT_TAKT_MS neu ab und zeigt den Zeitpunkt der
@@ -63,7 +65,7 @@ export interface ContentListeAntwort {
   grenze: number;
   /** Die Abfrage lieferte so viele Zeilen wie die Grenze: ältere Zeilen fehlen in der Liste. */
   abgeschnitten: boolean;
-  /** ISO-Zeitpunkt nach der Abfrage (Uhr des Servers). */
+  /** ISO-Zeitpunkt nach der letzten Supabase-Abfrage der Anfrage — volle Abfrage oder Änderungsprobe (Uhr des Servers). */
   gelesen_am: string;
   quelle: string;
 }
