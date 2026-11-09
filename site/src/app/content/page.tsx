@@ -1,22 +1,39 @@
 "use client";
 
 import { Suspense, useCallback, useEffect, useRef, useState } from "react";
-import type { ReactNode } from "react";
 import { useSearchParams } from "next/navigation";
-import { supabase } from "@/lib/supabase";
+import {
+  CONTENT_ABRUF_GRENZE_MS,
+  CONTENT_LISTE_GRENZE,
+  CONTENT_LISTE_PFAD,
+  CONTENT_TAKT_MS,
+  contentEintragPfad,
+  leseEintragAntwort,
+  leseListenAntwort,
+  standZeit,
+} from "@/lib/content-liste";
+import type { EintragLesung, ListenLesung } from "@/lib/content-liste";
 import { KPICard } from "@/components/ui/KPICard";
 import { objekteFehlerArt, objektFehlerText, useFreigaben } from "@/lib/hooks-status";
 import type { ObjekteFehlerArt } from "@/lib/hooks-status";
-import { werteCounselAus } from "@/lib/counsel-urteil";
-import type { CounselAuswertung } from "@/lib/counsel-urteil";
-import {
-  MIN_FREIGABE_ZEICHEN,
-  enthaeltGeschuetztenNamen,
-  maskiereGeschuetzteNamen,
-  pruefeFreigabe,
-} from "@/lib/freigabe-regeln";
-import type { FreigabePruefung } from "@/lib/freigabe-regeln";
+import { enthaeltGeschuetztenNamen, maskiereGeschuetzteNamen } from "@/lib/freigabe-regeln";
 import type { CounselUrteil } from "@/lib/status-types";
+import { BelegKette } from "@/components/studio/BelegKette";
+import { FreigebenKnopf } from "@/components/studio/FreigabeKnopf";
+import {
+  FARBE_BERNSTEIN,
+  FARBE_ROT,
+  STATUS_MIT_TEXT,
+  alsObjekt,
+  fassungsBezug,
+  freigabeLageGemerkt,
+  istObjekt,
+  maskiert,
+  maskiertWert,
+  urteilAnzeige,
+  zeitText,
+} from "@/components/studio/beleg-hilfen";
+import type { ContentMetadata, CounselVermerk, FassungsBezug, FreigabeLage, Vermerk } from "@/components/studio/beleg-hilfen";
 
 // Stufe 1 (05.11.2026) — Freigabe mit Beleg-Kette:
 // - Die Kachel "Zur Freigabe" zählt über /api/freigaben (alle wartenden Einträge), nicht
@@ -61,70 +78,29 @@ import type { CounselUrteil } from "@/lib/status-types";
 // Posten" zählt jetzt nur Einträge mit Vermerk; die übrigen stehen als "freigegeben ohne
 // Betreiber-Vermerk (Altbestand)" da, in der Kachel und am Eintrag. Nur Anzeige: Freigabe-Regel
 // (pruefeFreigabe), Status-Route und Datenbank bleiben unverändert.
+//
+// Objekt-Studio Schritt 2 (08.11.2026): Freigeben-Knopf (components/studio/FreigabeKnopf.tsx),
+// Beleg-Kette (components/studio/BelegKette.tsx) und ihre Hilfen, Typen und Farben
+// (components/studio/beleg-hilfen.ts) sind ausgelagert; das Objekt-Studio nutzt dieselbe Beleg-Kette.
+// Der Code ist unverändert übernommen, diese Seite rendert byte-gleich
+// (tests/s-content-unveraendert.test.mjs).
+//
+// Objekt-Studio Schritt 3 (08.11.2026): Die Seite liest content nur noch über den Server —
+// GET /api/content/liste (die Liste) und GET /api/content/eintrag/<id> (eine Zeile neu laden), beide
+// mit der Service-Rolle; Grenze, Takt und Leser der Antworten in lib/content-liste.ts. Der
+// Realtime-Kanal entfällt: Die Liste wird alle 15 s neu abgefragt, die Zeile "Liste: Stand …" nennt
+// den Zeitpunkt der letzten erfolgreichen Abfrage. Scheitert eine spätere Abfrage, bleibt die Liste
+// stehen und der Fehler steht darüber; ohne gelesene Liste gilt wie vorher "Content nicht lesbar".
+// Im verborgenen Tab fragt der Takt nicht ab; beim Zurückkehren und nach jedem Pipeline-Lauf liest die
+// Seite sofort neu. Sonst rendert sie unverändert (tests/s-content-unveraendert.test.mjs, angepasst
+// nur um die Stand-Zeile).
+//
+// Prüfung Schritt 3 (09.11.2026): Wird eine Abfrage verworfen, weil während ihres Laufs eine Zeile lokal
+// ersetzt wurde, liest die Seite sofort neu (vorher erst im nächsten Takt — eine neue Zeile aus der
+// verworfenen Antwort erschien dadurch einen Takt später). Nach dem Verlassen startet keine Abfrage mehr,
+// auch nicht aus einem Pipeline-Lauf, der erst danach endet.
 
 // ═══ TYPES ═══
-
-/** Vermerk mit Stufe und Grund, wie die Pipeline ihn in metadata schreibt (seit Stufe 1). */
-interface Vermerk {
-  stufe?: string;
-  grund?: string;
-  detail?: string;
-  am?: string;
-}
-
-interface CounselVermerk {
-  urteil?: string;
-  zeile?: string | null;
-  grund?: string;
-  geprueft?: string;
-  am?: string;
-}
-
-/** Betreiber-Entscheidung aus /api/content/status (metadata.freigabe, metadata.gepostet). */
-interface AktionsVermerk {
-  aktion?: string;
-  am?: string;
-  durch?: string;
-  grund?: string;
-  published_url?: string;
-}
-
-interface ObjektSnapshot {
-  abgerufen_am?: string;
-  export?: { version?: string | null; quelle?: string | null; generiert_am?: string | null } | null;
-  objekt?: Record<string, unknown> | null;
-}
-
-interface StepEintrag {
-  agent: string;
-  status?: string;
-  output?: string;
-  fehler?: string;
-  cost?: number | null;
-  duration_ms?: number;
-}
-
-interface ContentMetadata {
-  thema?: string;
-  objekt_slug?: string | null;
-  utm_content?: string | null;
-  kampagne?: string | null;
-  cta_link?: string | null;
-  amplifier_empfehlung?: string;
-  /** Vor Stufe 1 ein Text, seit Stufe 1 ein Vermerk mit Stufe und Grund. */
-  fehler?: string | Vermerk;
-  warnungen?: Vermerk[];
-  steps?: StepEintrag[];
-  counsel?: CounselVermerk;
-  regelpaket?: { version?: string | null; stand?: string | null };
-  objekt_snapshot?: ObjektSnapshot | null;
-  researcher_quellen?: string;
-  freigabe_hinweis?: { geprueft?: string; zur_freigabe?: string; identisch?: boolean };
-  freigabe?: AktionsVermerk;
-  gepostet?: AktionsVermerk;
-  abgelehnt_durch?: string;
-  metriken_verlauf?: unknown[];
-}
 
 interface ContentItem {
   id: number;
@@ -234,21 +210,8 @@ type LaufAusgang =
 
 type LaufMeldung = Exclude<LaufAusgang, { art: "ergebnis" }>;
 
-/** Bezug des COUNSEL-Urteils zum Freigabetext (body). */
-type FassungsBezug = "identisch" | "abweichend" | "nicht_pruefbar" | "kein_text";
-
 /** Was der Pipeline-Fluss gerade zeigen kann. */
 type FlussLage = "kein_lauf" | "laeuft" | "ergebnis" | "unbekannt";
-
-interface FreigabeLage {
-  counsel: CounselAuswertung;
-  pruefung: FreigabePruefung;
-  bezug: FassungsBezug;
-  /** Von COUNSEL geprüfter Text (metadata.steps[1].output, SCRIBE); null = nicht gespeichert. */
-  geprueftText: string | null;
-  /** Der Freigabetext enthält den geschützten Namen. */
-  nameImText: boolean;
-}
 
 // ═══ CONSTANTS ═══
 
@@ -336,30 +299,11 @@ function plattformOhneFormat(plattform: string): string | null {
 
 const TWEET_MAX = 280;
 
-/** So viele Zeilen lädt die Liste; die Kacheln außer "Zur Freigabe" zählen nur darin. */
-const LISTE_LIMIT = 50;
+/** So viele Zeilen lädt die Liste; die Kacheln außer "Zur Freigabe" zählen nur darin. Seit Schritt 3 die Grenze der Route. */
+const LISTE_LIMIT = CONTENT_LISTE_GRENZE;
 
 /** Höchstlänge des Ablehnungsgrunds — gleich wie in /api/content/status. */
 const GRUND_MAX = 500;
-
-/** Status, in denen ein Text zur Freigabe (body) erwartet wird. */
-const STATUS_MIT_TEXT = ["zur_freigabe", "freigegeben", "gepostet"];
-
-/** Felder des Objekt-Snapshots in der Reihenfolge, wie buildObjektBlock sie nutzt. */
-const SNAPSHOT_ZEILEN: [string, string][] = [
-  ["name", "Name"],
-  ["untertitel", "Untertitel"],
-  ["tagline", "Tagline"],
-  ["ort", "Ort"],
-  ["baujahr", "Baujahr"],
-  ["preis", "Preis"],
-  ["kurzbeschreibung", "Kurzbeschreibung"],
-  ["statusBadge", "Status"],
-  ["afaProzent", "AfA-Satz"],
-  ["istDenkmal", "Denkmal"],
-  ["kennzahlen", "Kennzahlen"],
-  ["kampagnen", "Kampagnen"],
-];
 
 // Gegencheck 06.11.2026: 502 hat keine eigene Bezeichnung mehr. "Quelle nicht erreichbar" stand
 // vor jeder 502 der Pipeline, auch bei fehlendem Token oder unvollständigem Objekt, wo die
@@ -381,10 +325,6 @@ const STUFEN = ["researcher", "scribe", "counsel", "publisher", "amplifier"] as 
 const LAUF_ID_MUSTER = /^[A-Za-z0-9:_-]{8,80}$/;
 
 const AUSGANG_UNBEKANNT = "Ausgang unbekannt — der Lauf kann noch laufen, Content-Tab prüfen";
-
-const FARBE_GRUEN = "var(--gp-emerald)";
-const FARBE_ROT = "var(--gp-rose)";
-const FARBE_BERNSTEIN = "var(--gp-amber)";
 
 // body an Tweet-Grenzen splitten: Zeilen die mit "N/" oder "**N/M**" beginnen,
 // Markdown-Bold-Sterne entfernen. Ohne Treffer: gesamter Body als ein Block.
@@ -413,15 +353,6 @@ function charCountColor(len: number): string {
 }
 
 // ═══ HILFSFUNKTIONEN (Stufe 1, 05.11.2026) ═══
-
-function istObjekt(wert: unknown): wert is Record<string, unknown> {
-  return typeof wert === "object" && wert !== null && !Array.isArray(wert);
-}
-
-/** Wie istObjekt, behält aber den deklarierten Typ (metadata kommt ungeprüft aus der DB). */
-function alsObjekt<T extends object>(wert: T | string | null | undefined): T | null {
-  return typeof wert === "object" && wert !== null && !Array.isArray(wert) ? wert : null;
-}
 
 /**
  * Freigabe durch den Betreiber vermerkt? /api/content/status schreibt seit Stufe 1 beim Freigeben
@@ -457,12 +388,6 @@ function vermerkText(v: unknown): string | null {
   return maskiert(`${stufe}${v.grund}${detail}`);
 }
 
-function zeitText(iso: unknown): string {
-  if (typeof iso !== "string" || !iso) return "nicht gespeichert";
-  const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? maskiert(iso) : d.toLocaleString("de-DE", { dateStyle: "short", timeStyle: "short" });
-}
-
 function istHttpUrl(wert: string): boolean {
   try {
     const url = new URL(wert.trim());
@@ -470,17 +395,6 @@ function istHttpUrl(wert: string): boolean {
   } catch {
     return false;
   }
-}
-
-/** Für die Anzeige: geschützten Namen ersetzen. Gilt für alle Texte außer dem Freigabetext (body). */
-function maskiert(text: string): string {
-  return maskiereGeschuetzteNamen(text);
-}
-
-/** Wert aus DB oder Server für die Anzeige: maskiert; null/undefined ergeben einen leeren Text. */
-function maskiertWert(wert: unknown): string {
-  if (wert === null || wert === undefined) return "";
-  return maskiert(typeof wert === "string" ? wert : String(wert));
 }
 
 /** Fehlertext einer JSON-Antwort (Feld fehler, sonst error); null, wenn keiner. */
@@ -493,25 +407,6 @@ function serverText(daten: unknown): string | null {
 
 function fehlerMeldung(status: number, daten: unknown): string {
   return maskiert(`${HTTP_ART[status] ?? "Fehler"} (HTTP ${status}): ${serverText(daten) ?? "ohne Fehlertext"}`);
-}
-
-/** Ein Snapshot-Feld als Textzeilen; Fehlendes heißt "nicht im Export", nie ein Ersatzwert. */
-function snapshotWert(feld: string, wert: unknown): string[] {
-  if (wert === null || wert === undefined || wert === "") return ["nicht im Export"];
-  if (typeof wert === "boolean") return [wert ? "ja" : "nein"];
-  if (feld === "afaProzent" && typeof wert === "number") return [`${wert} %`];
-  if (Array.isArray(wert)) {
-    if (wert.length === 0) return ["keine"];
-    return wert.map((e) => {
-      if (!istObjekt(e)) return String(e);
-      const teil = (k: string) => (e[k] === undefined || e[k] === null || e[k] === "" ? "fehlt" : String(e[k]));
-      if (feld === "kennzahlen") return `${teil("label")}: ${teil("wert")}`;
-      if (feld === "kampagnen") return `${teil("kampagne")} (${teil("lpVariant")}): ${teil("lpUrl")}`;
-      return JSON.stringify(e);
-    });
-  }
-  if (typeof wert === "object") return [JSON.stringify(wert)];
-  return [String(wert)];
 }
 
 /**
@@ -792,57 +687,6 @@ function alsUrteil(wert: unknown): CounselUrteil {
   return wert === "FREIGABE" || wert === "ABLEHNUNG" ? wert : "UNKLAR";
 }
 
-/** Von COUNSEL geprüfter Text: metadata.steps[1].output (SCRIBE); null, wenn nicht gespeichert. */
-function geprueftenText(meta: ContentMetadata): string | null {
-  const schritt: unknown = Array.isArray(meta.steps) ? meta.steps[1] : undefined;
-  if (!istObjekt(schritt) || typeof schritt.output !== "string") return null;
-  if (typeof schritt.agent === "string" && schritt.agent.toLowerCase() !== "scribe") return null;
-  return schritt.output;
-}
-
-/**
- * Hat COUNSEL genau den Freigabetext geprüft? Gleichheit nur durch direkten Vergleich mit dem
- * gespeicherten geprüften Text; der Hinweis aus der Pipeline kann nur eine Abweichung belegen.
- */
-function fassungsBezug(
-  body: string | null | undefined,
-  geprueft: string | null,
-  hinweis: { identisch?: boolean } | null | undefined
-): FassungsBezug {
-  const text = typeof body === "string" ? body.trim() : "";
-  if (!text) return "kein_text";
-  if (geprueft !== null) return geprueft.trim() === text ? "identisch" : "abweichend";
-  return istObjekt(hinweis) && hinweis.identisch === false ? "abweichend" : "nicht_pruefbar";
-}
-
-function freigabeLage(item: Pick<ContentItem, "body" | "review_notes" | "metadata">): FreigabeLage {
-  const meta = alsObjekt(item.metadata) ?? {};
-  const counsel = werteCounselAus(item.review_notes);
-  const geprueftText = geprueftenText(meta);
-  return {
-    counsel,
-    pruefung: pruefeFreigabe(counsel, item.body),
-    bezug: fassungsBezug(item.body, geprueftText, alsObjekt(meta.freigabe_hinweis)),
-    geprueftText,
-    nameImText: enthaeltGeschuetztenNamen(item.body),
-  };
-}
-
-// Nachprüfung 06.11.2026: Die Namensprüfung faltet den Text Zeichen für Zeichen; die Liste rief
-// freigabeLage bei jedem Render für jede Zeile auf, auch bei jedem Tastendruck in einem Feld der
-// Seite (laut Gesamtprüfung rund 23 ms je Render bei 50 Zeilen à 8.000 Zeichen, im Browser nicht
-// gemessen). Die Lage hängt nur am Eintrag, und Einträge werden nie verändert, sondern ersetzt
-// (setContent mit neuen Objekten) — ein Merker je Objekt reicht.
-const LAGE_JE_EINTRAG = new WeakMap<object, FreigabeLage>();
-
-function freigabeLageGemerkt(item: Pick<ContentItem, "body" | "review_notes" | "metadata">): FreigabeLage {
-  const gemerkt = LAGE_JE_EINTRAG.get(item);
-  if (gemerkt) return gemerkt;
-  const lage = freigabeLage(item);
-  LAGE_JE_EINTRAG.set(item, lage);
-  return lage;
-}
-
 /** Status, in denen der Freigabetext kopiert werden darf (veröffentlicht wird von Hand per Kopieren). */
 const STATUS_KOPIERBAR = ["freigegeben", "gepostet"];
 
@@ -876,37 +720,6 @@ function ergebnisBezug(r: PipelineResult): FassungsBezug {
 }
 
 /**
- * COUNSEL-Urteil bezogen auf den Freigabetext (R2): grünes FREIGABE nur, wenn COUNSEL genau
- * diesen Text geprüft hat. Welche Fassung freigegeben wird, entscheidet der Inhaber.
- */
-function urteilAnzeige(urteil: CounselUrteil, bezug: FassungsBezug): { text: string; farbe: string; erklaerung: string | null } {
-  if (urteil === "ABLEHNUNG") return { text: "ABLEHNUNG", farbe: FARBE_ROT, erklaerung: null };
-  if (urteil !== "FREIGABE") return { text: urteil, farbe: FARBE_BERNSTEIN, erklaerung: null };
-  switch (bezug) {
-    case "identisch":
-      return { text: "FREIGABE", farbe: FARBE_GRUEN, erklaerung: "COUNSEL hat genau den Freigabetext geprüft." };
-    case "abweichend":
-      return {
-        text: "COUNSEL prüfte die Vorfassung · Freigabetext ungeprüft",
-        farbe: FARBE_BERNSTEIN,
-        erklaerung: "Das Urteil FREIGABE gilt der Vorfassung (SCRIBE), nicht dem Freigabetext.",
-      };
-    case "kein_text":
-      return {
-        text: "FREIGABE der geprüften Fassung · kein Freigabetext",
-        farbe: FARBE_BERNSTEIN,
-        erklaerung: "Es gibt keinen Freigabetext, für den das Urteil gelten könnte.",
-      };
-    default:
-      return {
-        text: "FREIGABE der geprüften Fassung · Bezug zum Freigabetext nicht prüfbar",
-        farbe: FARBE_BERNSTEIN,
-        erklaerung: "Der geprüfte Text ist nicht gespeichert; ob er dem Freigabetext entspricht, ist nicht prüfbar.",
-      };
-  }
-}
-
-/**
  * Ausgabe einer Stufe im Pipeline-Ergebnis (R24). Roh bleibt nur der Freigabetext: die
  * PUBLISHER-Ausgabe eines Laufs, der zur Freigabe gelangt ist (laufZurFreigabe, Stufe "done").
  * Jede andere Ausgabe wird maskiert — auch eine PUBLISHER-Ausgabe aus einem abgebrochenen Lauf:
@@ -926,13 +739,6 @@ function stufenAusgabe(step: PipelineStep, laufStatus: unknown): { text: string;
     else warnung = "PUBLISHER-Ausgabe enthält einen geschützten Namen — nicht als Freigabetext bestätigt.";
   }
   return { text: voll.length > 2000 ? `${voll.slice(0, 2000)}...` : voll, warnung };
-}
-
-/** Hinweis am Freigeben-Knopf, wenn freigebbar, aber COUNSEL nicht genau diesen Text geprüft hat. */
-function bezugHinweis(bezug: FassungsBezug): string | null {
-  if (bezug === "abweichend") return "Freigabetext ungeprüft — COUNSEL prüfte die Vorfassung";
-  if (bezug === "nicht_pruefbar") return "Bezug zur geprüften Fassung nicht prüfbar";
-  return null;
 }
 
 /**
@@ -1030,43 +836,6 @@ function PipelineFluss({ lage, ergebnis }: { lage: FlussLage; ergebnis: Pipeline
   );
 }
 
-/** Freigeben-Knopf mit Sperre (R4): gesperrt, solange pruefeFreigabe sperrt; Grund sichtbar. */
-function FreigebenKnopf({
-  lage,
-  pending,
-  onFreigeben,
-}: {
-  lage: FreigabeLage;
-  pending: boolean;
-  onFreigeben: () => void;
-}) {
-  const gesperrt = !lage.pruefung.freigebbar;
-  const grund = gesperrt ? maskiert(lage.pruefung.grund ?? "ohne Grund") : null;
-  const hinweis = gesperrt ? null : bezugHinweis(lage.bezug);
-  return (
-    <div className="flex flex-wrap items-center gap-2">
-      <button
-        onClick={onFreigeben}
-        disabled={pending || gesperrt}
-        title={grund ? `Freigeben gesperrt: ${grund}` : undefined}
-        className="px-4 py-2 rounded-lg text-xs font-medium bg-green-500/20 text-green-400 hover:bg-green-500/30 transition-all disabled:opacity-40"
-      >
-        Freigeben
-      </button>
-      {grund && (
-        <span className="text-[10px]" style={{ color: FARBE_ROT }}>
-          Freigeben gesperrt: {grund}
-        </span>
-      )}
-      {hinweis && (
-        <span className="text-[10px]" style={{ color: FARBE_BERNSTEIN }}>
-          {hinweis}
-        </span>
-      )}
-    </div>
-  );
-}
-
 /** Meldung nach einem Klick ohne Ergebnis (R10): nur echte 4xx heißen "abgewiesen". */
 function LaufMeldungAnzeige({
   meldung,
@@ -1102,238 +871,6 @@ function LaufMeldungAnzeige({
   );
 }
 
-// ═══ BELEG-KETTE ═══
-
-function BelegZeile({ titel, vermerk, children }: { titel: string; vermerk?: string; children: ReactNode }) {
-  return (
-    <div className="grid gap-1 sm:grid-cols-[150px_1fr] sm:gap-3 py-2 border-t" style={{ borderColor: "var(--gp-hairline)" }}>
-      <div className="mono-label pt-0.5">{titel}</div>
-      <div className="min-w-0 text-xs text-text-secondary space-y-1">
-        {children}
-        {vermerk && <p className="text-[10px] text-text-muted">{vermerk}</p>}
-      </div>
-    </div>
-  );
-}
-
-function BelegKette({
-  item,
-  kopiere,
-  kopierStatus,
-}: {
-  item: ContentItem;
-  kopiere: (key: string, text: string) => void;
-  kopierStatus: (key: string) => string;
-}) {
-  const meta = alsObjekt(item.metadata) ?? {};
-  // Urteil aus dem gespeicherten COUNSEL-Text abgeleitet — dieselbe Auswertung wie in der
-  // Pipeline (lib/counsel-urteil.ts), kein eigenes Feld. Grün nur, wenn COUNSEL genau den
-  // Freigabetext geprüft hat (R2).
-  const lage = freigabeLageGemerkt(item);
-  const counsel = lage.counsel;
-  const anzeige = urteilAnzeige(counsel.urteil, lage.bezug);
-  const counselUnvollstaendig = alsObjekt(meta.fehler)?.stufe === "counsel";
-  const regel = alsObjekt(meta.regelpaket);
-  const snapshot = alsObjekt(meta.objekt_snapshot);
-  const snapshotObjekt = alsObjekt(snapshot?.objekt);
-  const exportKopf = alsObjekt(snapshot?.export);
-  const researcherSchritt: unknown = Array.isArray(meta.steps) ? meta.steps[0] : undefined;
-  const researcherText =
-    istObjekt(researcherSchritt) && typeof researcherSchritt.output === "string" ? researcherSchritt.output : null;
-  const ctaLink = typeof meta.cta_link === "string" && meta.cta_link ? meta.cta_link : null;
-  // Gesamtprüfung 06.11.2026: Ein CTA-Link mit geschütztem Namen wird nie kopiert (fail-closed).
-  const ctaMitNamen = ctaLink !== null && enthaeltGeschuetztenNamen(ctaLink);
-  const ctaKey = `${item.id}-cta`;
-  const freigabe = alsObjekt(meta.freigabe);
-  const gepostet = alsObjekt(meta.gepostet);
-  const mitText = STATUS_MIT_TEXT.includes(item.status);
-
-  const kopfZeilen: [string, string][] = [
-    ["Export-Version", exportKopf?.version ?? "nicht im Export-Kopf"],
-    ["Export-Quelle", exportKopf?.quelle ?? "nicht im Export-Kopf"],
-    ["Export erzeugt", exportKopf?.generiert_am ? zeitText(exportKopf.generiert_am) : "nicht im Export-Kopf"],
-    ["Abgerufen", zeitText(snapshot?.abgerufen_am)],
-  ];
-
-  return (
-    <div className="rounded-lg px-3 pt-3 pb-1" style={{ border: "1px solid var(--gp-hairline)", background: "rgba(11, 12, 16, 0.4)" }}>
-      <h4 className="mono-label mb-1" style={{ color: "var(--gp-gold)" }}>
-        Beleg-Kette
-      </h4>
-
-      <BelegZeile titel="COUNSEL-Urteil" vermerk="abgeleitet aus dem COUNSEL-Text">
-        <p>
-          <span
-            className="font-semibold font-[family-name:var(--font-jbmono)]"
-            style={{ color: anzeige.farbe }}
-            data-urteil-anzeige={lage.bezug}
-          >
-            {anzeige.text}
-          </span>
-          <span className="text-text-muted"> · {counsel.grund}</span>
-        </p>
-        {anzeige.erklaerung && <p className="text-[10px] text-text-muted">{anzeige.erklaerung}</p>}
-        {counsel.zeile && (
-          <p className="font-[family-name:var(--font-jbmono)] text-[11px] break-words">{maskiert(counsel.zeile)}</p>
-        )}
-        {meta.counsel?.geprueft && (
-          <p className="text-[10px] text-text-muted">
-            geprüft: {maskiert(String(meta.counsel.geprueft))}
-            {meta.counsel.am ? ` · ${zeitText(meta.counsel.am)}` : ""}
-          </p>
-        )}
-        {counselUnvollstaendig && (
-          <p className="text-[10px]" style={{ color: "var(--gp-amber)" }}>
-            COUNSEL-Antwort unvollständig (siehe Fehler) — das Urteil ist nicht maßgeblich.
-          </p>
-        )}
-      </BelegZeile>
-
-      {mitText && (
-        <BelegZeile
-          titel="Prüfregel"
-          vermerk={`Für Freigeben: COUNSEL-Urteil FREIGABE, Text ab ${MIN_FREIGABE_ZEICHEN} Zeichen, kein geschützter Name.`}
-        >
-          {lage.pruefung.freigebbar ? (
-            <p style={{ color: FARBE_GRUEN }}>erfüllt</p>
-          ) : (
-            <p style={{ color: FARBE_ROT }}>nicht erfüllt: {maskiert(lage.pruefung.grund ?? "ohne Grund")}</p>
-          )}
-        </BelegZeile>
-      )}
-
-      <BelegZeile titel="Regelpaket">
-        {regel ? (
-          <p className="font-[family-name:var(--font-jbmono)]">
-            {maskiertWert(regel.version ?? "Version nicht lesbar")} · Stand {maskiertWert(regel.stand ?? "nicht lesbar")}
-          </p>
-        ) : (
-          <p>nicht gespeichert (Lauf vor Stufe 1)</p>
-        )}
-      </BelegZeile>
-
-      <BelegZeile titel="Objekt-Snapshot">
-        {snapshot ? (
-          <div className="overflow-x-auto">
-            <table className="w-full text-[11px]">
-              <tbody>
-                {kopfZeilen.map(([label, wert]) => (
-                  <tr key={label} className="align-top">
-                    <th scope="row" className="text-left font-normal text-text-muted pr-3 py-0.5 whitespace-nowrap">
-                      {label}
-                    </th>
-                    <td className="py-0.5 font-[family-name:var(--font-jbmono)] break-words">{maskiert(wert)}</td>
-                  </tr>
-                ))}
-                {snapshotObjekt ? (
-                  SNAPSHOT_ZEILEN.map(([feld, label]) => (
-                    <tr key={feld} className="align-top border-t" style={{ borderColor: "var(--gp-hairline)" }}>
-                      <th scope="row" className="text-left font-normal text-text-muted pr-3 py-0.5 whitespace-nowrap">
-                        {label}
-                      </th>
-                      <td className="py-0.5 font-[family-name:var(--font-jbmono)] break-words">
-                        {snapshotWert(feld, snapshotObjekt[feld]).map((zeile, i) => (
-                          <div key={i}>{maskiert(zeile)}</div>
-                        ))}
-                      </td>
-                    </tr>
-                  ))
-                ) : (
-                  <tr>
-                    <td colSpan={2} className="py-0.5">Snapshot ohne Objektfelder</td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        ) : (
-          <p>{meta.objekt_slug ? "kein Snapshot gespeichert" : "kein Snapshot gespeichert (Lauf ohne Objekt)"}</p>
-        )}
-      </BelegZeile>
-
-      <BelegZeile titel="RESEARCHER-Quellen" vermerk="Modellangabe, ungeprüft">
-        <p>{typeof meta.researcher_quellen === "string" ? maskiert(meta.researcher_quellen) : "kein Vermerk gespeichert (Lauf vor Stufe 1)"}</p>
-        {researcherText ? (
-          <details>
-            <summary className="cursor-pointer text-[10px] text-text-muted hover:text-foreground">
-              RESEARCHER-Text anzeigen
-            </summary>
-            <pre className="mt-2 text-xs whitespace-pre-wrap bg-surface-elevated rounded-lg p-3 max-h-[260px] overflow-y-auto font-mono leading-relaxed">
-              {maskiert(researcherText)}
-            </pre>
-          </details>
-        ) : (
-          <p className="text-[10px] text-text-muted">RESEARCHER-Text nicht gespeichert</p>
-        )}
-      </BelegZeile>
-
-      <BelegZeile titel="CTA-Link" vermerk="Nur als Text: Prüf-Klicks würden die Steinadel-Zählung verfälschen.">
-        {ctaLink ? (
-          <>
-            {ctaMitNamen && (
-              <p role="alert" data-cta-sperre="name" style={{ color: FARBE_ROT }}>
-                CTA-Link enthält einen geschützten Namen — nicht verwenden. Kopieren gesperrt.
-              </p>
-            )}
-            <div className="flex items-start gap-2">
-              <code
-                className={`break-all font-[family-name:var(--font-jbmono)] text-[11px]${ctaMitNamen ? "" : " select-all"}`}
-                style={{ color: "var(--gp-gold-hi)" }}
-              >
-                {maskiert(ctaLink)}
-              </code>
-              <button
-                onClick={() => {
-                  if (!ctaMitNamen) kopiere(ctaKey, ctaLink);
-                }}
-                disabled={ctaMitNamen}
-                title={ctaMitNamen ? "CTA-Link enthält einen geschützten Namen — Kopieren gesperrt" : undefined}
-                className="shrink-0 text-[10px] px-2 py-1 rounded bg-surface-elevated text-text-muted hover:text-foreground transition-colors disabled:opacity-40"
-              >
-                {kopierStatus(ctaKey)}
-              </button>
-            </div>
-          </>
-        ) : (
-          <p>kein CTA-Link gespeichert</p>
-        )}
-        {meta.utm_content && (
-          <p>
-            <span className="text-text-muted">utm_content: </span>
-            <span className="font-mono">{maskiertWert(meta.utm_content)}</span>
-          </p>
-        )}
-      </BelegZeile>
-
-      {/* Betreibertexte (Grund, URL) wie alle übrigen Texte maskiert — wie in ablehnungText (R24) */}
-      <BelegZeile titel="Betreiber">
-        {freigabe ? (
-          <p>
-            {freigabe.aktion === "ablehnen"
-              ? "abgelehnt"
-              : freigabe.aktion === "freigeben"
-                ? "freigegeben"
-                : maskiertWert(freigabe.aktion ?? "Aktion")}
-            {" · "}
-            {zeitText(freigabe.am)} · {maskiertWert(freigabe.durch ?? "unbekannt")}
-            {freigabe.grund ? ` · Grund: ${maskiertWert(freigabe.grund)}` : ""}
-          </p>
-        ) : (
-          <p>keine Entscheidung gespeichert</p>
-        )}
-        {gepostet && (
-          <p>
-            gepostet · {zeitText(gepostet.am)}
-            {gepostet.published_url ? (
-              <span className="font-[family-name:var(--font-jbmono)] break-all"> · {maskiertWert(gepostet.published_url)}</span>
-            ) : null}
-          </p>
-        )}
-      </BelegZeile>
-    </div>
-  );
-}
-
 // ═══ COMPONENT ═══
 
 // useSearchParams braucht auf einer vorgerenderten Seite eine Suspense-Grenze, sonst bricht
@@ -1357,9 +894,10 @@ function ContentLaedt() {
 
 function ContentSeite() {
   const [content, setContent] = useState<ContentItem[]>([]);
-  // Prüflauf 06.11.2026: Hat die Abfrage die Grenze erreicht (ältere Zeilen abgeschnitten)?
-  // Realtime-Einfügungen ändern das nicht — vorher galt die Liste schon durch sie als voll.
+  // Prüflauf 06.11.2026: Hat die Abfrage die Grenze erreicht (ältere Zeilen abgeschnitten)? Seit
+  // Schritt 3 meldet das die Route (abgeschnitten); jede Abfrage ersetzt die ganze Liste.
   const [listeAbgeschnitten, setListeAbgeschnitten] = useState(false);
+  // Lesefehler, solange noch keine Liste gelesen ist (dann steht er statt der Liste).
   const [contentFehler, setContentFehler] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   // Starttab aus ?tab=content|pipeline|calendar (R38); ein Klick gilt, bis sich ?tab= ändert.
@@ -1408,25 +946,77 @@ function ContentSeite() {
     neuLaden: freigabenNeuLaden,
   } = useFreigaben();
 
-  useEffect(() => {
-    async function fetchContent() {
-      const { data, error } = await supabase
-        .from("content")
-        .select("*")
-        .order("created_at", { ascending: false })
-        .limit(LISTE_LIMIT);
-      // Stufe 1: Lesefehler anzeigen statt als leere Liste ("Keine Inhalte") auszugeben.
-      if (error) {
-        setContentFehler(error.message);
-      } else {
-        const zeilen = (data ?? []) as ContentItem[];
-        setContent(zeilen);
-        setListeAbgeschnitten(zeilen.length >= LISTE_LIMIT);
-        setContentFehler(null);
-      }
-      setLoading(false);
-    }
+  // Objekt-Studio Schritt 3: Liste über den Server statt Supabase im Browser, Takt statt Realtime.
+  // listeStand: gelesen_am der letzten erfolgreichen Abfrage (Uhr des Servers). abfrageFehler: die
+  // letzte Abfrage scheiterte, nachdem schon eine Liste gelesen war — die Liste bleibt stehen.
+  const [listeStand, setListeStand] = useState<string | null>(null);
+  const [abfrageFehler, setAbfrageFehler] = useState<string | null>(null);
+  // nr: Jede Abfrage und das Verlassen der Seite erhöhen sie; nur die jüngste Abfrage setzt etwas
+  // (wie R29 in lib/hooks-status.ts), eine neue bricht die vorige ab. lokal: Zahl der lokal ersetzten
+  // Zeilen (Aktion, Neuladen einer Zeile) — eine Abfrage, die davor begann, könnte die Änderung
+  // zurücksetzen und wird verworfen; die Seite liest dann sofort neu. gelesen: Eine Abfrage war
+  // erfolgreich. verlassen: Die Seite ist abgebaut — es startet keine Abfrage mehr, auch nicht aus einem
+  // Pipeline-Lauf, der erst danach endet; der Aufbau setzt es zurück (Strict Mode baut ab und wieder auf).
+  const abruf = useRef<{ nr: number; lokal: number; gelesen: boolean; verlassen: boolean; steuerung: AbortController | null }>({
+    nr: 0,
+    lokal: 0,
+    gelesen: false,
+    verlassen: false,
+    steuerung: null,
+  });
 
+  const listeLaden = useCallback(async (): Promise<void> => {
+    const a = abruf.current;
+    if (a.verlassen) return;
+    a.steuerung?.abort();
+    const nr = ++a.nr;
+    const lokal = a.lokal;
+    const steuerung = new AbortController();
+    a.steuerung = steuerung;
+    let zeitUeberschritten = false;
+    const wecker = setTimeout(() => {
+      zeitUeberschritten = true;
+      steuerung.abort();
+    }, CONTENT_ABRUF_GRENZE_MS);
+    let lesung: ListenLesung;
+    try {
+      const res = await fetch(CONTENT_LISTE_PFAD, { cache: "no-store", signal: steuerung.signal });
+      const daten: unknown = await res.json().catch(() => null);
+      lesung = leseListenAntwort(res.status, daten);
+    } catch (e) {
+      lesung = { ok: false, fehler: `Server nicht erreichbar (${e instanceof Error ? e.message : "unbekannter Fehler"})` };
+    } finally {
+      clearTimeout(wecker);
+    }
+    if (zeitUeberschritten) lesung = { ok: false, fehler: `keine Antwort binnen ${CONTENT_ABRUF_GRENZE_MS / 1000} s` };
+    // Überholt (neuere Abfrage) oder Seite verlassen: nichts setzen.
+    if (nr !== a.nr) return;
+    a.steuerung = null;
+    if (lesung.ok) {
+      if (lokal !== a.lokal) {
+        // Während der Abfrage wurde eine Zeile lokal ersetzt: Die Antwort könnte die Änderung zurücksetzen
+        // und wird verworfen. Sofort neu lesen — die neue Abfrage beginnt nach der Änderung, und neue
+        // Zeilen aus der verworfenen Antwort erscheinen ohne einen weiteren Takt.
+        void listeLaden();
+        return;
+      }
+      a.gelesen = true;
+      setContent(lesung.zeilen as unknown as ContentItem[]);
+      setListeAbgeschnitten(lesung.abgeschnitten);
+      setListeStand(lesung.gelesenAm);
+      setContentFehler(null);
+      setAbfrageFehler(null);
+    } else if (a.gelesen) {
+      // Die zuletzt gelesene Liste bleibt sichtbar; der Fehler steht darüber, nie still.
+      setAbfrageFehler(lesung.fehler);
+    } else {
+      // Stufe 1: Lesefehler anzeigen statt als leere Liste ("Keine Inhalte") auszugeben.
+      setContentFehler(lesung.fehler);
+    }
+    setLoading(false);
+  }, []);
+
+  useEffect(() => {
     async function fetchCalendar() {
       try {
         const res = await fetch("/api/content/pipeline");
@@ -1471,33 +1061,35 @@ function ContentSeite() {
       }
     }
 
-    fetchContent();
+    // Aufbau: Ein früheres Verlassen gilt nicht mehr (Strict Mode baut im Entwicklungsmodus ab und wieder auf).
+    const a = abruf.current;
+    a.verlassen = false;
+    void listeLaden();
     fetchCalendar();
     fetchObjekte();
 
-    const channel = supabase
-      .channel("content-realtime")
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "content" },
-        (payload) => {
-          if (payload.eventType === "INSERT") {
-            setContent((prev) => [payload.new as ContentItem, ...prev]);
-          } else if (payload.eventType === "UPDATE") {
-            setContent((prev) =>
-              prev.map((c) =>
-                c.id === (payload.new as ContentItem).id ? (payload.new as ContentItem) : c
-              )
-            );
-          }
-        }
-      )
-      .subscribe();
+    // Schritt 3: Neuabfrage im Takt statt Realtime. Verborgener Tab (visibilityState "hidden"): Der
+    // Takt fragt nicht ab, die Stand-Zeile zeigt das Alter der Liste; beim Zurückkehren sofort eine
+    // Abfrage, danach wieder im Takt. Ohne document (Server, Tests ohne DOM) läuft nur der Takt.
+    const verborgen = () => typeof document !== "undefined" && document.visibilityState === "hidden";
+    const takt = setInterval(() => {
+      if (!verborgen()) void listeLaden();
+    }, CONTENT_TAKT_MS);
+    const beiSichtwechsel = () => {
+      if (!verborgen()) void listeLaden();
+    };
+    if (typeof document !== "undefined") document.addEventListener("visibilitychange", beiSichtwechsel);
 
     return () => {
-      supabase.removeChannel(channel);
+      clearInterval(takt);
+      if (typeof document !== "undefined") document.removeEventListener("visibilitychange", beiSichtwechsel);
+      // Laufende Abfrage abbrechen; späte Antworten zählen nicht mehr, und keine neue Abfrage startet.
+      a.verlassen = true;
+      a.nr += 1;
+      a.steuerung?.abort();
+      a.steuerung = null;
     };
-  }, []);
+  }, [listeLaden]);
 
   // Ein Lauf je Klick mit lauf_id (R10). Nach unbekanntem Ausgang sendet der nächste Klick
   // dieselbe ID: Läuft der Lauf schon, antwortet der Server 409 statt einen zweiten bezahlten
@@ -1534,26 +1126,38 @@ function ContentSeite() {
       } finally {
         laufAktiv.current = false;
         setPipelineRunning(false);
+        // Schritt 3: Ein Lauf schreibt oder ändert eine content-Zeile — sofort neu lesen, nicht erst
+        // im nächsten Takt (vorher brachte der Realtime-Kanal die Zeile).
+        void listeLaden();
       }
     },
-    [offeneLaufId]
+    [offeneLaufId, listeLaden]
   );
 
   // Eine Zeile neu lesen (nach 409 oder wenn die Antwort keine Zeile mitbringt). null nur, wenn
   // die Zeile gelesen und ersetzt wurde. Gegencheck 06.11.2026: Liefert das Lesen keine Zeile
   // (gelöscht oder nicht lesbar), bleibt die Anzeige alt — das steht jetzt da, statt
-  // "Eintrag neu geladen".
+  // "Eintrag neu geladen". Schritt 3: über GET /api/content/eintrag/<id> statt Supabase im Browser.
   const ladeEintrag = useCallback(async (id: number): Promise<string | null> => {
-    const { data, error } = await supabase.from("content").select("*").eq("id", id).maybeSingle();
-    if (error) return `Neu laden fehlgeschlagen: ${error.message}`;
-    if (!data) return "Neu laden lieferte keine Zeile";
-    setContent((prev) => prev.map((c) => (c.id === id ? (data as ContentItem) : c)));
+    let lesung: EintragLesung;
+    try {
+      const res = await fetch(contentEintragPfad(id), { cache: "no-store" });
+      const daten: unknown = await res.json().catch(() => null);
+      lesung = leseEintragAntwort(res.status, daten, id);
+    } catch (e) {
+      lesung = { art: "fehler", fehler: `Server nicht erreichbar (${e instanceof Error ? e.message : "unbekannter Fehler"})` };
+    }
+    if (lesung.art === "fehler") return `Neu laden fehlgeschlagen: ${lesung.fehler}`;
+    if (lesung.art === "keine") return "Neu laden lieferte keine Zeile";
+    const zeile = lesung.zeile as unknown as ContentItem;
+    abruf.current.lokal += 1;
+    setContent((prev) => prev.map((c) => (c.id === id ? zeile : c)));
     return null;
   }, []);
 
   // Aktion an /api/content/status senden. Stufe 1 (05.11.2026): Antwort auswerten —
   // Fehler (400/409/500) stehen sichtbar an der Zeile; bei Erfolg kommt die geänderte
-  // Zeile aus der Antwort (Realtime bleibt zusätzlich aktiv).
+  // Zeile aus der Antwort (die nächste Abfrage im Takt liest sie ebenfalls).
   const sendStatusAction = useCallback(
     async (id: number, aktion: string, extra?: Record<string, unknown>): Promise<boolean> => {
       setActionPending(id);
@@ -1576,6 +1180,7 @@ function ContentSeite() {
         }
         const eintrag = istObjekt(daten) ? daten.eintrag : null;
         if (istObjekt(eintrag) && eintrag.id === id) {
+          abruf.current.lokal += 1;
           setContent((prev) => prev.map((c) => (c.id === id ? (eintrag as unknown as ContentItem) : c)));
         } else {
           const nachladeFehler = await ladeEintrag(id);
@@ -1638,7 +1243,8 @@ function ContentSeite() {
   const hinweisWartend = wartendHinweis({
     wartendGesamt,
     lesefehler: freigabeLesefehler,
-    listeFehler: contentFehler,
+    // Schritt 3: Auch eine gescheiterte Neuabfrage ist ein Lesefehler der Liste (sie ist dann veraltet).
+    listeFehler: contentFehler ?? abfrageFehler,
     listeLaedt: loading,
     inListe: statusCounts["zur_freigabe"] ?? 0,
     stand: freigaben?.erzeugt_am ?? null,
@@ -2115,6 +1721,22 @@ function ContentSeite() {
       {/* ═══ TAB: CONTENT — FREIGABE-ANSICHT ═══ */}
       {activeTab === "content" && (
         <div className="space-y-6">
+          {/* Schritt 3: Zeitpunkt der letzten erfolgreichen Abfrage (gelesen_am der Route, Uhr des Servers) */}
+          {listeStand && (
+            <p
+              className="text-[10px] text-text-muted"
+              data-liste-stand
+              title="Liste und Kacheln außer „Zur Freigabe“ stammen aus dieser Abfrage. Im verborgenen Tab fragt die Seite nicht ab; beim Zurückkehren sofort."
+            >
+              Liste: Stand {standZeit(listeStand)} (letzte erfolgreiche Abfrage über den Server) · neue Abfrage alle {CONTENT_TAKT_MS / 1000} s
+            </p>
+          )}
+          {abfrageFehler && listeStand && (
+            <div className="card-ghost p-4 text-xs" role="alert" data-abfrage-fehler style={{ color: "var(--gp-rose)" }}>
+              Neue Abfrage fehlgeschlagen: {maskiert(abfrageFehler)} — angezeigt bleibt der Stand {standZeit(listeStand)}; nächster
+              Versuch im Takt.
+            </div>
+          )}
           {/* KPIs */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
             <KPICard label="Zur Freigabe" value={zurFreigabeWert} subtitle={zurFreigabeUntertitel} color="var(--gp-amber)" />
@@ -2139,6 +1761,9 @@ function ContentSeite() {
           {contentFehler ? (
             <div className="card-ghost p-6 text-sm" role="alert" style={{ color: "var(--gp-rose)" }}>
               Content nicht lesbar: {maskiert(contentFehler)}
+              <span className="block mt-1 text-[11px] text-text-muted" data-neuer-versuch>
+                Neuer Versuch automatisch alle {CONTENT_TAKT_MS / 1000} s.
+              </span>
             </div>
           ) : loading ? (
             <div className="space-y-2">

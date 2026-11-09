@@ -28,6 +28,8 @@ const kosten = await import("../src/lib/kosten.ts");
 const hooksStatus = await import("../src/lib/hooks-status.ts");
 const auftragTypes = await import("../src/lib/auftrag-types.ts");
 const modelle = await import("../src/lib/agent-modelle.ts");
+// Objekt-Studio Schritt 2: /expose importiert next/link und die Studio-Allow-List.
+const studioObjekte = await import("../src/lib/studio/objekte.ts");
 
 const NAME = ["Immo", "Nexus"].join("");
 const ENTHAELT_NAMEN = /imm[ou][\s._-]*nexus/i;
@@ -320,7 +322,13 @@ test("Lagebild: Name und Preis aus dem Export maskiert", () => {
 
 test("/expose: alle Exportwerte maskiert, Links mit geschütztem Namen nicht verlinkt", () => {
   const lz = baumLaufzeit();
-  const E = ladeTsx("app/expose/page.tsx", { ...lz.attrappen, "@/lib/freigabe-regeln": regeln, "@/lib/hooks-status": hooksStatus });
+  const E = ladeTsx("app/expose/page.tsx", {
+    ...lz.attrappen,
+    "next/link": { __esModule: true, default: Link },
+    "@/lib/freigabe-regeln": regeln,
+    "@/lib/hooks-status": hooksStatus,
+    "@/lib/studio/objekte": studioObjekte,
+  });
   const objekt = {
     slug: `${NAME.toLowerCase()}-villa`,
     name: `Villa ${NAME}`,

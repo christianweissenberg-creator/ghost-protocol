@@ -37,6 +37,8 @@ const auftragTypes = await import("../src/lib/auftrag-types.ts");
 const objekteRoute = await import(
   pathToFileURL(process.env.N_ROUTE_OBJEKTE ?? path.join(SITE, "src/app/api/objekte/route.ts")).href
 );
+// Objekt-Studio Schritt 2: /expose importiert next/link und die Studio-Allow-List.
+const studioObjekte = await import("../src/lib/studio/objekte.ts");
 
 const NAME = ["Immo", "Nexus"].join("");
 const ENTHAELT_NAMEN = /imm[ou][\s._-]*nexus/i;
@@ -227,10 +229,17 @@ test("N-O8 (Gegencheck) /api/objekte: das Zeitlimit bricht einen hängenden Abru
 // ═══ Gegencheck 06.11.2026 (B14): /expose nennt die Ursache wie Lagebild und Panel ═══
 
 test("N-X1 (Gegencheck) /expose: Fehler der Objektliste mit Ursache statt pauschal 'QUELLE NICHT LESBAR'", () => {
-  const E = ladeTsx("app/expose/page.tsx", { ...ECHT, "@/lib/freigabe-regeln": regeln, "@/lib/hooks-status": hooksStatus }, [
-    "werteExportAus",
-    "ExportFehlerKarte",
-  ]).__intern;
+  const E = ladeTsx(
+    "app/expose/page.tsx",
+    {
+      ...ECHT,
+      "next/link": { __esModule: true, default: Link },
+      "@/lib/freigabe-regeln": regeln,
+      "@/lib/hooks-status": hooksStatus,
+      "@/lib/studio/objekte": studioObjekte,
+    },
+    ["werteExportAus", "ExportFehlerKarte"],
+  ).__intern;
   const faelle = [
     ["401 der Middleware", 401, { error: "Unauthorized" }, "NICHT ANGEMELDET — Steinadel Export-API", "Nicht angemeldet (HTTP 401)", "--gp-amber"],
     [

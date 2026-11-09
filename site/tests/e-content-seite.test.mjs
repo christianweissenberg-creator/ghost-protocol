@@ -9,12 +9,18 @@
 // (Next erlaubt in page.tsx keine weiteren Exporte); die internen Funktionen holt der Test über
 // einen angehängten Ausdruck im übersetzten Modul. Gerendert wird hier nichts.
 // E_CONTENT_SEITE=<pfad> prüft statt der Repo-Datei eine Kopie (Mutationstests im Scratchpad).
+// Objekt-Studio Schritt 2 (08.11.2026): Freigabe-Lage, Urteilsanzeige und Zeit-/Maskierungshilfen
+// liegen in components/studio/beleg-hilfen.ts; die Seite importiert sie. Der Test lädt die echte
+// Datei mit (tests/harness/studio.mjs) und prüft dieselben Funktionen wie vorher (AUSGELAGERT).
+// Objekt-Studio Schritt 3 (08.11.2026): Die Seite importiert lib/content-liste.ts (Grenze, Takt, Leser
+// der Server-Antworten); der Test reicht die echte Datei durch.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { ladeStudioBausteine } from "./harness/studio.mjs";
 
 const SITE = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const SEITE = process.env.E_CONTENT_SEITE ?? path.join(SITE, "src/app/content/page.tsx");
@@ -22,7 +28,11 @@ const ts = createRequire(path.join(SITE, "package.json"))("typescript");
 
 const counselModul = await import(pathToFileURL(path.join(SITE, "src/lib/counsel-urteil.ts")).href);
 const regelnModul = await import(pathToFileURL(path.join(SITE, "src/lib/freigabe-regeln.ts")).href);
+const contentListeModul = await import(pathToFileURL(path.join(SITE, "src/lib/content-liste.ts")).href);
 const { NAMENS_ERSATZ, MIN_FREIGABE_ZEICHEN } = regelnModul;
+
+/** Seit Schritt 2 in components/studio/beleg-hilfen.ts statt in page.tsx. */
+const AUSGELAGERT = ["fassungsBezug", "freigabeLage", "urteilAnzeige", "bezugHinweis", "maskiertWert", "zeitText"];
 
 const INTERN = [
   "AUSGANG_UNBEKANNT",
@@ -37,11 +47,7 @@ const INTERN = [
   "stufenEtikett",
   "flussHinweis",
   "laufKostenText",
-  "fassungsBezug",
-  "freigabeLage",
   "ergebnisBezug",
-  "urteilAnzeige",
-  "bezugHinweis",
   "wartendHinweis",
   "objekteHinweisZusatz",
   "metrikenText",
@@ -49,8 +55,6 @@ const INTERN = [
   "stufenAusgabe",
   "laufZurFreigabe",
   "vermerkText",
-  "maskiertWert",
-  "zeitText",
 ];
 
 function ladeSeite(datei) {
@@ -71,7 +75,10 @@ function ladeSeite(datei) {
     "@/lib/hooks-status": { objektFehlerText: (f) => String(f), objekteFehlerArt: () => "unbekannt", useFreigaben: () => ({}) },
     "@/lib/counsel-urteil": counselModul,
     "@/lib/freigabe-regeln": regelnModul,
+    "@/lib/content-liste": contentListeModul,
   };
+  const studio = ladeStudioBausteine(attrappen);
+  Object.assign(attrappen, studio.module);
   const modul = { exports: {} };
   const anfordern = (name) => {
     if (!(name in attrappen)) throw new Error(`unerwarteter Laufzeit-Import in page.tsx: ${name}`);
@@ -82,7 +89,9 @@ function ladeSeite(datei) {
     modul,
     modul.exports
   );
-  return modul.exports.__intern;
+  const intern = modul.exports.__intern;
+  for (const name of AUSGELAGERT) intern[name] = studio.hilfen[name];
+  return intern;
 }
 
 const S = ladeSeite(SEITE);

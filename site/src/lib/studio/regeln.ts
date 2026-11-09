@@ -1,0 +1,89 @@
+// Objekt-Studio: "Regeln, die mitlaufen" (Schritt 2, 08.11.2026) — statische Liste für die
+// Studio-Seite. Jede Regel nennt, wo sie steht (Datei im Repo oder Commit) und wie sie durchgesetzt
+// wird. Nur öffentlich zitierbare Fundstellen; wo es keine gibt, steht das dabei. Regeln, deren
+// Prüfung erst ein späterer Bauschritt bringt (Anker, Startbild, Rechte), stehen mit
+// "noch nicht gebaut (Schritt N)" da — nie als laufende Prüfung.
+
+import { MIN_FREIGABE_ZEICHEN } from "@/lib/freigabe-regeln";
+import { STUDIO_BAUSCHRITTE, nochNichtGebautText } from "./objekte";
+
+export interface StudioRegel {
+  regel: string;
+  /** Datei im Repo oder Commit, wo die Regel steht. */
+  fundstelle: string;
+  /** Wie die Regel durchgesetzt wird — oder dass sie es nicht automatisch wird. */
+  pruefung: string;
+}
+
+const PIPELINE = "site/src/app/api/content/pipeline/route.ts (buildObjektBlock)";
+const OHNE_FUNDSTELLE = "Vorgabe des Inhabers; im Repo noch ohne eigene Fundstelle";
+
+export const STUDIO_REGELN: readonly StudioRegel[] = [
+  {
+    regel: "Nur das COUNSEL-Urteil FREIGABE lässt durch; UNKLAR und jeder Zusatz sperren.",
+    fundstelle: "site/src/lib/counsel-urteil.ts (werteCounselAus)",
+    pruefung: "Code, bei jedem Lauf und jeder Anzeige",
+  },
+  {
+    regel: `Freigeben nur mit COUNSEL-Urteil FREIGABE, Text ab ${MIN_FREIGABE_ZEICHEN} Zeichen und ohne geschützten Namen.`,
+    fundstelle: "site/src/lib/freigabe-regeln.ts (pruefeFreigabe)",
+    pruefung: "Code, serverseitig beim Freigeben",
+  },
+  {
+    regel: "Der geschützte Name erscheint in keiner Anzeige, nur maskiert.",
+    fundstelle: "site/src/lib/freigabe-regeln.ts (maskiereGeschuetzteNamen)",
+    pruefung: "Code, in jeder Anzeige des Studios",
+  },
+  {
+    // 0f553a9 verlangte die Kennzeichnung "im Bild UND in der Caption"; den ausgeschriebenen,
+    // sichtbaren Text (eine Anweisung an den Designer genügt nicht) brachte erst 77229ef.
+    regel: "KI-Hinweis als sichtbarer Text im Content, nie nur als Design-Notiz.",
+    fundstelle: `Commits 0f553a9 und 77229ef; ${PIPELINE}, Pflicht-Element 2`,
+    pruefung: "COUNSEL prüft den Text",
+  },
+  {
+    regel: "Disclaimer „Modellrechnung“ auf jedem Kanal, nicht nur auf X.",
+    fundstelle: `Commit 0f553a9; ${PIPELINE}, Pflicht-Element 1`,
+    pruefung: "COUNSEL prüft den Text",
+  },
+  {
+    regel: "AfA im Hook qualifizieren: „Denkmal-AfA bis …“, nie als Abschreibung oder Ersparnis.",
+    fundstelle: `Commit f8dd6c6; ${PIPELINE}, Pflicht-Element 0`,
+    pruefung: "COUNSEL prüft den Text",
+  },
+  {
+    regel: "Keine erfundenen Handles, Geschäftszahlen oder Interna.",
+    fundstelle: `Commit 0f553a9; ${PIPELINE}, Pflicht-Elemente 3 und 4`,
+    pruefung: "COUNSEL prüft den Text",
+  },
+  {
+    regel: "Kein automatisches Posten; veröffentlicht wird von Hand.",
+    fundstelle: "Commit 8a7baeb; tools/posting_guard.py (Posting-Riegel)",
+    pruefung: "Riegel im Agenten-Container, vom Dashboard nicht messbar",
+  },
+  {
+    regel: "Keine Zahl ohne Quelle, nie 0 als Platzhalter.",
+    fundstelle: "site/src/lib/status-types.ts (Messwert); site/src/lib/studio/typen.ts",
+    pruefung: "Code, in jeder Antwort und Anzeige des Studios",
+  },
+  {
+    regel: "Anker-Bilder nur aus dem Anker-Manifest und mit unverändertem Datei-Hash; ein Anker heißt Visualisierung, nie Foto.",
+    fundstelle: OHNE_FUNDSTELLE,
+    pruefung: nochNichtGebautText(STUDIO_BAUSCHRITTE.anker),
+  },
+  {
+    regel: "Ein Video startet nur aus einem Ausschnitt eines Ankers; das Startbild wird gegen diesen Ausschnitt abgeglichen.",
+    fundstelle: OHNE_FUNDSTELLE,
+    pruefung: nochNichtGebautText(STUDIO_BAUSCHRITTE.medien),
+  },
+  {
+    regel: "Medien erst freigebbar, wenn die Nutzungsrechte geklärt und mit Nachweis vermerkt sind; bis dahin keine Veröffentlichung.",
+    fundstelle: OHNE_FUNDSTELLE,
+    pruefung: nochNichtGebautText(STUDIO_BAUSCHRITTE.medienregel),
+  },
+  {
+    regel: "Bauträger öffentlich nicht namentlich nennen.",
+    fundstelle: "Vorgabe des Inhabers; im Repo ohne eigene Fundstelle",
+    pruefung: "nicht automatisch geprüft — es gibt keinen Namensfilter dafür",
+  },
+];
