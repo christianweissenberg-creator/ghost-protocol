@@ -144,6 +144,38 @@ async function leseAgenten(): Promise<AgentenLesung> {
 // "zuletzt aktiviert vor X" unbemerkt gegen die laufende Uhr. Derselbe Takt wie /api/status.
 const AGENTEN_TAKT_MS = 60_000;
 
+// Agenten sparsam (09.11.2026): Der Takt von useAgents und useAgentDetail pausiert im verborgenen Tab
+// wie usePoll (lib/hooks-status.ts) und die Liste auf /content. Die erste Lesung beim Aufbau bleibt (auch
+// im verborgenen Tab); im Takt keine Lesung, solange document.visibilityState "hidden" ist; beim Wechsel
+// auf sichtbar sofort eine, danach weiter im alten Takt-Raster; ohne document (Server, Tests ohne DOM) nur
+// der Takt. Realtime-Kanäle, refetch und neuLaden sind unverändert.
+// Nebenwirkung wie bei usePoll: Die Lesung bei der Rückkehr hat keinen Mindestabstand; wer oft zwischen
+// Tabs wechselt, löst mehr Lesungen aus als der Takt allein. Tests: tests/c-agenten-sichtbarkeit.test.mjs.
+
+/** Tab verborgen (document.visibilityState "hidden")? Ohne document (Server, Tests ohne DOM) nie. */
+function tabVerborgen(): boolean {
+  return typeof document !== "undefined" && document.visibilityState === "hidden";
+}
+
+/**
+ * Takt, der im verborgenen Tab pausiert: lesen() im Takt nur bei sichtbarem Tab, beim Wechsel auf sichtbar
+ * sofort; der Takt läuft dabei im alten Raster weiter. Liefert das Aufräumen: Takt stoppen und den Lauscher
+ * mit denselben Angaben abmelden, mit denen er angemeldet wurde.
+ */
+function sichtbarerTakt(lesen: () => void, intervallMs: number): () => void {
+  const takt = setInterval(() => {
+    if (!tabVerborgen()) lesen();
+  }, intervallMs);
+  const beiSichtwechsel = () => {
+    if (!tabVerborgen()) lesen();
+  };
+  if (typeof document !== "undefined") document.addEventListener("visibilitychange", beiSichtwechsel);
+  return () => {
+    clearInterval(takt);
+    if (typeof document !== "undefined") document.removeEventListener("visibilitychange", beiSichtwechsel);
+  };
+}
+
 // Fetch all agents from Supabase (ohne ausgeblendete Agenten)
 export function useAgents() {
   const [agents, setAgents] = useState<Agent[]>([]);
@@ -170,12 +202,19 @@ export function useAgents() {
 
   useEffect(() => {
     let aktiv = true;
-    const lesen = () =>
-      leseAgenten().then((lesung) => {
-        if (aktiv) uebernehmen(lesung);
+    // Lesungen können sich überlappen (Rückkehr kurz vor dem Takt, eine langsame Antwort). Nur die zuletzt
+    // gestartete Lesung dieses Effektlaufs übernimmt ihre Antwort (wie R29 in lib/hooks-status.ts); eine
+    // ältere, die später ankommt, überschreibt die neuere nicht. refetch bleibt außerhalb dieser Folge.
+    let juengste = 0;
+    const lesen = () => {
+      juengste += 1;
+      const nr = juengste;
+      return leseAgenten().then((lesung) => {
+        if (aktiv && nr === juengste) uebernehmen(lesung);
       });
+    };
     lesen();
-    const takt = setInterval(lesen, AGENTEN_TAKT_MS);
+    const taktStoppen = sichtbarerTakt(() => void lesen(), AGENTEN_TAKT_MS);
 
     // Realtime subscription for agent changes (nur sichtbare Agenten)
     const channel = supabase
@@ -194,7 +233,7 @@ export function useAgents() {
 
     return () => {
       aktiv = false;
-      clearInterval(takt);
+      taktStoppen();
       supabase.removeChannel(channel);
     };
   }, [uebernehmen]);
@@ -381,10 +420,12 @@ export function useAgentDetail(agentId: string) {
 
   // Gegencheck 06.11.2026 (B24): alle 60 s neu lesen — Aktivierungen von anderswo (Command
   // Center, Cron) erscheinen sonst nicht, ein UPDATE-Ereignis für agents ist nicht belegt.
+  // Agenten sparsam (09.11.2026): im verborgenen Tab pausiert, bei der Rückkehr sofort Agent und
+  // Nachrichten (sichtbarerTakt). Überlappen sich zwei Läufe, verwirft der Ladeeffekt den älteren: Jeder
+  // neue Ladezähler beendet den vorigen Lauf (aktiv = false); dessen spätere Antwort wird nicht übernommen.
   useEffect(() => {
     if (!abfragbar) return;
-    const takt = setInterval(() => setLadeZaehler((n) => n + 1), AGENTEN_TAKT_MS);
-    return () => clearInterval(takt);
+    return sichtbarerTakt(() => setLadeZaehler((n) => n + 1), AGENTEN_TAKT_MS);
   }, [abfragbar]);
 
   /** Agent und Nachrichten neu lesen, etwa nach einer Aktivierung (Realtime ist nicht belegt). */
