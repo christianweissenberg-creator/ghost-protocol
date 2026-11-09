@@ -11,6 +11,8 @@
 //
 // Unverändert und hier mitgeprüft: R28 (unter dem Provider fragt useSystemStatus nicht selbst ab) und R29
 // (ein neuer Abruf bricht den vorigen ab; Abbau bricht den laufenden ab).
+// FS-H6 misst die Nebenwirkung der Rückkehr ohne Mindestabstand (Prüfung 09.11.2026): Bei häufigem
+// Tab-Wechsel fragt usePoll öfter ab als der Takt allein.
 import { test, afterEach } from "node:test";
 import assert from "node:assert/strict";
 
@@ -194,6 +196,32 @@ for (const nutzer of NUTZER) {
     lz.abbauen();
     await warte(t, lz, 3 * TAKT);
     assert.equal(n.an(nutzer.pfad).length, 5, "nach dem Abbau kein Takt");
+  });
+}
+
+for (const nutzer of NUTZER) {
+  test(`FS-H6 ${nutzer.name}: Nebenwirkung der Rückkehr, gemessen — kein Mindestabstand (wie auf /content): Jeder Wechsel auf sichtbar fragt sofort ab; 20 s sichtbar / 10 s verborgen ergibt in 10 min 1 + 20 Abrufe, der Takt allein (vor der Pause) 1 + 10`, async (t) => {
+    t.mock.timers.enable({ apis: ["setInterval", "setTimeout"] });
+    const s = sichtbarkeit("visible");
+    const n = netz();
+    const { lz } = baue(nutzer);
+    lz.rendere();
+    await warte(t, lz, 0);
+    assert.equal(n.an(nutzer.pfad).length, 1, "erster Abruf beim Aufbau");
+    let rueckkehr = 0;
+    for (let zyklus = 0; zyklus < 20; zyklus++) {
+      await warte(t, lz, 20_000);
+      s.setze("hidden");
+      await lz.ruhe();
+      // Die Takte (60 s, 120 s …) fallen hier jeweils in die verborgene Phase: Sie fragen nicht ab.
+      await warte(t, lz, 10_000);
+      s.setze("visible");
+      rueckkehr += 1;
+      await lz.ruhe();
+    }
+    assert.equal(rueckkehr, 20);
+    assert.equal(n.an(nutzer.pfad).length, 1 + rueckkehr, "ein Abruf je Rückkehr, ohne Mindestabstand — doppelt so viele wie der Takt allein");
+    assert.deepEqual(n.andere(nutzer.pfad), [], "keine anderen Abrufe");
   });
 }
 

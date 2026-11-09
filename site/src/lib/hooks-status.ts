@@ -29,6 +29,10 @@
 // Takt; ohne document (Server, Tests ohne DOM) nur der Takt. Gilt für /api/status
 // (SystemStatusProvider, Rückfall in useSystemStatus) und /api/freigaben (useFreigaben).
 // Tests: tests/c-poll-sichtbarkeit.test.mjs.
+// Nebenwirkung (Prüfung 09.11.2026): Der Abruf bei der Rückkehr hat keinen Mindestabstand, wie auf
+// /content. Wer oft zwischen Tabs wechselt, löst daher mehr Abrufe aus als der Takt allein: bei 20 s
+// sichtbar und 10 s verborgen einen je Rückkehr, zwei je Minute statt einem (FS-H6). Ein Mindestabstand
+// wiche von /content ab und ist nicht umgesetzt.
 
 import { createContext, createElement, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
@@ -173,8 +177,8 @@ function usePoll<T>(url: string, intervallMs: number, aktiv: boolean) {
     folge.oeffnen();
     // Erster Abruf beim Aufbau wie bisher, auch im verborgenen Tab (wie die Liste auf /content).
     const start = setTimeout(laden, 0);
-    // Verborgener Tab: Der Takt fragt nicht ab. Beim Zurückkehren sofort ein Abruf, danach wieder im
-    // Takt. Ohne document (Server, Tests ohne DOM) läuft nur der Takt.
+    // Verborgener Tab: Der Takt fragt nicht ab. Beim Zurückkehren sofort ein Abruf (ohne Mindestabstand,
+    // siehe Dateikopf), danach wieder im Takt. Ohne document (Server, Tests ohne DOM) läuft nur der Takt.
     const takt = setInterval(() => {
       if (!tabVerborgen()) void laden();
     }, intervallMs);

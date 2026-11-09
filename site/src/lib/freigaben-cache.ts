@@ -24,7 +24,9 @@
 // content_updated_at bei jedem UPDATE neu — und eine geänderte Zählung jenseits der Grenzen (mehr als
 // 100 wartende oder 50 hängende Einträge). Ein Eintrag, der die 2-h-Grenze überschreitet, ändert die
 // Probe, denn die Route berechnet die Grenze bei jeder Anfrage neu: Er steht dann in der hängenden Liste
-// der Probe, nicht in der des Zwischenstands, und die Route liest voll. Was die Kennung nicht erkennt,
+// der Probe, nicht in der des Zwischenstands. Stehen schon 50 ältere hängende Einträge vor ihm, steht er
+// nicht in der Liste und erhöht nur ihre Zählung. Beides ändert die Kennung, und die Route liest voll
+// (tests/r-freigaben-probe.test.mjs, FS-P4 und FS-P4b). Was die Kennung nicht erkennt,
 // steht in lib/content-liste-cache.ts (unter anderem Schreiben bei abgeschalteten Triggern und
 // Änderungen am Aufbau der Tabelle); das fängt die Höchstdauer ab: Ist die letzte volle Abfrage
 // FREIGABEN_VOLL_SPAETESTENS_MS (30 min) alt, liest die Route wieder voll, auch ohne erkannte Änderung.

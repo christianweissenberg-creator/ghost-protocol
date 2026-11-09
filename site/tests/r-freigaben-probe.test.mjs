@@ -534,6 +534,54 @@ test("FS-P4 2-h-Grenze: Ein Entwurf, der sie überschreitet, ändert die Probe (
   assert.deepEqual(r.body.haengend.map((e) => e.id), ["11", "12", "15"]);
 });
 
+test("FS-P4b 2-h-Grenze hinter Position 50: Stehen schon 50 ältere hängende Einträge vor ihm, steht ein Entwurf, der die Grenze überschreitet, nicht in der hängenden Liste der Probe — er erhöht nur ihre Zählung; auch das ändert die Kennung, und die Route liest voll", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: T0 });
+  for (let i = 1; i <= 3; i++) zeileDb(i);
+  // 50 hängende Einträge (3 h ohne Änderung), alle älter (created_at) als der Entwurf 299.
+  for (let i = 201; i <= 250; i++) zeileDb(i, { status: "entwurf", updated_at: iso(T0 - 3 * STUNDE) });
+  // 1 h 59 min ohne Änderung: noch nicht hängend; nach created_at hinter allen 50.
+  zeileDb(299, { status: "entwurf", updated_at: iso(T0 - 2 * STUNDE + MIN) });
+  const erste = await hole();
+  assert.deepEqual(anfragen(), VOLL);
+  assert.deepEqual([erste.body.haengend.length, erste.body.haengend_gesamt], [50, 50]);
+
+  // Mitlesen, was die Probe der hängenden Liste der Route liefert: ids und content-range (daraus die Zählung).
+  const proben = [];
+  globalThis.fetch = async (input, init = {}) => {
+    const res = await FAKE_FETCH(input, init);
+    const url = new URL(typeof input === "string" ? input : input.url);
+    if (istProbe(url) && istHaengend(url)) {
+      proben.push({ ids: (await res.clone().json()).map((z) => String(z.id)), bereich: res.headers.get("content-range") });
+    }
+    return res;
+  };
+
+  t.mock.timers.tick(MIN);
+  let r = await hole();
+  assert.deepEqual(anfragen(), PROBE, "genau auf der Grenze: noch nicht hängend, nur die Probe");
+  assert.equal(r.kopf.get("x-freigaben-abfrage"), "unveraendert");
+  assert.equal(proben.length, 1);
+  assert.equal(proben[0].bereich, "0-49/50");
+
+  t.mock.timers.tick(1);
+  r = await hole();
+  assert.equal(proben.length, 2);
+  assert.equal(proben[1].ids.includes("299"), false, "der Entwurf steht nicht in der hängenden Liste der Probe (Position 51)");
+  assert.deepEqual(proben[1].ids, proben[0].ids, "die hängende Liste der Probe ist dieselbe wie vorher");
+  assert.equal(proben[1].bereich, "0-49/51", "nur die Zählung der Probe ist gestiegen");
+  assert.deepEqual(anfragen(), PROBE_UND_VOLL, "geänderte Zählung: Kennung anders, volle Abfrage");
+  assert.equal(r.kopf.get("x-freigaben-abfrage"), "voll");
+  assert.deepEqual([r.body.haengend.length, r.body.haengend_gesamt], [50, 51]);
+  assert.equal(r.body.haengend.some((e) => e.id === "299"), false, "gezeigt werden weiter die 50 ältesten");
+  assert.deepEqual(kurz(r.body), erwartet());
+
+  t.mock.timers.tick(MIN);
+  r = await hole();
+  assert.deepEqual(anfragen(), PROBE, "danach wieder nur die Probe");
+  assert.equal(r.body.haengend_gesamt, 51);
+  assert.deepEqual(kurz(r.body), erwartet());
+});
+
 test("FS-P5 Zählung jenseits der Grenzen: Mehr als 100 wartende oder 50 hängende Einträge — ein INSERT oder DELETE hinter der Grenze ändert nur die Zählung; die Probe erkennt sie, die volle Abfrage liefert sie; ein UPDATE hinter der Grenze ändert nichts", async (t) => {
   t.mock.timers.enable({ apis: ["Date"], now: T0 });
   for (let i = 1; i <= 101; i++) zeileDb(i);
