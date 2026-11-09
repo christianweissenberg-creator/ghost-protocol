@@ -9,6 +9,8 @@
 // content_updated_at (scripts/setup_supabase_v2.sql:339-342).
 // Zeitlimits (AbortSignal.timeout) laufen in R7-P12 auf derselben Attrappen-Uhr; gleichzeitige Anfragen
 // (R7-P13 bis R7-P15) halten an Toren in welt.vorAntwort.
+// Mutationsprüfung (R7-M1 bis R7-M4, 09.11.2026): Höchstdauer nach einer erkannten Änderung, Header
+// x-content-abfrage nur bei 200, leere Liste.
 // Kein Netz: Jeder Abruf geht an die Attrappe oder wirft. Die Umgebungswerte unten sind Test-Werte dieses
 // Prozesses, keine echten Schlüssel. Jeder Test beginnt ohne Zwischenstand. Module werden je Test
 // geladen: Fehlt eines (Stand vor der Änderungsprobe), scheitert der einzelne Test, nicht die Datei.
@@ -718,4 +720,141 @@ test("R7-P15 Gleichzeitig: Sieht die Probe noch den alten Stand, während eine a
   assert.equal(a.kopf.get("x-content-abfrage"), "unveraendert");
   assert.deepEqual(a.body.zeilen, S1, "A: die Zeilen, gegen die ihre Probe verglich (S1), nicht der inzwischen gespeicherte Stand S2");
   assert.deepEqual(anfragen(), ["probe", "probe", "voll"]);
+});
+
+// ═══ Mutationsprüfung (09.11.2026) ═══
+// Je Test in Klammern der Mutant, der vorher die ganze Suite überlebte (Mutationslauf gegen 08f018e in einer
+// eigenen Kopie). Jeder Test ist mit seinem Mutanten rot und ohne ihn grün; Produktcode unverändert.
+
+test("R7-M1 (M10) Höchstdauer nach einer erkannten Änderung ab Beginn der vollen Abfrage, nicht ab Beginn der Probe davor — Probe 3 s, volle Abfrage 4 s: 29:59,999 min danach nur die Probe, ab 30 min voll", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: T0 });
+  const MIN30 = 30 * 60_000;
+  for (let i = 1; i <= 3; i++) zeileDb(i);
+  await holeListe();
+  assert.deepEqual(anfragen(), ["voll"]);
+  // Nach der Änderung braucht die Anfrage die Probe (3 s) und die volle Abfrage (4 s).
+  welt.vorAntwort = async (a) => {
+    if (istProbe(a)) t.mock.timers.tick(3_000);
+    if (istVoll(a)) t.mock.timers.tick(4_000);
+  };
+  t.mock.timers.setTime(T0 + 60_000);
+  aktualisiere(2, { status: "freigegeben" });
+  const geaendert = await holeListe();
+  assert.deepEqual(anfragen(), ["probe", "voll"]);
+  assert.equal(geaendert.body.gelesen_am, iso(T0 + 67_000), "3 s Probe, dann 4 s volle Abfrage");
+  const vollBeginn = T0 + 63_000;
+
+  // Ab hier dauern die Abfragen keine Zeit; die Uhr stellt nur der Test.
+  welt.vorAntwort = null;
+  t.mock.timers.setTime(vollBeginn + MIN30 - 1);
+  let r = await holeListe();
+  assert.deepEqual(anfragen(), ["probe"], "29:59,999 min nach Beginn der vollen Abfrage (30:02,999 min nach Beginn der Probe): nur die Probe");
+  assert.equal(r.kopf.get("x-content-abfrage"), "unveraendert");
+  assert.deepEqual(r.body.zeilen, geaendert.body.zeilen);
+
+  t.mock.timers.tick(1);
+  r = await holeListe();
+  assert.deepEqual(anfragen(), ["voll"], "30 min nach Beginn der vollen Abfrage: voll, ohne Probe");
+  assert.equal(r.kopf.get("x-content-abfrage"), "voll");
+  assert.deepEqual(r.body.zeilen, geaendert.body.zeilen);
+});
+
+test("R7-M2 (M11) Nach einer erkannten Änderung beginnt die Höchstdauer neu: Der neue Zwischenstand gilt 30 min ab seiner eigenen vollen Abfrage, nicht ab der des ersetzten Stands", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: T0 });
+  const MIN = 60_000;
+  for (let i = 1; i <= 3; i++) zeileDb(i);
+  const erste = await holeListe();
+  assert.deepEqual(anfragen(), ["voll"], "erste volle Abfrage bei 0 min");
+  t.mock.timers.setTime(T0 + 10 * MIN);
+  aktualisiere(1, { status: "abgelehnt" });
+  const geaendert = await holeListe();
+  assert.deepEqual(anfragen(), ["probe", "voll"], "Änderung erkannt, zweite volle Abfrage bei 10 min");
+  assert.notDeepEqual(geaendert.body.zeilen, erste.body.zeilen);
+
+  t.mock.timers.setTime(T0 + 30 * MIN);
+  let r = await holeListe();
+  assert.deepEqual(anfragen(), ["probe"], "30 min nach der ersten, 20 min nach der zweiten vollen Abfrage: nur die Probe");
+  assert.equal(r.kopf.get("x-content-abfrage"), "unveraendert");
+  assert.deepEqual(r.body.zeilen, geaendert.body.zeilen);
+
+  t.mock.timers.setTime(T0 + 40 * MIN - 1);
+  r = await holeListe();
+  assert.deepEqual(anfragen(), ["probe"], "29:59,999 min nach der zweiten vollen Abfrage: nur die Probe");
+  t.mock.timers.tick(1);
+  r = await holeListe();
+  assert.deepEqual(anfragen(), ["voll"], "30 min nach der zweiten vollen Abfrage: voll, ohne Probe");
+  assert.equal(r.kopf.get("x-content-abfrage"), "voll");
+  assert.deepEqual(r.body.zeilen, geaendert.body.zeilen);
+});
+
+test("R7-M3 (M26) Header x-content-abfrage nur bei 200: Scheitert die volle Abfrage — ohne Zwischenstand oder nach geänderter Probe —, fehlt er auf der 502; ebenso auf 500 konfiguration und 500 programmfehler", async (t) => {
+  for (let i = 1; i <= 3; i++) zeileDb(i);
+  const faelle = [
+    ["Lesefehler", { stoerung: (a) => (istVoll(a) ? { status: 500, body: { code: "XX000", message: "kaputt" } } : null) }, "kaputt"],
+    [
+      "Zeitüberschreitung",
+      {
+        vorAntwort: async (a) => {
+          if (istVoll(a)) throw abbruch();
+        },
+      },
+      "Zeitüberschreitung (8 s)",
+    ],
+    ["Objekt statt Liste", { stoerung: (a) => (istVoll(a) ? { status: 200, body: { id: 1 } } : null) }, "Antwort ohne Zeilenliste"],
+  ];
+  async function volleAbfrageScheitert(wann, erwartet) {
+    for (const [name, stoerung, grund] of faelle) {
+      welt.stoerung = stoerung.stoerung ?? null;
+      welt.vorAntwort = stoerung.vorAntwort ?? null;
+      const r = await holeListe();
+      assert.deepEqual([r.status, r.body, anfragen()], [502, { fehler: grund, fehler_art: "supabase" }, erwartet], `${wann}, ${name}`);
+      assert.equal(r.kopf.get("x-content-abfrage"), null, `${wann}, ${name}: kein Header`);
+    }
+    welt.stoerung = null;
+    welt.vorAntwort = null;
+  }
+
+  await volleAbfrageScheitert("ohne Zwischenstand", ["voll"]);
+  let r = await holeListe();
+  assert.deepEqual([r.status, r.kopf.get("x-content-abfrage"), anfragen()], [200, "voll", ["voll"]], "Gegenkontrolle: die 200 trägt ihn");
+  aktualisiere(2, { status: "freigegeben" });
+  await volleAbfrageScheitert("nach geänderter Probe", ["probe", "voll"]);
+
+  delete process.env.SUPABASE_SERVICE_KEY;
+  r = await holeListe();
+  assert.deepEqual([r.status, r.body.fehler_art, r.kopf.get("x-content-abfrage"), anfragen()], [500, "konfiguration", null, []]);
+  process.env.SUPABASE_SERVICE_KEY = SERVICE;
+  const zeitlimit = t.mock.method(AbortSignal, "timeout", () => {
+    throw new Error("unerwartet");
+  });
+  r = await holeListe();
+  assert.deepEqual([r.status, r.body.fehler_art, r.kopf.get("x-content-abfrage"), anfragen()], [500, "programmfehler", null, []]);
+  zeitlimit.mock.restore();
+
+  r = await holeListe();
+  assert.deepEqual([r.status, r.kopf.get("x-content-abfrage"), anfragen()], [200, "voll", ["probe", "voll"]], "danach die neuen Zeilen");
+  assert.deepEqual(r.body.zeilen, tabelle());
+});
+
+test("R7-M4 (M50) Leere Liste: Auch ein leerer Zwischenstand gilt — die nächste Anfrage stellt nur die Probe; ein INSERT in die leere Tabelle und das Löschen der letzten Zeile erkennt sie", async () => {
+  const erste = await holeListe();
+  assert.deepEqual([erste.status, erste.kopf.get("x-content-abfrage"), erste.body.zeilen, erste.body.abgeschnitten, anfragen()], [200, "voll", [], false, ["voll"]]);
+  const zweite = await holeListe();
+  assert.deepEqual(anfragen(), ["probe"], "leere Tabelle, nichts geändert: nur die Probe");
+  assert.deepEqual([zweite.status, zweite.kopf.get("x-content-abfrage"), zweite.body.zeilen], [200, "unveraendert", []]);
+
+  zeileDb(1);
+  const dritte = await holeListe();
+  assert.deepEqual(anfragen(), ["probe", "voll"], "INSERT in die leere Tabelle");
+  assert.equal(dritte.kopf.get("x-content-abfrage"), "voll");
+  assert.deepEqual(dritte.body.zeilen, tabelle());
+  assert.equal(dritte.body.zeilen.length, 1);
+
+  loesche(1);
+  const vierte = await holeListe();
+  assert.deepEqual(anfragen(), ["probe", "voll"], "letzte Zeile gelöscht");
+  assert.deepEqual([vierte.kopf.get("x-content-abfrage"), vierte.body.zeilen], ["voll", []]);
+  const fuenfte = await holeListe();
+  assert.deepEqual(anfragen(), ["probe"], "wieder leer, nichts geändert: nur die Probe");
+  assert.deepEqual([fuenfte.status, fuenfte.kopf.get("x-content-abfrage"), fuenfte.body.zeilen], [200, "unveraendert", []]);
 });
