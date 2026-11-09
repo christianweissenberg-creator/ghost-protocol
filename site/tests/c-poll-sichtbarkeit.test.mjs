@@ -13,6 +13,9 @@
 // (ein neuer Abruf bricht den vorigen ab; Abbau bricht den laufenden ab).
 // FS-H6 misst die Nebenwirkung der Rückkehr ohne Mindestabstand (Prüfung 09.11.2026): Bei häufigem
 // Tab-Wechsel fragt usePoll öfter ab als der Takt allein.
+// Mutationsprüfung (FS-M1, FS-M2, 09.11.2026): Der Lauscher bleibt über jeden Wechsel wirksam, geprüft mit
+// einem document auf echtem EventTarget, das die Optionen von addEventListener auswertet wie der Browser;
+// nach einer Rückkehr läuft der Takt im alten Raster weiter.
 import { test, afterEach } from "node:test";
 import assert from "node:assert/strict";
 
@@ -273,3 +276,86 @@ test("FS-H5 aktiv=false: Bekommt useSystemStatus einen Provider (aktiv wird fals
   await warte(t, lz, 3 * TAKT);
   assert.equal(n.abrufe.length, 2, "kein eigener Abruf mehr");
 });
+
+// ═══ Mutationsprüfung (09.11.2026) ═══
+// Je Test in Klammern der Mutant, der vorher die ganze Suite überlebte (Mutationslauf gegen c5442fa in einer
+// eigenen Kopie). Jeder Test ist mit seinem Mutanten rot und ohne ihn grün; Produktcode unverändert. FS-M3 und
+// FS-M4 stehen in tests/r-freigaben-probe.test.mjs.
+
+/**
+ * document-Attrappe auf einem echten EventTarget von Node: Es wertet die Optionen von addEventListener und
+ * removeEventListener aus wie der Browser (etwa once und capture). sichtbarkeit() oben übergeht sie; ein
+ * Lauscher mit { once: true } bliebe dort über jeden Wechsel wirksam.
+ */
+function sichtbarkeitAufEventTarget(start) {
+  const ziel = new EventTarget();
+  const doc = {
+    visibilityState: start,
+    addEventListener: (...argumente) => ziel.addEventListener(...argumente),
+    removeEventListener: (...argumente) => ziel.removeEventListener(...argumente),
+  };
+  globalThis.document = doc;
+  return {
+    setze(zustand) {
+      doc.visibilityState = zustand;
+      ziel.dispatchEvent(new Event("visibilitychange"));
+    },
+  };
+}
+
+for (const nutzer of NUTZER) {
+  test(`FS-M1 (H31) ${nutzer.name}: Der Lauscher bleibt über jeden Wechsel wirksam — mit einem document auf echtem EventTarget (Optionen von addEventListener wie im Browser): jede Rückkehr fragt sofort ab, nicht nur die erste; nach dem Abbau keine`, async (t) => {
+    t.mock.timers.enable({ apis: ["setInterval", "setTimeout"] });
+    const s = sichtbarkeitAufEventTarget("visible");
+    const n = netz();
+    const { lz } = baue(nutzer);
+    lz.rendere();
+    await warte(t, lz, 0);
+    assert.equal(n.an(nutzer.pfad).length, 1, "erster Abruf beim Aufbau");
+    // Die Uhr steht: Jeder weitere Abruf hier kommt aus dem Lauscher, keiner aus dem Takt.
+    for (let rueckkehr = 1; rueckkehr <= 3; rueckkehr++) {
+      s.setze("hidden");
+      await lz.ruhe();
+      assert.equal(n.an(nutzer.pfad).length, rueckkehr, `Wechsel ${rueckkehr} auf verborgen: kein Abruf`);
+      s.setze("visible");
+      await lz.ruhe();
+      assert.equal(n.an(nutzer.pfad).length, rueckkehr + 1, `Rückkehr ${rueckkehr}: sofort ein Abruf`);
+    }
+    lz.abbauen();
+    s.setze("hidden");
+    s.setze("visible");
+    await warte(t, lz, 3 * TAKT);
+    assert.equal(n.abrufe.length, 4, "nach dem Abbau kein Abruf, weder auf visibilitychange noch im Takt");
+    assert.deepEqual(n.andere(nutzer.pfad), [], "keine anderen Abrufe");
+  });
+}
+
+for (const nutzer of NUTZER) {
+  test(`FS-M2 (H48) ${nutzer.name}: Nach einer Rückkehr zwischen zwei Takten läuft der Takt im alten Raster weiter wie auf /content (dort läuft setInterval durch) — Rückkehr bei 90 s: sofort ein Abruf, der nächste im Takt bei 120 s, nicht erst 60 s nach der Rückkehr`, async (t) => {
+    t.mock.timers.enable({ apis: ["setInterval", "setTimeout"] });
+    const s = sichtbarkeit("visible");
+    const n = netz();
+    const { lz } = baue(nutzer);
+    lz.rendere();
+    await warte(t, lz, 0);
+    assert.equal(n.an(nutzer.pfad).length, 1, "0 s: erster Abruf beim Aufbau");
+    await warte(t, lz, TAKT);
+    assert.equal(n.an(nutzer.pfad).length, 2, "60 s: Takt");
+    await warte(t, lz, 10_000);
+    s.setze("hidden");
+    await warte(t, lz, 20_000);
+    assert.equal(n.an(nutzer.pfad).length, 2, "70 s bis 90 s verborgen: kein Abruf");
+    s.setze("visible");
+    await lz.ruhe();
+    assert.equal(n.an(nutzer.pfad).length, 3, "90 s: Rückkehr, sofort ein Abruf");
+    await warte(t, lz, 30_000 - 1);
+    assert.equal(n.an(nutzer.pfad).length, 3, "bis 119,999 s kein weiterer Abruf");
+    await warte(t, lz, 1);
+    assert.equal(n.an(nutzer.pfad).length, 4, "120 s: Takt im alten Raster (60 s, 120 s, 180 s …)");
+    await warte(t, lz, 30_000);
+    assert.equal(n.an(nutzer.pfad).length, 4, "150 s, 60 s nach der Rückkehr: kein Abruf");
+    await warte(t, lz, 30_000);
+    assert.equal(n.an(nutzer.pfad).length, 5, "180 s: Takt");
+    assert.deepEqual(n.andere(nutzer.pfad), [], "keine anderen Abrufe");
+  });
+}

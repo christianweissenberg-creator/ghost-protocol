@@ -12,6 +12,7 @@
 // nachdem die Attrappe die Abfrage protokolliert hat. Gleichzeitigkeit: Ein Tor hält die Antwort der
 // Attrappe zurück, nachdem sie berechnet ist — die Route bekommt den Stand vom Beginn der Abfrage, aber
 // später (wie Postgres, das den Stand vom Beginn einer Abfrage liest).
+// Mutationsprüfung (FS-M3, FS-M4, 09.11.2026): alter_stunden und Höchstdauer nach einer Probe, die Zeit braucht.
 // Kein Netz: Jeder Abruf geht an die Attrappe oder wirft. Die Umgebungswerte unten sind Test-Werte dieses
 // Prozesses, keine echten Schlüssel. Jeder Test beginnt ohne Zwischenstand. Module werden je Test geladen:
 // Fehlt eines (Stand vor der Änderungsprobe), scheitert der einzelne Test, nicht die Datei.
@@ -1034,4 +1035,76 @@ test("FS-P14 Kennung und Zwischenstand (lib/freigaben-cache.ts): je Liste Zählu
   C.merkeFreigaben(w, h, 5_000);
   C.setzeFreigabenZurueck();
   assert.equal(C.gueltigerFreigabenStand(5_000), null, "zurückgesetzt");
+});
+
+// ═══ Mutationsprüfung (09.11.2026) ═══
+// Je Test in Klammern der Mutant, der vorher die ganze Suite überlebte (Mutationslauf gegen c5442fa in einer
+// eigenen Kopie). Jeder Test ist mit seinem Mutanten rot und ohne ihn grün; Produktcode unverändert. FS-M1 und
+// FS-M2 stehen in tests/c-poll-sichtbarkeit.test.mjs.
+
+test("FS-M3 (P40) Nach einer Probe, die Zeit braucht, rechnet die volle Abfrage alter_stunden mit der Uhr der Anfrage (wie vor der Änderungsprobe und wie die Antwort aus dem Zwischenstand), nicht mit der Uhr nach der Probe — an der Rundungsgrenze: 179 s alt bei Beginn der Anfrage = 0,0 h; 182 s (nach 3 s Probe) wären 0,1 h", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: T0 });
+  standard();
+  await hole();
+  assert.deepEqual(anfragen(), VOLL);
+  // Eintrag 2 ändert sich 179 s vor Beginn der nächsten Anfrage; updated_at setzt der Trigger.
+  const beginn = T0 + 10 * MIN;
+  t.mock.timers.setTime(beginn - 179_000);
+  aktualisiere(2, { review_notes: "URTEIL: ABLEHNUNG" });
+  t.mock.timers.setTime(beginn);
+  // Die Probe braucht 3 s (die wartende Abfrage des Paars), die volle Abfrage keine Zeit.
+  welt.vorAntwort = async (a) => {
+    if (istProbe(urlVon(a)) && istWartend(urlVon(a))) t.mock.timers.tick(3_000);
+  };
+  const r = await hole();
+  welt.vorAntwort = null;
+  assert.deepEqual(anfragen(), PROBE_UND_VOLL, "Änderung erkannt: Probe, dann voll");
+  assert.equal(r.kopf.get("x-freigaben-abfrage"), "voll");
+  assert.equal(r.body.erzeugt_am, iso(beginn + 3_000), "Testvoraussetzung: Die Probe hat 3 s gebraucht");
+  const eintrag = r.body.wartend.find((e) => e.id === "2");
+  assert.equal(eintrag.counsel.urteil, "ABLEHNUNG", "die volle Abfrage trägt die Änderung");
+  assert.equal(eintrag.alter_stunden, 0, "179 s bei Beginn der Anfrage = 0,0 h; mit der Uhr nach der Probe wären es 182 s = 0,1 h");
+
+  // Gegenkontrolle: Die Rundungsgrenze liegt zwischen 179 s und 182 s. Dieselbe Zeile, 182 s alt bei Beginn der
+  // nächsten Anfrage (Antwort aus dem Zwischenstand), ist 0,1 h alt.
+  const danach = await hole();
+  assert.deepEqual(anfragen(), PROBE);
+  assert.equal(danach.kopf.get("x-freigaben-abfrage"), "unveraendert");
+  assert.equal(danach.body.wartend.find((e) => e.id === "2").alter_stunden, 0.1, "182 s bei Beginn der Anfrage = 0,1 h");
+});
+
+test("FS-M4 (P48) Höchstdauer nach einer Probe, die Zeit braucht: Die 30 min zählen ab der Uhr unmittelbar vor der vollen Abfrage (vollAm), nicht ab Beginn der Anfrage und nicht ab ihrem Ende — Probe 3 s, volle Abfrage 4 s: bis vollAm + 30 min − 1 ms nur die Probe, ab vollAm + 30 min voll", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: T0 });
+  const MIN30 = 30 * MIN;
+  standard();
+  await hole();
+  assert.deepEqual(anfragen(), VOLL);
+  const beginn = T0 + MIN;
+  t.mock.timers.setTime(beginn);
+  aktualisiere(2, { review_notes: "URTEIL: ABLEHNUNG" });
+  // Nach der Änderung braucht die Anfrage die Probe (3 s) und die volle Abfrage (4 s), je die wartende des Paars.
+  welt.vorAntwort = async (a) => {
+    const url = urlVon(a);
+    if (istProbe(url) && istWartend(url)) t.mock.timers.tick(3_000);
+    if (istVoll(url) && istWartend(url)) t.mock.timers.tick(4_000);
+  };
+  const geaendert = await hole();
+  welt.vorAntwort = null;
+  assert.deepEqual(anfragen(), PROBE_UND_VOLL, "Änderung erkannt: Probe, dann voll");
+  assert.equal(geaendert.kopf.get("x-freigaben-abfrage"), "voll");
+  assert.equal(geaendert.body.erzeugt_am, iso(beginn + 7_000), "Testvoraussetzung: 3 s Probe, dann 4 s volle Abfrage");
+  const vollAm = beginn + 3_000;
+
+  // Ab hier dauern die Abfragen keine Zeit; die Uhr stellt nur der Test.
+  t.mock.timers.setTime(vollAm + MIN30 - 1);
+  let r = await hole();
+  assert.deepEqual(anfragen(), PROBE, "29:59,999 min nach Beginn der vollen Abfrage (30:02,999 min nach Beginn der Anfrage): nur die Probe");
+  assert.equal(r.kopf.get("x-freigaben-abfrage"), "unveraendert");
+  assert.deepEqual(kurz(r.body), kurz(geaendert.body));
+
+  t.mock.timers.tick(1);
+  r = await hole();
+  assert.deepEqual(anfragen(), VOLL, "30 min nach Beginn der vollen Abfrage (29:56 min nach ihrem Ende): voll, ohne Probe");
+  assert.equal(r.kopf.get("x-freigaben-abfrage"), "voll");
+  assert.deepEqual(kurz(r.body), kurz(geaendert.body));
 });
