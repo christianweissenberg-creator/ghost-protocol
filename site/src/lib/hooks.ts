@@ -144,6 +144,42 @@ async function leseAgenten(): Promise<AgentenLesung> {
 // "zuletzt aktiviert vor X" unbemerkt gegen die laufende Uhr. Derselbe Takt wie /api/status.
 const AGENTEN_TAKT_MS = 60_000;
 
+// Agenten sparsam (09.11.2026): Der Takt von useAgents und useAgentDetail pausiert im verborgenen Tab
+// wie usePoll (lib/hooks-status.ts) und die Liste auf /content. Die erste Lesung beim Aufbau bleibt (auch
+// im verborgenen Tab); im Takt keine Lesung, solange document.visibilityState "hidden" ist; beim Wechsel
+// auf sichtbar sofort eine, danach weiter im alten Takt-Raster; ohne document (Server, Tests ohne DOM) nur
+// der Takt. Realtime-Kanäle, refetch und neuLaden sind unverändert.
+// Nebenwirkung wie bei usePoll: Die Lesung bei der Rückkehr hat keinen Mindestabstand; wer oft zwischen
+// Tabs wechselt, löst mehr Lesungen aus als der Takt allein. Gespart wird nur, wenn der Tab länger als ein
+// Takt verborgen ist: Jede Rückkehr kostet eine Lesung, eine Verbergung von h Sekunden spart im Mittel h/60
+// Takte. Kürzere Verbergungen lesen daher im Mittel öfter als vorher, bei einem Takt gleich oft (Prüfung
+// 09.11.2026; ein Mindestabstand wiche von usePoll und /content ab und ist nicht umgesetzt).
+// Tests: tests/c-agenten-sichtbarkeit.test.mjs.
+
+/** Tab verborgen (document.visibilityState "hidden")? Ohne document (Server, Tests ohne DOM) nie. */
+function tabVerborgen(): boolean {
+  return typeof document !== "undefined" && document.visibilityState === "hidden";
+}
+
+/**
+ * Takt, der im verborgenen Tab pausiert: lesen() im Takt nur bei sichtbarem Tab, beim Wechsel auf sichtbar
+ * sofort; der Takt läuft dabei im alten Raster weiter. Liefert das Aufräumen: Takt stoppen und den Lauscher
+ * mit denselben Angaben abmelden, mit denen er angemeldet wurde.
+ */
+function sichtbarerTakt(lesen: () => void, intervallMs: number): () => void {
+  const takt = setInterval(() => {
+    if (!tabVerborgen()) lesen();
+  }, intervallMs);
+  const beiSichtwechsel = () => {
+    if (!tabVerborgen()) lesen();
+  };
+  if (typeof document !== "undefined") document.addEventListener("visibilitychange", beiSichtwechsel);
+  return () => {
+    clearInterval(takt);
+    if (typeof document !== "undefined") document.removeEventListener("visibilitychange", beiSichtwechsel);
+  };
+}
+
 // Fetch all agents from Supabase (ohne ausgeblendete Agenten)
 export function useAgents() {
   const [agents, setAgents] = useState<Agent[]>([]);
@@ -170,12 +206,26 @@ export function useAgents() {
 
   useEffect(() => {
     let aktiv = true;
-    const lesen = () =>
-      leseAgenten().then((lesung) => {
-        if (aktiv) uebernehmen(lesung);
+    // Lesungen können sich überlappen (Rückkehr kurz vor dem Takt, eine Antwort langsamer als der Takt). Jede
+    // Lesung dieses Effektlaufs bekommt eine laufende Nummer; ihre Antwort gilt nur, solange keine jüngere
+    // übernommen ist. Eine ältere Antwort, die nach einer jüngeren ankommt, überschreibt diese also nicht;
+    // kommt sie vorher an, gilt sie bis dahin. So endet loading mit der ersten Antwort, auch wenn bei der
+    // Rückkehr schon die nächste Lesung läuft, und die Anzeige bleibt nicht stehen, wenn jede Lesung länger
+    // braucht als der Takt (Prüfung 09.11.2026: Mit "nur die zuletzt gestartete Lesung gilt" wie R29 in
+    // lib/hooks-status.ts wurde dann jede Antwort verworfen). refetch bleibt außerhalb dieser Folge.
+    let gestartet = 0;
+    let uebernommen = 0;
+    const lesen = () => {
+      gestartet += 1;
+      const nr = gestartet;
+      return leseAgenten().then((lesung) => {
+        if (!aktiv || nr <= uebernommen) return;
+        uebernommen = nr;
+        uebernehmen(lesung);
       });
+    };
     lesen();
-    const takt = setInterval(lesen, AGENTEN_TAKT_MS);
+    const taktStoppen = sichtbarerTakt(() => void lesen(), AGENTEN_TAKT_MS);
 
     // Realtime subscription for agent changes (nur sichtbare Agenten)
     const channel = supabase
@@ -194,7 +244,7 @@ export function useAgents() {
 
     return () => {
       aktiv = false;
-      clearInterval(takt);
+      taktStoppen();
       supabase.removeChannel(channel);
     };
   }, [uebernehmen]);
@@ -381,10 +431,16 @@ export function useAgentDetail(agentId: string) {
 
   // Gegencheck 06.11.2026 (B24): alle 60 s neu lesen — Aktivierungen von anderswo (Command
   // Center, Cron) erscheinen sonst nicht, ein UPDATE-Ereignis für agents ist nicht belegt.
+  // Agenten sparsam (09.11.2026): im verborgenen Tab pausiert, bei der Rückkehr sofort Agent und
+  // Nachrichten (sichtbarerTakt). Überlappen sich zwei Läufe, verwirft der Ladeeffekt den älteren: Jeder
+  // neue Ladezähler beendet den vorigen Lauf (aktiv = false); dessen spätere Antwort wird nicht übernommen.
+  // Das gilt auch für den ersten Lauf: Kommt die Rückkehr, bevor er fertig ist (Seite im verborgenen Tab
+  // geöffnet, kurz darauf hingewechselt), bleibt loading bis zum Ende des Rückkehr-Laufs true, und dessen
+  // Abfragen kommen hinzu (Prüfung 09.11.2026, AS-U7). Ebenso verwirft der nächste Takt einen Lauf, der
+  // länger braucht als der Takt; das war schon vor der Pause im verborgenen Tab so.
   useEffect(() => {
     if (!abfragbar) return;
-    const takt = setInterval(() => setLadeZaehler((n) => n + 1), AGENTEN_TAKT_MS);
-    return () => clearInterval(takt);
+    return sichtbarerTakt(() => setLadeZaehler((n) => n + 1), AGENTEN_TAKT_MS);
   }, [abfragbar]);
 
   /** Agent und Nachrichten neu lesen, etwa nach einer Aktivierung (Realtime ist nicht belegt). */
