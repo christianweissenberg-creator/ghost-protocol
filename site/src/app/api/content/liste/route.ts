@@ -31,9 +31,15 @@ import type { ContentAbfrageArt } from "@/lib/content-liste-cache";
 // updated_at), antwortet die Route mit 502 supabase und ohne den Zwischenstand. Scheitert die volle
 // Abfrage, 502 wie bisher; der Zwischenstand bleibt, wie er war. Was die Kennung erkennt und was nicht:
 // lib/content-liste-cache.ts.
-// Probe und volle Abfrage teilen ein Abbruchsignal mit ABFRAGE_TIMEOUT_MS (8 s): Eine Anfrage wartet
-// höchstens so lange auf Supabase und bleibt damit unter dem Zeitlimit der Seite
-// (CONTENT_ABRUF_GRENZE_MS, 12 s) — deren Fehlerantwort kommt so weiterhin an.
+// Zeitlimit: Probe und volle Abfrage bekommen je ein eigenes Abbruchsignal mit ABFRAGE_TIMEOUT_MS (8 s),
+// die volle Abfrage also genau wie vor der Änderungsprobe. Mit einem gemeinsamen Signal bliebe der vollen
+// Abfrage nach einer langsamen Probe nur der Rest der 8 s; scheiterte sie daran, bliebe der alte
+// Zwischenstand, und jede weitere Anfrage liefe bis zur Höchstdauer in denselben Fehler. Folge der
+// eigenen Signale: Braucht eine Anfrage Probe und volle Abfrage, wartet sie bis zu 16 s auf Supabase.
+// Dauert das länger als das Zeitlimit der Seite (CONTENT_ABRUF_GRENZE_MS, 12 s), zeigt die Seite für
+// diesen Takt ihren eigenen Zeitfehler statt der Antwort der Route. Die Route gibt Supabase nur ihre
+// eigenen Signale mit, nicht den Abbruch der Seite: Gelingt die volle Abfrage, ersetzt sie den
+// Zwischenstand trotzdem, und die nächste Anfrage braucht nur die Probe.
 //
 // Antwort 200: zeilen, grenze, abgeschnitten (die Liste hat so viele Zeilen wie die Grenze — ältere
 // fehlen), gelesen_am (nach der letzten Supabase-Abfrage dieser Anfrage, Probe oder volle Abfrage; Uhr
@@ -77,7 +83,6 @@ export async function GET() {
         ? fehlerAntwort(500, bereinigeFehler(e), "konfiguration")
         : fehlerAntwort(502, bereinigeFehler(e), "supabase");
     }
-    const signal = AbortSignal.timeout(ABFRAGE_TIMEOUT_MS);
     const stand = gueltigerContentStand(Date.now());
     if (stand !== null) {
       const probe = await client
@@ -85,11 +90,13 @@ export async function GET() {
         .select(CONTENT_PROBE_SPALTEN)
         .order("created_at", { ascending: false })
         .limit(CONTENT_LISTE_GRENZE)
-        .abortSignal(signal);
+        .abortSignal(AbortSignal.timeout(ABFRAGE_TIMEOUT_MS));
       if (probe.error) return fehlerAntwort(502, bereinigeFehler(probe.error), "supabase");
       if (!Array.isArray(probe.data)) return fehlerAntwort(502, "Änderungsprobe: Antwort ohne Zeilenliste", "supabase");
       const kennung = contentKennung(probe.data);
       if (kennung === null) return fehlerAntwort(502, "Änderungsprobe: Zeile ohne id oder updated_at", "supabase");
+      // Genau der Zwischenstand, gegen den die Probe verglichen hat — nicht der, der jetzt im Speicher liegt:
+      // Eine gleichzeitige Anfrage kann ihn während der Probe ersetzt haben, auch durch einen älteren.
       if (kennung === stand.kennung) return listenAntwort(stand.zeilen, "unveraendert");
     }
     const vollAm = Date.now();
@@ -98,7 +105,7 @@ export async function GET() {
       .select("*")
       .order("created_at", { ascending: false })
       .limit(CONTENT_LISTE_GRENZE)
-      .abortSignal(signal);
+      .abortSignal(AbortSignal.timeout(ABFRAGE_TIMEOUT_MS));
     if (error) return fehlerAntwort(502, bereinigeFehler(error), "supabase");
     if (!Array.isArray(data)) return fehlerAntwort(502, "Antwort ohne Zeilenliste", "supabase");
     merkeContentListe(data, vollAm);

@@ -28,9 +28,11 @@ export const CONTENT_LISTE_GRENZE = 50;
 export const CONTENT_TAKT_MS = 15_000;
 
 /**
- * Zeitlimit einer Abfrage im Browser. Über dem Zeitlimit der Route für Supabase (8 s, ABFRAGE_TIMEOUT_MS
- * in lib/status-server.ts), damit deren eigene Fehlerantwort ankommt, und unter dem Takt: Eine Abfrage
- * ohne Antwort wird so als Fehler sichtbar, bevor die nächste startet.
+ * Zeitlimit einer Abfrage im Browser. Über dem Zeitlimit einer Supabase-Abfrage der Route (8 s,
+ * ABFRAGE_TIMEOUT_MS in lib/status-server.ts), damit deren eigene Fehlerantwort ankommt, und unter dem
+ * Takt: Eine Abfrage ohne Antwort wird so als Fehler sichtbar, bevor die nächste startet. Braucht die
+ * Listen-Route nach einer Änderung Probe und volle Abfrage (je bis 8 s) und zusammen länger als diese
+ * Grenze, zeigt die Seite für diesen Takt ihren eigenen Zeitfehler (app/api/content/liste/route.ts).
  */
 export const CONTENT_ABRUF_GRENZE_MS = 12_000;
 

@@ -7,6 +7,8 @@
 // (welt.log): Probe und volle Abfrage unterscheiden sich an der Spaltenliste. Änderungen an der Tabelle
 // spielt der Test direkt in der Attrappe nach; ein UPDATE setzt updated_at neu wie der Trigger
 // content_updated_at (scripts/setup_supabase_v2.sql:339-342).
+// Zeitlimits (AbortSignal.timeout) laufen in R7-P12 auf derselben Attrappen-Uhr; gleichzeitige Anfragen
+// (R7-P13 bis R7-P15) halten an Toren in welt.vorAntwort.
 // Kein Netz: Jeder Abruf geht an die Attrappe oder wirft. Die Umgebungswerte unten sind Test-Werte dieses
 // Prozesses, keine echten Schlüssel. Jeder Test beginnt ohne Zwischenstand. Module werden je Test
 // geladen: Fehlt eines (Stand vor der Änderungsprobe), scheitert der einzelne Test, nicht die Datei.
@@ -122,9 +124,63 @@ async function holeListe(anfrage) {
 
 const abbruch = () => Object.assign(new Error("This operation was aborted"), { name: "AbortError" });
 
+/**
+ * Zeitlimits auf der Attrappen-Uhr (Date von node:test): AbortSignal.timeout(ms) liefert ein Signal mit der
+ * Frist jetzt + ms. Die zurückgegebene Funktion dauert(a, ms) lässt die Supabase-Abfrage a ms brauchen:
+ * Läuft ihr Signal vorher ab, steht die Uhr danach auf der Frist und die Abfrage endet mit dem Abbruch —
+ * wie fetch, das dann mit signal.reason ablehnt; sonst steht die Uhr ms weiter.
+ */
+function zeitlimitsAufAttrappenUhr(t) {
+  const fristen = new Map();
+  t.mock.method(AbortSignal, "timeout", (ms) => {
+    const steuerung = new AbortController();
+    fristen.set(steuerung.signal, { bis: Date.now() + ms, steuerung });
+    return steuerung.signal;
+  });
+  return async function dauert(a, ms) {
+    const frist = fristen.get(a.signal);
+    if (!frist) throw new Error(`Abfrage ohne Zeitlimit: ${a.url.search}`);
+    if (frist.bis <= Date.now() + ms) {
+      t.mock.timers.tick(Math.max(0, frist.bis - Date.now()));
+      if (!frist.steuerung.signal.aborted) frist.steuerung.abort(new DOMException("The operation was aborted due to timeout", "TimeoutError"));
+      throw a.signal.reason;
+    }
+    t.mock.timers.tick(ms);
+  };
+}
+
+/** Tor für welt.vorAntwort: warte() hält die Abfrage an, bis oeffnen(); angekommen erfüllt sich, sobald sie dort steht. */
+function tor() {
+  let oeffnen;
+  let ankommen;
+  const offen = new Promise((r) => (oeffnen = r));
+  const angekommen = new Promise((r) => (ankommen = r));
+  return {
+    angekommen,
+    oeffnen: () => oeffnen(),
+    async warte() {
+      ankommen();
+      await offen;
+    },
+  };
+}
+
+/** Wartet, bis die Listen-Anfrage am Tor steht. Endet sie vorher (sie stellt die erwartete Abfrage nicht), scheitert der Test, statt zu hängen. */
+async function bisAmTor(torX, anfrage) {
+  const ende = anfrage.then(
+    () => "beendet",
+    () => "beendet",
+  );
+  const was = await Promise.race([torX.angekommen.then(() => "am Tor"), ende]);
+  assert.equal(was, "am Tor", "Die Anfrage endete, ohne das Tor zu erreichen");
+}
+
+/** Probe auf einem Schnappschuss: id und updated_at der Zeilen, die eine Probe jetzt läse. */
+const probeSicht = () => tabelle().map((z) => ({ id: z.id, updated_at: z.updated_at }));
+
 // ═══ Tests ═══
 
-test("R7-P1 Probe: select=id%2Cupdated_at, created_at absteigend, Grenze 50, Service-Schlüssel; volle Abfrage exakt wie bisher; Probe und volle Abfrage einer Anfrage teilen ein Abbruchsignal mit 8 s", async (t) => {
+test("R7-P1 Probe: select=id%2Cupdated_at, created_at absteigend, Grenze 50, Service-Schlüssel; volle Abfrage exakt wie bisher; jede Supabase-Abfrage mit eigenem Abbruchsignal von 8 s — auch Probe und volle Abfrage derselben Anfrage", async (t) => {
   const { ABFRAGE_TIMEOUT_MS } = await ladeModul("src/lib/status-server.ts");
   for (const id of [1, 2, 3]) zeileDb(id);
   const erzeugt = new Map();
@@ -153,9 +209,11 @@ test("R7-P1 Probe: select=id%2Cupdated_at, created_at absteigend, Grenze 50, Ser
     ],
   );
   for (const a of gesehen) assert.equal(erzeugt.get(a.signal), ABFRAGE_TIMEOUT_MS, a.url.search);
-  assert.equal(gesehen[2].signal, gesehen[3].signal, "Probe und volle Abfrage einer Anfrage: ein Signal, zusammen höchstens 8 s");
+  // Ein gemeinsames Signal ließe der vollen Abfrage nach der Probe nur den Rest der 8 s (R7-P12).
+  assert.notEqual(gesehen[2].signal, gesehen[3].signal, "Probe und volle Abfrage einer Anfrage: je ein eigenes Signal");
   assert.notEqual(gesehen[1].signal, gesehen[2].signal, "jede Anfrage ihr eigenes Signal");
-  assert.equal(erzeugt.size, 3, "ein Signal je Anfrage");
+  assert.equal(new Set(gesehen.map((a) => a.signal)).size, 4, "ein Signal je Supabase-Abfrage");
+  assert.equal(erzeugt.size, 4, "kein Signal ohne Abfrage");
 });
 
 test("R7-P2 Erste Anfrage nur voll, die nächste ohne Änderung nur die Probe — gleiche Zeilen, neuer gelesen_am, Header unveraendert, auch für eine andere Sitzung; 120 Takte in 29:45 min: genau eine volle Abfrage", async (t) => {
@@ -508,4 +566,156 @@ test("R7-P11 Kennung und Zwischenstand (lib/content-liste-cache.ts): Reihenfolge
   assert.notEqual(C.gueltigerContentStand(3_000), null);
   C.setzeContentListeZurueck();
   assert.equal(C.gueltigerContentStand(3_000), null, "zurückgesetzt");
+});
+
+test("R7-P12 Zeitlimit je Abfrage: Probe 3 s und volle Abfrage 6 s — zusammen über 8 s, jede für sich darunter: nach einer Änderung 200 voll mit den neuen Zeilen, danach wieder nur die Probe; erst eine Abfrage, die selbst 8 s braucht, scheitert", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: T0 });
+  const dauert = zeitlimitsAufAttrappenUhr(t);
+  for (let i = 1; i <= 3; i++) zeileDb(i);
+  let probeMs = 3_000;
+  let vollMs = 6_000;
+  welt.vorAntwort = async (a) => {
+    if (istProbe(a)) await dauert(a, probeMs);
+    else if (istVoll(a)) await dauert(a, vollMs);
+  };
+  let r = await holeListe();
+  assert.deepEqual([r.status, anfragen()], [200, ["voll"]]);
+  assert.equal(r.body.gelesen_am, iso(T0 + 6_000));
+  t.mock.timers.setTime(T0 + 15_000);
+  r = await holeListe();
+  assert.deepEqual([r.status, r.kopf.get("x-content-abfrage"), anfragen()], [200, "unveraendert", ["probe"]]);
+
+  aktualisiere(2, { status: "freigegeben" });
+  t.mock.timers.setTime(T0 + 30_000);
+  r = await holeListe();
+  assert.equal(r.status, 200, `Probe 3 s, dann volle Abfrage 6 s mit eigenen 8 s: ${JSON.stringify(r.body.fehler ?? null)}`);
+  assert.deepEqual(anfragen(), ["probe", "voll"]);
+  assert.equal(r.kopf.get("x-content-abfrage"), "voll");
+  assert.deepEqual(r.body.zeilen, tabelle(), "mit der geänderten Zeile 2");
+  assert.equal(r.body.gelesen_am, iso(T0 + 39_000), "nach 3 s Probe und 6 s voller Abfrage");
+  t.mock.timers.setTime(T0 + 45_000);
+  r = await holeListe();
+  assert.deepEqual([r.status, r.kopf.get("x-content-abfrage"), anfragen()], [200, "unveraendert", ["probe"]], "Zwischenstand ersetzt: wieder nur die Probe");
+  assert.deepEqual(r.body.zeilen, tabelle());
+
+  // Gegenkontrolle: Braucht eine Abfrage selbst 8 s, bricht ihr eigenes Signal sie ab.
+  const stand = (await zwischenspeicher()).gueltigerContentStand(Date.now());
+  assert.ok(stand);
+  probeMs = 8_000;
+  t.mock.timers.setTime(T0 + 60_000);
+  r = await holeListe();
+  assert.deepEqual([r.status, r.body, anfragen()], [502, { fehler: "Zeitüberschreitung (8 s)", fehler_art: "supabase" }, ["probe"]], "Probe 8 s");
+  assert.equal(Date.now() - (T0 + 60_000), 8_000, "Probe nach 8 s abgebrochen");
+  probeMs = 3_000;
+  vollMs = 8_000;
+  aktualisiere(3, { status: "abgelehnt" });
+  t.mock.timers.setTime(T0 + 75_000);
+  r = await holeListe();
+  assert.deepEqual([r.status, r.body, anfragen()], [502, { fehler: "Zeitüberschreitung (8 s)", fehler_art: "supabase" }, ["probe", "voll"]], "volle Abfrage 8 s");
+  assert.equal(Date.now() - (T0 + 75_000), 11_000, "3 s Probe, dann 8 s volle Abfrage bis zum Abbruch");
+  assert.equal((await zwischenspeicher()).gueltigerContentStand(Date.now()), stand, "Zwischenstand unverändert");
+});
+
+test("R7-P13 Gleichzeitig: Endet eine ältere volle Abfrage zuletzt, wird der Zwischenstand älter — die nächste Anfrage erkennt das mit der Probe und liest voll, nie eine veraltete Liste", async () => {
+  for (let i = 1; i <= 3; i++) zeileDb(i);
+  const S1 = tabelle();
+  const torA = tor();
+  let ersteVolle = true;
+  welt.vorAntwort = async (a) => {
+    if (ersteVolle && istVoll(a)) {
+      ersteVolle = false;
+      a.schnappschuss = tabelle(); // Postgres liest den Stand vom Beginn der Abfrage
+      await torA.warte();
+    }
+  };
+  welt.stoerung = (a) => (a.schnappschuss ? { status: 200, body: a.schnappschuss } : null);
+  const anfrageA = holeListe();
+  await bisAmTor(torA, anfrageA);
+  assert.deepEqual(anfragen(), ["voll"], "A: volle Abfrage läuft");
+  aktualisiere(2, { status: "freigegeben" });
+  const S2 = tabelle();
+  const b = await holeListe();
+  assert.deepEqual(anfragen(), ["voll"], "B: noch kein Zwischenstand");
+  assert.deepEqual(b.body.zeilen, S2);
+  const c = await holeListe();
+  assert.deepEqual([anfragen(), c.kopf.get("x-content-abfrage")], [["probe"], "unveraendert"]);
+  assert.deepEqual(c.body.zeilen, S2);
+  torA.oeffnen();
+  const a = await anfrageA;
+  assert.equal(a.status, 200);
+  assert.deepEqual(a.body.zeilen, S1, "A liefert ihren Schnappschuss");
+  assert.deepEqual((await zwischenspeicher()).gueltigerContentStand(Date.now()).zeilen, S1, "A endete zuletzt: Zwischenstand jetzt der ältere");
+  const d = await holeListe();
+  assert.deepEqual(anfragen(), ["probe", "voll"], "die Probe erkennt den älteren Zwischenstand");
+  assert.equal(d.kopf.get("x-content-abfrage"), "voll");
+  assert.deepEqual(d.body.zeilen, S2, "keine veraltete Liste");
+  const e = await holeListe();
+  assert.deepEqual(anfragen(), ["probe"]);
+  assert.deepEqual(e.body.zeilen, S2);
+});
+
+test("R7-P14 Gleichzeitig: Endet eine ältere volle Abfrage während der Probe und speichert den alten Stand, antwortet die Anfrage mit den Zeilen, gegen die ihre Probe verglichen hat — nie mit dem alten Stand", async () => {
+  for (let i = 1; i <= 3; i++) zeileDb(i);
+  const S1 = tabelle();
+  const torA0 = tor();
+  const torA = tor();
+  let a0 = true;
+  let probeA = true;
+  welt.vorAntwort = async (a) => {
+    if (a0 && istVoll(a)) {
+      a0 = false;
+      a.schnappschuss = tabelle(); // Postgres liest den Stand vom Beginn der Abfrage
+      await torA0.warte();
+    } else if (probeA && istProbe(a)) {
+      probeA = false;
+      await torA.warte(); // Ergebnis erst nach dem Tor: die Tabelle von dann (S2)
+    }
+  };
+  welt.stoerung = (a) => (a.schnappschuss ? { status: 200, body: a.schnappschuss } : null);
+  const anfrageA0 = holeListe();
+  await bisAmTor(torA0, anfrageA0);
+  aktualisiere(2, { status: "freigegeben" });
+  const S2 = tabelle();
+  const b = await holeListe();
+  assert.deepEqual(b.body.zeilen, S2, "B speichert S2");
+  const anfrageA = holeListe();
+  await bisAmTor(torA, anfrageA);
+  torA0.oeffnen();
+  const antwortA0 = await anfrageA0;
+  assert.deepEqual(antwortA0.body.zeilen, S1, "A0 liefert ihren Schnappschuss");
+  assert.deepEqual((await zwischenspeicher()).gueltigerContentStand(Date.now()).zeilen, S1, "A0 endete zuletzt: Zwischenstand jetzt S1");
+  torA.oeffnen();
+  const a = await anfrageA;
+  assert.equal(a.status, 200);
+  assert.equal(a.kopf.get("x-content-abfrage"), "unveraendert");
+  assert.deepEqual(a.body.zeilen, S2, "A: Die Probe sah S2 und verglich gegen S2 — nie S1");
+  assert.deepEqual(anfragen(), ["voll", "voll", "probe"]);
+});
+
+test("R7-P15 Gleichzeitig: Sieht die Probe noch den alten Stand, während eine andere Anfrage den neuen speichert, antwortet die Anfrage mit den Zeilen, gegen die ihre Probe verglichen hat", async () => {
+  for (let i = 1; i <= 3; i++) zeileDb(i);
+  const S1 = tabelle();
+  await holeListe();
+  assert.deepEqual(anfragen(), ["voll"]);
+  const torA = tor();
+  let erste = true;
+  welt.vorAntwort = async (a) => {
+    if (erste && istProbe(a)) {
+      erste = false;
+      a.schnappschuss = probeSicht(); // Postgres liest den Stand vom Beginn der Abfrage
+      await torA.warte();
+    }
+  };
+  welt.stoerung = (a) => (a.schnappschuss ? { status: 200, body: a.schnappschuss } : null);
+  const anfrageA = holeListe();
+  await bisAmTor(torA, anfrageA);
+  aktualisiere(2, { status: "freigegeben" });
+  const S2 = tabelle();
+  const b = await holeListe();
+  assert.deepEqual(b.body.zeilen, S2, "B speichert S2");
+  torA.oeffnen();
+  const a = await anfrageA;
+  assert.equal(a.kopf.get("x-content-abfrage"), "unveraendert");
+  assert.deepEqual(a.body.zeilen, S1, "A: die Zeilen, gegen die ihre Probe verglich (S1), nicht der inzwischen gespeicherte Stand S2");
+  assert.deepEqual(anfragen(), ["probe", "probe", "voll"]);
 });

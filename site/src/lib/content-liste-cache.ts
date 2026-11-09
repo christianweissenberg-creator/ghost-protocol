@@ -16,17 +16,24 @@
 // UPDATE neu (content_updated_at, BEFORE UPDATE, NEW.updated_at = NOW(); scripts/setup_supabase_v2.sql).
 // Was sie nicht erkennt — Schreiben bei abgeschalteten Triggern, denselben Zeitstempel zweier
 // Transaktionen auf derselben Zeile (NOW() ist der Beginn der Transaktion), eine Zeile, die mit
-// gleicher id und ausdrücklich gesetztem gleichem updated_at neu eingefügt wird —, fängt die Höchstdauer
-// ab: Ist die letzte volle Abfrage CONTENT_VOLL_SPAETESTENS_MS (30 min) alt, liest die Route wieder voll,
-// auch ohne erkannte Änderung. Bei Gleichstand in created_at legt Postgres die Reihenfolge der
+// gleicher id und ausdrücklich gesetztem gleichem updated_at neu eingefügt wird, eine Änderung am
+// Aufbau der Tabelle (Spalte hinzugefügt, entfernt, umbenannt oder mit neuem Typ: ALTER TABLE löst
+// keinen Zeilen-Trigger aus, ids und updated_at bleiben gleich, die Zeilen kommen bis dahin in der alten
+// Form) —, fängt die Höchstdauer ab: Ist die letzte volle Abfrage CONTENT_VOLL_SPAETESTENS_MS (30 min)
+// alt, liest die Route wieder voll, auch ohne erkannte Änderung. Früher hilft ein Neustart des
+// Servers: Er leert den Zwischenstand. Fehlt die Spalte updated_at selbst, scheitert die Probe (502 bis
+// zur Höchstdauer); danach liest die Route bei jeder Anfrage voll, weil sich aus Zeilen ohne updated_at
+// keine Kennung bilden lässt. Bei Gleichstand in created_at legt Postgres die Reihenfolge der
 // gleichrangigen Zeilen nicht fest; weicht sie zwischen zwei Abfragen ab, liest die Route voll — mehr
 // Abfragen, nie eine veraltete Liste.
 //
 // Die Kennung des Zwischenstands stammt aus den vollen Zeilen, nicht aus der Probe: Ändert sich etwas
 // zwischen Probe und voller Abfrage, passt sie trotzdem zu den gespeicherten Zeilen. Gleichzeitige
-// Anfragen lesen jede für sich; es gilt das Ergebnis der zuletzt beendeten vollen Abfrage. Weil jede
-// Anfrage vor der Antwort mit der Probe gegen den aktuellen Stand vergleicht, kostet ein älterer
-// Zwischenstand höchstens eine weitere volle Abfrage.
+// Anfragen lesen jede für sich; es gilt das Ergebnis der zuletzt beendeten vollen Abfrage — endet eine
+// ältere zuletzt, wird der Zwischenstand älter. Weil jede Anfrage vor der Antwort mit der Probe gegen
+// den aktuellen Stand vergleicht, kostet das höchstens eine weitere volle Abfrage. Eine Antwort ohne
+// volle Abfrage trägt die Zeilen genau des Zwischenstands, gegen den ihre Probe verglichen hat (die
+// Route liest ihn einmal, vor der Probe), nicht die des Stands, der inzwischen im Speicher liegt.
 //
 // Nur die Route importiert diese Datei ("server-only"); kein Browser-Code erreicht sie (Wächter R5 in
 // tests/r-content-waechter.test.mjs). Verhalten: tests/r-content-probe.test.mjs.
