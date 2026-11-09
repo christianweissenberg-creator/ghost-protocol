@@ -177,6 +177,13 @@ async function bisAmTor(torX, anfrage) {
   assert.equal(was, "am Tor", "Die Anfrage endete, ohne das Tor zu erreichen");
 }
 
+/**
+ * Zeitlimit der Tests mit Toren (R7-P13 bis R7-P15). Stellt die Route eine andere Abfrage als erwartet,
+ * wartet eine Anfrage an einem Tor, das kein Test öffnet; ohne Grenze hinge npm test dann, statt einen
+ * roten Test zu zeigen (so im Mutationslauf vom 09.11.2026). Normal enden diese Tests in Millisekunden.
+ */
+const TOR_TEST_GRENZE = { timeout: 10_000 };
+
 /** Probe auf einem Schnappschuss: id und updated_at der Zeilen, die eine Probe jetzt läse. */
 const probeSicht = () => tabelle().map((z) => ({ id: z.id, updated_at: z.updated_at }));
 
@@ -618,7 +625,7 @@ test("R7-P12 Zeitlimit je Abfrage: Probe 3 s und volle Abfrage 6 s — zusammen 
   assert.equal((await zwischenspeicher()).gueltigerContentStand(Date.now()), stand, "Zwischenstand unverändert");
 });
 
-test("R7-P13 Gleichzeitig: Endet eine ältere volle Abfrage zuletzt, wird der Zwischenstand älter — die nächste Anfrage erkennt das mit der Probe und liest voll, nie eine veraltete Liste", async () => {
+test("R7-P13 Gleichzeitig: Endet eine ältere volle Abfrage zuletzt, wird der Zwischenstand älter — die nächste Anfrage erkennt das mit der Probe und liest voll, nie eine veraltete Liste", TOR_TEST_GRENZE, async () => {
   for (let i = 1; i <= 3; i++) zeileDb(i);
   const S1 = tabelle();
   const torA = tor();
@@ -656,7 +663,7 @@ test("R7-P13 Gleichzeitig: Endet eine ältere volle Abfrage zuletzt, wird der Zw
   assert.deepEqual(e.body.zeilen, S2);
 });
 
-test("R7-P14 Gleichzeitig: Endet eine ältere volle Abfrage während der Probe und speichert den alten Stand, antwortet die Anfrage mit den Zeilen, gegen die ihre Probe verglichen hat — nie mit dem alten Stand", async () => {
+test("R7-P14 Gleichzeitig: Endet eine ältere volle Abfrage während der Probe und speichert den alten Stand, antwortet die Anfrage mit den Zeilen, gegen die ihre Probe verglichen hat — nie mit dem alten Stand", TOR_TEST_GRENZE, async () => {
   for (let i = 1; i <= 3; i++) zeileDb(i);
   const S1 = tabelle();
   const torA0 = tor();
@@ -694,7 +701,7 @@ test("R7-P14 Gleichzeitig: Endet eine ältere volle Abfrage während der Probe u
   assert.deepEqual(anfragen(), ["voll", "voll", "probe"]);
 });
 
-test("R7-P15 Gleichzeitig: Sieht die Probe noch den alten Stand, während eine andere Anfrage den neuen speichert, antwortet die Anfrage mit den Zeilen, gegen die ihre Probe verglichen hat", async () => {
+test("R7-P15 Gleichzeitig: Sieht die Probe noch den alten Stand, während eine andere Anfrage den neuen speichert, antwortet die Anfrage mit den Zeilen, gegen die ihre Probe verglichen hat", TOR_TEST_GRENZE, async () => {
   for (let i = 1; i <= 3; i++) zeileDb(i);
   const S1 = tabelle();
   await holeListe();
