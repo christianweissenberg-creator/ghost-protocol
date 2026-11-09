@@ -15,6 +15,8 @@
 //   authenticated). Jeder Zugriff scheitert wie bei PostgREST ohne Recht (42501, HTTP 401), Realtime
 //   liefert nichts. /content und das Objekt-Studio zeigen trotzdem alle Zeilen — über die echten Routen
 //   im Prozess.
+// Teil M — Mutationsprüfung (09.11.2026): no-store auf jeder Antwort beider Routen, gelesen_am nach der
+//   Abfrage, 500 programmfehler bei einer unerwarteten Ausnahme, Antwort ohne lesbares JSON auf der Seite.
 // Kein Netz: Jeder Abruf geht an eine Attrappe oder wirft. Die Umgebungswerte unten sind Test-Werte
 // dieses Prozesses, keine echten Schlüssel. Module werden je Test geladen: Fehlt eines (Stand vor
 // Schritt 3), scheitert der einzelne Test, nicht die Datei.
@@ -427,9 +429,10 @@ const OFFEN = Symbol("offen");
 
 /**
  * fetch-Attrappe der Seite. Liste und Zeile beantwortet der Test (antworte/wirf), auch später; ein
- * Abbruch über das Signal lehnt ab wie fetch (AbortError). Kalender und Objekte beantwortet sie
- * selbst, Status und Pipeline aus vorbereiteten Antworten ([Status, Daten]; für die Pipeline auch ein
- * Error = Netzfehler oder OFFEN); alles andere wirft.
+ * Abbruch über das Signal lehnt ab wie fetch (AbortError). antworteText liefert einen Körper, der kein
+ * JSON ist (etwa die Fehlerseite eines Proxys): json() scheitert dann wie bei fetch. Kalender und
+ * Objekte beantwortet sie selbst, Status und Pipeline aus vorbereiteten Antworten ([Status, Daten]; für
+ * die Pipeline auch ein Error = Netzfehler oder OFFEN); alles andere wirft.
  */
 function netz({ statusAntworten = [], pipelineAntworten = [] } = {}) {
   const abrufe = [];
@@ -440,6 +443,10 @@ function netz({ statusAntworten = [], pipelineAntworten = [] } = {}) {
       a.antworte = (status, daten) => {
         a.erledigt = true;
         ok({ status, ok: status >= 200 && status < 300, json: async () => daten });
+      };
+      a.antworteText = (status, roh) => {
+        a.erledigt = true;
+        ok({ status, ok: status >= 200 && status < 300, json: async () => JSON.parse(roh) });
       };
       a.wirf = (e) => {
         a.erledigt = true;
@@ -1106,4 +1113,110 @@ test("R6 Browser-Client ohne Rechte auf content (Simulation): Er bekommt für co
   const assets = [...html.matchAll(/data-asset="(\d+)"/g)].map((m) => Number(m[1])).sort((a, b) => a - b);
   assert.deepEqual(assets, [1, 2, 3, 4, 5, 6, 7]);
   assert.ok(anfragen.every((a) => a === "content:service"), anfragen.join(", "));
+});
+
+// ═══ Teil M: Mutationsprüfung (09.11.2026) ═══
+// Je Test in Klammern die Mutanten, die vorher die ganze Suite überlebten (Mutationslauf gegen 35ad61a in
+// einer eigenen Kopie). Jeder Test ist mit seinem Mutanten rot und ohne ihn grün; Produktcode unverändert.
+
+test("R-M1 (M35, M36) Cache-Control no-store auf jeder Antwort beider Routen — auch 400 eingabe, 502 supabase und 500 konfiguration der Zeile", async () => {
+  zeileDb(7, { am: "2026-11-08T07:00:00Z" });
+  const pruefe = (name, r, status, art) => {
+    assert.equal(r.status, status, name);
+    assert.equal(r.body.fehler_art, art, name);
+    assert.equal(r.kopf.get("cache-control"), "no-store", `${name}: Cache-Control`);
+  };
+  pruefe("Liste", await holeListe(), 200, undefined);
+  pruefe("Zeile", await holeEintrag(7), 200, undefined);
+  pruefe("Zeile fehlt", await holeEintrag(9), 404, "nicht_gefunden");
+  for (const roh of ["abc", "0", "07", " 7"]) pruefe(`Zeile ${JSON.stringify(roh)}`, await holeEintrag(roh), 400, "eingabe");
+  welt.stoerung = (a) => (a.tabelle === "content" ? { status: 500, body: { code: "XX000", message: "kaputt" } } : null);
+  pruefe("Liste, Lesefehler", await holeListe(), 502, "supabase");
+  pruefe("Zeile, Lesefehler", await holeEintrag(7), 502, "supabase");
+  welt.stoerung = null;
+  welt.vorAntwort = async () => {
+    throw Object.assign(new Error("This operation was aborted"), { name: "AbortError" });
+  };
+  pruefe("Liste, Zeitüberschreitung", await holeListe(), 502, "supabase");
+  pruefe("Zeile, Zeitüberschreitung", await holeEintrag(7), 502, "supabase");
+  welt.vorAntwort = null;
+  delete process.env.SUPABASE_SERVICE_KEY;
+  pruefe("Liste ohne Schlüssel", await holeListe(), 500, "konfiguration");
+  pruefe("Zeile ohne Schlüssel", await holeEintrag(7), 500, "konfiguration");
+});
+
+test("R-M2 (M46) Liste: gelesen_am ist der Zeitpunkt nach der Abfrage (Uhr des Servers) — dauert die Abfrage 4 s, liegt er 4 s nach ihrem Beginn", async (t) => {
+  zeileDb(1, { am: "2026-11-08T07:00:00Z" });
+  // Attrappen-Uhr für Date: Sie steht still, bis die PostgREST-Attrappe während der Abfrage 4 s vorstellt.
+  t.mock.timers.enable({ apis: ["Date"], now: Date.parse("2026-11-08T21:00:00.000Z") });
+  welt.vorAntwort = async (a) => {
+    if (a.art === "supabase") t.mock.timers.tick(4_000);
+  };
+  const { status, body } = await holeListe();
+  assert.equal(status, 200);
+  assert.equal(welt.log.length, 1, "genau eine Abfrage");
+  assert.equal(body.gelesen_am, "2026-11-08T21:00:04.000Z");
+});
+
+test("R-M3 (M71) Unerwartete Ausnahme in einer Route: 500 programmfehler mit bereinigtem Grund und no-store — nicht 502 supabase; Supabase nicht abgefragt", async (t) => {
+  zeileDb(7, { am: "2026-11-08T07:00:00Z" });
+  // Die Ausnahme fällt im try-Block der Route selbst: Das Abbruchsignal wirft schon beim Erzeugen. Abruffehler
+  // fängt supabase-js dagegen selbst ab und meldet sie als error (R2-R3: AbortError → 502 supabase).
+  t.mock.method(AbortSignal, "timeout", () => {
+    throw new Error(`unerwartet: ${SERVICE} bei https://abc.supabase.co/rest/v1/content`);
+  });
+  const ausListe = await holeListe();
+  assert.equal(ausListe.status, 500);
+  assert.equal(ausListe.kopf.get("cache-control"), "no-store");
+  assert.deepEqual(ausListe.body, { fehler: "Content-Liste nicht ermittelbar: unerwartet: [entfernt] bei [URL]", fehler_art: "programmfehler" });
+  const ausZeile = await holeEintrag(7);
+  assert.equal(ausZeile.status, 500);
+  assert.equal(ausZeile.kopf.get("cache-control"), "no-store");
+  assert.deepEqual(ausZeile.body, { fehler: "Eintrag nicht ermittelbar: unerwartet: [entfernt] bei [URL]", fehler_art: "programmfehler" });
+  assert.deepEqual(welt.log, [], "Supabase nicht abgefragt");
+});
+
+test("R-M4 (M79) Antwort ohne lesbares JSON (etwa die Fehlerseite eines Proxys) heißt 'HTTP <Status>', nicht 'Server nicht erreichbar' — Neuabfrage, erste Abfrage und Neuladen einer Zeile", async (t) => {
+  t.mock.timers.enable({ apis: ["setInterval", "setTimeout"] });
+  const PROXY_SEITE = "<!doctype html><title>Proxy</title><p>Gateway-Fehler</p>";
+  const L = await contentListe();
+
+  // 1. Neuabfrage nach gelesener Liste: Die Liste bleibt, der Grund ist der Status.
+  const n1 = netz();
+  const lz1 = await contentSeite();
+  let baum = await gestartet(n1, lz1, [z(1)]);
+  t.mock.timers.tick(15_000);
+  await lz1.ruhe();
+  n1.liste()[1].antworteText(502, PROXY_SEITE);
+  baum = await lz1.ruhe();
+  assert.equal(alarm(baum), `Neue Abfrage fehlgeschlagen: HTTP 502 — angezeigt bleibt der Stand ${L.standZeit(T1)}; nächster Versuch im Takt.`);
+  assert.deepEqual(eintraege(baum), ["Eintrag 1"]);
+  lz1.abbauen();
+
+  // 2. Erste Abfrage: "Content nicht lesbar" mit dem Status.
+  const n2 = netz();
+  const lz2 = await contentSeite();
+  lz2.rendere();
+  await lz2.ruhe();
+  n2.liste()[0].antworteText(504, PROXY_SEITE);
+  baum = await lz2.ruhe();
+  const tx = text(baum);
+  assert.ok(tx.includes("Content nicht lesbar: HTTP 504Neuer Versuch automatisch alle 15 s."), tx.slice(0, 1500));
+  assert.ok(!tx.includes("Server nicht erreichbar"), tx.slice(0, 1500));
+  lz2.abbauen();
+
+  // 3. Neuladen einer Zeile nach 409: GET /api/content/eintrag/<id> liest den Körper ebenso.
+  const n3 = netz({ statusAntworten: [[409, { fehler: "Eintrag hat sich zwischenzeitlich geändert (Status oder Inhalt) — neu laden" }]] });
+  const lz3 = await contentSeite();
+  baum = await gestartet(n3, lz3, [z(2)]);
+  baum = await oeffne(lz3, baum, 2);
+  baum = await klicke(lz3, freigebenKnopf(baum));
+  assert.equal(n3.eintrag().length, 1);
+  n3.eintrag()[0].antworteText(502, PROXY_SEITE);
+  baum = await lz3.ruhe();
+  const tx3 = text(baum);
+  assert.ok(
+    tx3.includes("Konflikt (HTTP 409): Eintrag hat sich zwischenzeitlich geändert (Status oder Inhalt) — neu laden · Neu laden fehlgeschlagen: HTTP 502 — Anzeige veraltet"),
+    tx3.slice(0, 2500),
+  );
 });

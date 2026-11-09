@@ -639,6 +639,37 @@ const GEGENPROBEN = [
     },
     erwartet: [["pages/alt.tsx", "from_content"]],
   },
+  // Mutationsprüfung 09.11.2026: Formen, deren Erkennung vorher keine Gegenprobe absicherte (in Klammern
+  // die Mutanten des Wächters, die die ganze Suite überlebten).
+  {
+    name: "Laufzeit-Import über require() (W02)",
+    aenderungen: {
+      "lib/neu-lesen.ts": { neu: `import { supabase } from "./supabase";\n${LESER}` },
+      "lib/types.ts": { anhaengen: '\nexport const spaeter = () => require("./neu-lesen");\n' },
+    },
+    erwartet: [["lib/neu-lesen.ts", "from_content"]],
+  },
+  {
+    name: "neue \"use client\"-Datei als .jsx (W09)",
+    aenderungen: { "components/neu/Leser.jsx": { neu: `"use client";\nimport { supabase } from "@/lib/supabase";\n${LESER}` } },
+    erwartet: [["components/neu/Leser.jsx", "from_content"]],
+  },
+  {
+    name: "Client-Baustein importiert eine .js-Datei (W09)",
+    aenderungen: {
+      "lib/neu-lesen.js": { neu: `import { supabase } from "./supabase";\n${LESER}` },
+      "components/ui/KPICard.tsx": { voran: 'import { liesAlles } from "@/lib/neu-lesen";\nvoid liesAlles;\n' },
+    },
+    erwartet: [["lib/neu-lesen.js", "from_content"]],
+  },
+  {
+    name: "gemischter Import: Wert und Typ in einer Klausel (W13)",
+    aenderungen: {
+      "lib/neu-lesen.ts": { neu: `import { supabase } from "./supabase";\nexport type Zeile = { id: number };\n${LESER}` },
+      "components/ui/KPICard.tsx": { voran: 'import { liesAlles, type Zeile } from "@/lib/neu-lesen";\nvoid liesAlles;\nexport type Z = Zeile;\n' },
+    },
+    erwartet: [["lib/neu-lesen.ts", "from_content"]],
+  },
 ];
 
 for (const [i, probe] of GEGENPROBEN.entries()) {
