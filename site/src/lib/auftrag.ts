@@ -110,12 +110,10 @@ export function pruefePlan(roh: unknown): PlanPruefung {
 
 // ── Signatur des gespeicherten Plans ────────────────────────────────────────────────
 // Stufe 1 (05.11.2026): "Genau diesen Plan ausführen" heißt, dass zwischen Anzeige und
-// Ausführung niemand die gespeicherte messages-Zeile verändert haben darf. Die
-// RLS-Policies im Repo (scripts/setup_supabase_v2.sql, "Service role full access" ohne
-// TO-Klausel) geben vermutlich auch dem Anon-Key Schreibrecht. Deshalb trägt die
-// Plan-Zeile eine HMAC-SHA256-Signatur mit dem Server-Secret; ohne gültige Signatur wird
-// nicht ausgeführt (fail-closed). Der Domänen-Präfix trennt sie von den Session-Tokens,
-// die mit demselben Secret signiert werden.
+// Ausführung niemand die gespeicherte messages-Zeile verändert haben darf. Das hängt nicht
+// davon ab, wer die Zeile schreiben darf: Die Plan-Zeile trägt eine HMAC-SHA256-Signatur
+// mit dem Server-Secret; ohne gültige Signatur wird nicht ausgeführt (fail-closed). Der
+// Domänen-Präfix trennt sie von den Session-Tokens, die mit demselben Secret signiert werden.
 
 const encoder = new TextEncoder();
 
