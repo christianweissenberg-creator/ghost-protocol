@@ -8,7 +8,8 @@
 // Code ins Browser-Bundle. Ein app- oder pages-Ordner oder eine instrumentation-client-Datei neben src
 // wäre für den Wächter unsichtbar und ist deshalb selbst ein Befund (R5-W5). Seit der Änderungsprobe
 // (09.11.2026) prüfen R5-W2 und R5-W6 zusätzlich, dass der Zwischenspeicher der Listen-Route
-// (lib/content-liste-cache.ts) nur auf dem Server liegt: kein Client-Modul erreicht ihn.
+// (lib/content-liste-cache.ts) nur auf dem Server liegt: kein Client-Modul erreicht ihn. R5-W7 prüft
+// dasselbe für den Zwischenstand des Freigabe-Stapels (lib/freigaben-cache.ts, GET /api/freigaben).
 // Geprüft wird mit dem TypeScript-Parser aus node_modules; im Zweifel ist es ein Befund:
 // - .from(<Tabelle>) auf allem außer Array, Buffer und typisierten Arrays: Tabelle "content" ist ein
 //   Befund; eine Tabelle, die sich nicht statisch bestimmen lässt, ebenso. Der Methodenname darf über
@@ -446,6 +447,27 @@ test('R5-W6 Zwischenspeicher der Listen-Route (lib/content-liste-cache.ts) nur a
   const mit = analysiere(mitAenderung({ "lib/content-liste.ts": { voran: 'import { CONTENT_PROBE_SPALTEN } from "./content-liste-cache";\nvoid CONTENT_PROBE_SPALTEN;\n' } }));
   assert.ok(mit.erreicht.has(cache), "Gegenprobe: Client-Import erreicht den Zwischenspeicher");
   assert.deepEqual(mit.erreicht.get(cache).slice(-2), ["lib/content-liste.ts", cache]);
+});
+
+test('R5-W7 Zwischenstand des Freigabe-Stapels (lib/freigaben-cache.ts) nur auf dem Server: Riegel "server-only", die Route /api/freigaben erreicht ihn, kein Client-Modul; Gegenprobe: ein Import aus lib/hooks-status.ts (Browser) wäre im Client-Graphen', () => {
+  const cache = "lib/freigaben-cache.ts";
+  assert.ok(QUELLBAUM.has(cache), `${cache} fehlt`);
+  // Riegel wie lib/content-liste-cache.ts: Importiert eine Client-Komponente die Datei, bricht next build ab.
+  const sf = ts.createSourceFile(cache, QUELLBAUM.get(cache), ts.ScriptTarget.Latest, true);
+  assert.ok(
+    sf.statements.some((s) => ts.isImportDeclaration(s) && !s.importClause && ts.isStringLiteral(s.moduleSpecifier) && s.moduleSpecifier.text === "server-only"),
+    `${cache} ohne import "server-only"`,
+  );
+  // Positivkontrolle: Ab der Route (Server) erreicht der Graph den Zwischenstand.
+  const route = analysiere(QUELLBAUM, { nurWurzeln: ["app/api/freigaben/route.ts"] });
+  assert.ok(route.erreicht.has(cache), "die Route /api/freigaben importiert den Zwischenstand");
+  assert.ok(!BASIS.erreicht.has(cache), `Kette: ${BASIS.erreicht.get(cache)?.join(" → ")}`);
+  // Gegenprobe: lib/hooks-status.ts ("use client", ruft /api/freigaben ab) importierte den Zwischenstand —
+  // angehängt, damit die Direktive am Dateianfang bleibt. Dann stünde er im Client-Graphen.
+  assert.ok(BASIS.wurzeln.includes("lib/hooks-status.ts"), "lib/hooks-status.ts ist ein Client-Modul");
+  const mit = analysiere(mitAenderung({ "lib/hooks-status.ts": { anhaengen: '\nimport { FREIGABEN_PROBE_SPALTEN } from "./freigaben-cache";\nvoid FREIGABEN_PROBE_SPALTEN;\n' } }));
+  assert.ok(mit.erreicht.has(cache), "Gegenprobe: Client-Import erreicht den Zwischenstand");
+  assert.deepEqual(mit.erreicht.get(cache).slice(-2), ["lib/hooks-status.ts", cache]);
 });
 
 // ═══ Gegenproben ═══
