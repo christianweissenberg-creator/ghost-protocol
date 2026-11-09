@@ -22,6 +22,8 @@
 // brauchte als der Takt). useAgentDetail verwirft den älteren Lauf über die Effekt-Bereinigung (AS-U4, AS-U7).
 // Lebenszyklus (AS-L1 bis AS-L3): Doppellauf der Effekte im Strict Mode, Wechsel von abfragbar an einer laufenden
 // Seite, Abbau mit offenen Lesungen.
+// Mutationsprüfung (AS-M1, AS-M2): Die erste Lesung beim Aufbau gehört zur Folge wie jede spätere, und die Folge gilt
+// je Effektlauf, auch wenn zwei Aufrufe von useAgents gleichzeitig eingehängt sind.
 // Jeder Test hat ein eigenes Zeitlimit: Wartet eine Abfrage auf eine Antwort, die kein Test gibt, wird der Test rot,
 // statt npm test aufzuhängen.
 import { test, afterEach } from "node:test";
@@ -673,4 +675,95 @@ test("AS-L3 useAgents: Abbau, während Lesungen offen sind (erste Lesung und Rü
   s.setze("visible");
   await takte(t, lz, 2);
   assert.equal(db.an("agents").length, 2, "nach dem Abbau keine Lesung");
+});
+
+// ═══ Mutationsprüfung (09.11.2026) ═══
+// Je Test in Klammern der Mutant, der vorher die ganze Suite überlebte (Mutationslauf gegen 0a59c37 in einer
+// eigenen Kopie). Jeder Test ist mit seinem Mutanten rot und ohne ihn grün; Produktcode unverändert.
+
+test("AS-M1 (A14) useAgents: Die erste Lesung beim Aufbau gehört zur Folge wie jede spätere — kommt die Antwort einer jüngeren Lesung vor ihrer an, überschreibt die spätere Antwort der ersten Lesung sie nicht (Daten und Fehler): Seite im verborgenen Tab geöffnet und Rückkehr vor der ersten Antwort (die Gegenrichtung zu AS-U6), ebenso im sichtbaren Tab, wenn die erste Lesung länger braucht als der Takt", GRENZE, async (t) => {
+  t.mock.timers.enable({ apis: ["setInterval", "setTimeout"] });
+
+  // Fall 1: im verborgenen Tab geöffnet, Rückkehr vor der ersten Antwort; die Rückkehr-Lesung antwortet zuerst.
+  {
+    const s = sichtbarkeit("hidden");
+    const db = datenbank({ sofort: false });
+    const { lz, letzte } = baue((m) => m.useAgents(), db);
+    lz.rendere();
+    await lz.ruhe();
+    s.setze("visible");
+    await lz.ruhe();
+    assert.equal(db.an("agents").length, 2, "erste Lesung und Rückkehr-Lesung offen");
+    const [erste, rueckkehr] = db.an("agents");
+    rueckkehr.antworte();
+    await lz.ruhe();
+    assert.equal(letzte().agents[0].lesung, 2, "die Antwort der Rückkehr-Lesung gilt");
+    assert.equal(letzte().loading, false, "loading endet mit der Antwort, die zuerst ankommt");
+    erste.antworte();
+    await lz.ruhe();
+    assert.equal(letzte().agents[0].lesung, 2, "die spätere Antwort der ersten Lesung (älter) überschreibt die der Rückkehr-Lesung nicht");
+    assert.equal(letzte().error, null);
+    lz.abbauen();
+  }
+
+  // Fall 2: sichtbarer Tab; die erste Lesung ist beim Takt (60 s) noch offen, die Takt-Lesung antwortet zuerst, danach
+  // scheitert die erste.
+  {
+    sichtbarkeit("visible");
+    const db = datenbank({ sofort: false });
+    const { lz, letzte } = baue((m) => m.useAgents(), db);
+    lz.rendere();
+    await lz.ruhe();
+    await warte(t, lz, TAKT);
+    assert.equal(db.an("agents").length, 2, "60 s: Takt-Lesung, die erste ist noch offen");
+    const [erste, takt] = db.an("agents");
+    takt.antworte();
+    await lz.ruhe();
+    assert.equal(letzte().agents[0].lesung, 2, "die Antwort der Takt-Lesung gilt");
+    erste.scheitere();
+    await lz.ruhe();
+    assert.equal(letzte().error, null, "der späte Lesefehler der ersten Lesung überschreibt die neuere Antwort nicht");
+    assert.equal(letzte().agents[0].lesung, 2);
+    assert.equal(letzte().loading, false);
+  }
+});
+
+test("AS-M2 (A17) useAgents zweimal gleichzeitig eingehängt (beide Aufrufe teilen sich das Modul; heute ruft jede Seite den Hook einmal auf): Die Folge der Lesungen gilt je Effektlauf — die Antwort der einen Instanz verdrängt keine der anderen, auch wenn sie zuerst ankommt: loading endet in jeder mit ihrer eigenen ersten Antwort, und nach der Rückkehr gilt in jeder die Antwort ihrer eigenen Rückkehr-Lesung", GRENZE, async (t) => {
+  t.mock.timers.enable({ apis: ["setInterval", "setTimeout"] });
+  const s = sichtbarkeit("visible");
+  const db = datenbank({ sofort: false });
+  const { lz, letzte } = baue((m) => [m.useAgents(), m.useAgents()], db);
+  lz.rendere();
+  await lz.ruhe();
+  assert.equal(db.an("agents").length, 2, "je Instanz eine erste Lesung (die Effekte laufen in der Reihenfolge der Aufrufe)");
+  const [ersteEins, ersteZwei] = db.an("agents");
+  ersteZwei.antworte();
+  await lz.ruhe();
+  let [eins, zwei] = letzte();
+  assert.equal(zwei.agents[0]?.lesung, 2);
+  assert.equal(zwei.loading, false);
+  assert.equal(eins.loading, true, "Instanz 1 wartet noch auf ihre eigene Antwort");
+  ersteEins.antworte();
+  await lz.ruhe();
+  [eins, zwei] = letzte();
+  assert.equal(eins.loading, false, "Instanz 1: loading endet mit ihrer eigenen Antwort, obwohl Instanz 2 schon eine Lesung übernommen hat");
+  assert.equal(eins.agents[0]?.lesung, 1, "Instanz 1 zeigt ihre eigene Lesung");
+  assert.equal(zwei.agents[0]?.lesung, 2, "Instanz 2 bleibt bei ihrer");
+
+  // Rückkehr: Die Lauscher lesen in der Reihenfolge ihrer Anmeldung; wieder antwortet Instanz 2 zuerst.
+  s.setze("hidden");
+  await lz.ruhe();
+  s.setze("visible");
+  await lz.ruhe();
+  assert.equal(db.an("agents").length, 4, "die Rückkehr liest je Instanz einmal");
+  const [, , rueckkehrEins, rueckkehrZwei] = db.an("agents");
+  rueckkehrZwei.antworte();
+  await lz.ruhe();
+  rueckkehrEins.antworte();
+  await lz.ruhe();
+  [eins, zwei] = letzte();
+  assert.equal(eins.agents[0]?.lesung, 3, "Instanz 1: die Antwort ihrer Rückkehr-Lesung gilt");
+  assert.equal(zwei.agents[0]?.lesung, 4, "Instanz 2: die Antwort ihrer Rückkehr-Lesung gilt");
+  assert.equal(eins.error, null);
+  assert.equal(zwei.error, null);
 });
