@@ -297,7 +297,7 @@ function NeuLadenKnopf({ neuLaden, laedtNeu }: { neuLaden: () => void; laedtNeu:
 function StandZeile({ erzeugtAm, neuLaden, laedtNeu }: { erzeugtAm: string; neuLaden?: () => void; laedtNeu: boolean }) {
   return (
     <div className="card-ghost p-4 mb-6 flex flex-wrap items-center justify-between gap-3 min-w-0" data-stand aria-busy={laedtNeu}>
-      <p className="text-[11px] break-words min-w-0" style={{ color: "var(--gp-ink-2)" }} aria-live="polite" data-stand-text>
+      <p className="text-[11px] break-words min-w-0 flex-1 basis-64" style={{ color: "var(--gp-ink-2)" }} aria-live="polite" data-stand-text>
         Stand {zeitBerlin(erzeugtAm, "ohne Zeitpunkt")} · Die Seite lädt nicht von selbst nach: Was danach geschieht, etwa ein
         laufender Content-Lauf, zeigt „Neu laden“.{laedtNeu ? " Lädt neu …" : ""}
       </p>
