@@ -1136,6 +1136,72 @@ test("AN-P8 Panel prüft einmal beim Aufbau und je Klick 'Alle prüfen'; späte 
   }
 });
 
+test("AN-P8b Ab- und Wiederaufbau wie im Strict Mode: Die späte Antwort der abgebrochenen ersten Abfrage überschreibt die zweite nicht", async () => {
+  // Spät heißt: nach dem Ergebnis der zweiten Abfrage, im selben Lauf und mit derselben Kennung — nur der Abbruch trennt sie.
+  for (const spaet of [
+    (f) => f.fertig({ status: 200, json: async () => antwortFuer("geaendert") }),
+    (f) => f.fertig({ status: 200, json: async () => Promise.reject(new DOMException("This operation was aborted", "AbortError")) }),
+    (f) => f.fertig({ status: 500, json: async () => ({ fehler: "zu spät" }) }),
+  ]) {
+    const abrufe = [];
+    const vorher = globalThis.fetch;
+    globalThis.fetch = (url, init) => new Promise((fertig) => abrufe.push({ url, init, fertig }));
+    try {
+      const lz = hookLaufzeit();
+      const P = ladeAnkerPanel(lz.attrappen, { anker, types, hilfen: HILFEN });
+      lz.setzeWurzel(P.AnkerPanel, { slug: SLUG });
+      lz.rendere();
+      await lz.ruhe();
+      lz.abbauen();
+      lz.wiederAufbauen();
+      await lz.ruhe();
+      assert.equal(abrufe.length, 2);
+      assert.equal(abrufe[0].init.signal.aborted, true, "erste Abfrage abgebrochen");
+      abrufe[1].fertig({ status: 200, json: async () => antwortFuer() });
+      let baum = await lz.ruhe();
+      assert.ok(sichtbar(alsMarkup(baum)).includes("Hash-Status: 11 unverändert"));
+      spaet(abrufe[0]);
+      baum = await lz.ruhe();
+      const t = sichtbar(alsMarkup(baum));
+      assert.ok(t.includes("Hash-Status: 11 unverändert"), t.slice(0, 600));
+      assert.ok(!t.includes("nicht lesbar") && !t.includes("geändert ·"), t.slice(0, 600));
+      lz.abbauen();
+    } finally {
+      globalThis.fetch = vorher;
+    }
+  }
+});
+
+test("AN-P8c Wechsel der Kennung: bis zur Antwort für die neue Kennung steht 'wird geprüft', nie das Ergebnis der alten", async () => {
+  // Zweites Objekt mit Manifest nur im Test (die Allow-List hat heute ein Objekt).
+  const ZWEITES = "zweites-objekt";
+  const ankerZwei = { ...anker, ankerManifest: (s) => (s === SLUG || s === ZWEITES ? MANIFEST : null) };
+  const abrufe = [];
+  const vorher = globalThis.fetch;
+  globalThis.fetch = (url, init) => new Promise((fertig) => abrufe.push({ url, init, fertig }));
+  try {
+    const lz = hookLaufzeit();
+    const P = ladeAnkerPanel(lz.attrappen, { anker: ankerZwei, types, hilfen: HILFEN });
+    lz.setzeWurzel(P.AnkerPanel, { slug: SLUG });
+    lz.rendere();
+    await lz.ruhe();
+    abrufe[0].fertig({ status: 200, json: async () => antwortFuer() });
+    let baum = await lz.ruhe();
+    assert.ok(sichtbar(alsMarkup(baum)).includes("Hash-Status: 11 unverändert"));
+    lz.setzeWurzel(P.AnkerPanel, { slug: ZWEITES });
+    baum = lz.rendere();
+    await lz.ruhe();
+    assert.equal(abrufe.length, 2);
+    assert.equal(abrufe[1].url, "/api/studio/zweites-objekt/anker");
+    const t = sichtbar(alsMarkup(baum));
+    assert.ok(!t.includes("Hash-Status: 11 unverändert"), "kein Ergebnis der alten Kennung");
+    assert.equal((alsMarkup(baum).match(/data-hash="laedt"/g) ?? []).length, 11);
+    lz.abbauen();
+  } finally {
+    globalThis.fetch = vorher;
+  }
+});
+
 test("AN-P9 Ohne Manifest (Kennung außerhalb der Liste): kein Abruf, sichtbarer Hinweis statt Panel", async () => {
   const abrufe = [];
   const vorher = globalThis.fetch;

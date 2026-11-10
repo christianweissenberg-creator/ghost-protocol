@@ -118,7 +118,7 @@ export async function pruefeAnkerDatei(e: AnkerEintrag): Promise<AnkerHashErgebn
       hash.update(value);
     }
   } catch (err) {
-    void leser?.cancel().catch(() => undefined);
+    // Nur read() wirft hier; der Strom ist dann schon im Fehlerzustand, ein Abbruch erübrigt sich.
     return ergebnis(e, "nicht_erreichbar", { http_status: 200, hinweis: `Abbruch beim Lesen: ${abrufGrund(err)}` });
   }
   const live = hash.digest("hex");
