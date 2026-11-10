@@ -929,3 +929,93 @@ test("P-C1 /content: frisches Ergebnis mit Endprüfung → grünes FREIGABE; Stu
   const hinweis = seite.flussHinweis({ status: "fehler", fehler: { stufe: "counsel_endfassung", grund: "HTTP 502" }, steps: SCHRITTE_NEU(pub, "", "error").map((s) => (s.agent === "amplifier" ? { agent: "amplifier", status: "pending" } : s)) });
   assert.equal(hinweis, "Abbruch in Stufe COUNSEL 2: HTTP 502 — AMPLIFIER wurde nicht ausgeführt.");
 });
+
+// ═══ Studio-Karte (lib/studio/lesen.ts) — dasselbe R2-Urteil wie Stapel und Freigeben ═══
+// Paket B: lesen.ts (zuAsset) übergibt den geprüften Text an pruefeFreigabe. Altzeile wie #8 (gemessen
+// am 10.11.2026, SQL nur lesend: zur_freigabe, Newsletter, objekt_slug rittergut-seifersdorf, Freigabetext
+// ≠ geprüfter SCRIBE-Text, review_notes = Antwort der Vorprüfung): Die Karte zeigt sie gesperrt, mit
+// demselben Grund wie /api/freigaben und /api/content/status (409).
+
+const studioRoute = await route("STUDIO", "studio/[objekt]/route.ts");
+
+async function studioAbruf(slug = "rittergut-seifersdorf") {
+  const req = new NextRequest(`http://harness.local/api/studio/${slug}`, { headers: { cookie: "gp-auth=test" } });
+  const res = await studioRoute.GET(req, { params: Promise.resolve({ objekt: slug }) });
+  return { status: res.status, body: await res.json() };
+}
+
+async function studioKartenHtml(antwort) {
+  const [hooksStatus, types, objekte, studioRegeln] = await Promise.all([
+    lib("lib/hooks-status"),
+    lib("lib/types"),
+    lib("lib/studio/objekte"),
+    lib("lib/studio/regeln"),
+  ]);
+  const V = ladeTsx("components/studio/StudioAnsicht.tsx", {
+    react: React,
+    "react/jsx-runtime": jsxRuntime,
+    ...STUDIO.module,
+    "next/link": { __esModule: true, default: ({ href, children, ...rest }) => React.createElement("a", { href, ...rest }, children) },
+    "@/lib/hooks-status": hooksStatus,
+    "@/lib/types": types,
+    "@/lib/studio/objekte": objekte,
+    "@/lib/studio/regeln": studioRegeln,
+  });
+  return renderToStaticMarkup(
+    React.createElement(V.StudioAnsicht, { slug: "rittergut-seifersdorf", lesung: { art: "daten", antwort }, kopiere: () => {}, kopierStatus: () => "Kopieren" }),
+  );
+}
+const karte = (html, id) => new RegExp(`<article[^>]*data-asset="${id}".*?</article>`, "s").exec(html)?.[0] ?? "";
+const sichtbarerText = (html) => html.replace(/<[^>]+>/g, " ").replace(/&quot;/g, '"').replace(/&amp;/g, "&").replace(/\s+/g, " ");
+
+test("P-S1 Studio-Karte: Altzeile wie #8 gesperrt (R2) — gleiches Urteil wie /api/freigaben und /api/content/status; neue Zeile überall frei", async () => {
+  exportMit(RITTERGUT);
+  agentenMitLink();
+  const lauf = await pipePost(RITTERGUT_X);
+  const neu = lauf.body.contentId;
+  const SCRIBE_ALT = "Newsletter-Entwurf von SCRIBE, lang genug für die Regel.";
+  const BODY_ALT = "Newsletter-Fassung von PUBLISHER mit Ergänzungen nach der Prüfung.";
+  legeAn({
+    id: 8,
+    title: "RitterGut Seifersdorf",
+    platform: "newsletter",
+    content_type: "newsletter_issue",
+    status: "zur_freigabe",
+    body: BODY_ALT,
+    review_notes: FREIGABE,
+    reviewed_by: "counsel",
+    metadata: { objekt_slug: "rittergut-seifersdorf", steps: SCHRITTE_ALT(SCRIBE_ALT, BODY_ALT) },
+  });
+
+  // Studio (GET /api/studio/rittergut-seifersdorf → lib/studio/lesen.ts, zuAsset)
+  const studio = await studioAbruf();
+  assert.equal(studio.status, 200, JSON.stringify(studio.body).slice(0, 300));
+  const asset = (id) => studio.body.assets.wert.find((a) => a.id === id);
+  assert.ok(asset(8) && asset(neu), "beide Zeilen im Studio");
+  assert.equal(asset(8).freigabe_sperre, R2_ANDERS);
+  assert.equal(asset(neu).freigabe_sperre, null);
+
+  // Stapel (GET /api/freigaben): derselbe Sperrgrund
+  const stapel = await freigabenAbruf();
+  const eintrag = (id) => stapel.wartend.find((e) => e.id === String(id));
+  assert.equal(eintrag(8).freigabe_sperre, asset(8).freigabe_sperre);
+  assert.equal(eintrag(8).geprueft_ungleich_freigabe, true);
+  assert.equal(eintrag(neu).freigabe_sperre, asset(neu).freigabe_sperre);
+
+  // Karte (StudioAnsicht mit der Antwort der Route): gesperrt mit Grund, nicht "freigebbar"
+  const html = await studioKartenHtml(studio.body);
+  const alt = sichtbarerText(karte(html, 8));
+  assert.ok(alt.includes(`Freigabe gesperrt: ${R2_ANDERS}`), alt.slice(0, 600));
+  assert.ok(!alt.includes("freigebbar laut Server-Regel"));
+  assert.match(karte(html, 8), /data-sperre="ja"/);
+  assert.ok(sichtbarerText(karte(html, neu)).includes("Freigabe freigebbar laut Server-Regel"));
+  assert.match(karte(html, neu), /data-sperre="nein"/);
+
+  // Freigeben (POST /api/content/status): 409 mit genau diesem Grund; die neue Zeile geht durch
+  const gesperrt = await post(statusRoute, "/api/content/status", { id: 8, aktion: "freigeben" });
+  assert.equal(gesperrt.status, 409);
+  assert.equal(gesperrt.body.fehler, asset(8).freigabe_sperre);
+  assert.equal(zeile(8).status, "zur_freigabe");
+  const frei = await post(statusRoute, "/api/content/status", { id: neu, aktion: "freigeben" });
+  assert.equal(frei.status, 200);
+});
