@@ -1433,7 +1433,7 @@ test("S-M9 (F10) Abweisung: Ein Fehlertext der Route mit dem geschützten Namen 
 // ═══ Schritt 7 (10.11.2026): Medien, Credits, Messplan, Stand-Zeile ═══
 
 /** Drei Medien-Zeilen eines Videos, direkt in der Attrappe (wie nach einem Einspielen; Testwerte). */
-function videoZeilen({ abgleich = "nicht_bestanden", max = 19 } = {}) {
+function videoZeilen({ abgleich = "nicht_bestanden", max = 7 } = {}) {
   const basis = {
     objekt_slug: SLUG, anker_id: "hof-nacht", anker_sha256: "4".repeat(64), breite: null, hoehe: null, fps: null, dauer_s: null, aigc_kennzeichen: null,
     schnitt_von_s: null, schnitt_bis_s: null, ausschnitt: null, startbild_abgleich: null, startbild_abweichung_max: null, erzeuger: null, modell: null,
@@ -1441,28 +1441,28 @@ function videoZeilen({ abgleich = "nicht_bestanden", max = 19 } = {}) {
     kosten_usd: null, kosten_quelle: null, startbild_id: null, abgeleitet_von: null, eingespielt_am: "2026-11-10T14:30:00.000000+00:00",
   };
   welt.tabellen.studio_medium = [
-    { ...basis, id: 1, art: "bild", fassung: "startbild", sha256: "1".repeat(64), speicher_pfad: `${SLUG}/${"1".repeat(64)}.jpg`, bytes: 909_774, mime: "image/jpeg", breite: 3000, hoehe: 1687, ausschnitt: { x: 0, y: 264, breite: 3000, hoehe: 1687, skalierung: 1 }, startbild_abgleich: abgleich, startbild_abweichung_max: max },
-    { ...basis, id: 2, art: "video", fassung: "original", sha256: "2".repeat(64), speicher_pfad: `${SLUG}/${"2".repeat(64)}.mp4`, bytes: 15_199_760, mime: "video/mp4", startbild_id: 1, erzeuger: "higgsfield-connector", modell: "kling3_0", job_id: "test-job", breite: 1920, hoehe: 1080, fps: 24, dauer_s: 5.04, aigc_kennzeichen: true, prompt: "Test-Prompt", prompt_klauseln: [{ id: "kamera", text: "Kamera ruhig." }], kosten_vorschau_credits: 8.75, kosten_credits: 8.75, kosten_quelle: "Test" },
-    { ...basis, id: 3, art: "video", fassung: "export", sha256: "3".repeat(64), speicher_pfad: `${SLUG}/${"3".repeat(64)}.mp4`, bytes: 704_362, mime: "video/mp4", abgeleitet_von: 2, job_id: "test-job", breite: 1280, hoehe: 720, fps: 24, dauer_s: 3.04, aigc_kennzeichen: false, schnitt_von_s: 0.5, schnitt_bis_s: 3.5, ki_hinweis_text: "Test-Hinweis im Bild" },
+    { ...basis, id: 1, art: "bild", fassung: "startbild", sha256: "1".repeat(64), speicher_pfad: `${SLUG}/${"1".repeat(64)}.jpg`, bytes: 850_000, mime: "image/jpeg", breite: 3000, hoehe: 1687, ausschnitt: { x: 0, y: 120, breite: 3000, hoehe: 1687, skalierung: 1 }, startbild_abgleich: abgleich, startbild_abweichung_max: max },
+    { ...basis, id: 2, art: "video", fassung: "original", sha256: "2".repeat(64), speicher_pfad: `${SLUG}/${"2".repeat(64)}.mp4`, bytes: 15_000_000, mime: "video/mp4", startbild_id: 1, erzeuger: "higgsfield-connector", modell: "test-modell", job_id: "test-job", breite: 1920, hoehe: 1080, fps: 24, dauer_s: 4.5, aigc_kennzeichen: true, prompt: "Test-Prompt", prompt_klauseln: [{ id: "licht", text: "Licht ruhig." }], kosten_vorschau_credits: 6.5, kosten_credits: 6.5, kosten_quelle: "Test" },
+    { ...basis, id: 3, art: "video", fassung: "export", sha256: "3".repeat(64), speicher_pfad: `${SLUG}/${"3".repeat(64)}.mp4`, bytes: 650_000, mime: "video/mp4", abgeleitet_von: 2, job_id: "test-job", breite: 1280, hoehe: 720, fps: 24, dauer_s: 2.5, aigc_kennzeichen: false, schnitt_von_s: 0.25, schnitt_bis_s: 2.75, ki_hinweis_text: "Test-Hinweis im Bild" },
   ];
 }
 
-test("S-P1 (Schritt 7) Kacheln und Medien-Panel mit einem Video: 8,75 Credits, Deckel 100, Rest 91,25 — getrennt von USD; Kette mit Links auf die Datei-Route", async () => {
+test("S-P1 (Schritt 7) Kacheln und Medien-Panel mit einem Video: 6,5 Credits, Deckel 100, Rest 93,5 — getrennt von USD; Kette mit Links auf die Datei-Route", async () => {
   standardWelt();
   videoZeilen();
   const html = await studioHtml((await hole()).body);
   const t = sichtbar(html);
-  assert.ok(t.includes("Higgsfield-Credits 8,75 Credits Deckel 100 · Rest 91,25 · 1 Original(e)"), t.slice(0, 3000));
+  assert.ok(t.includes("Higgsfield-Credits 6,5 Credits Deckel 100 · Rest 93,5 · 1 Original(e)"), t.slice(0, 3000));
   assert.ok(t.includes("Claude-Kosten (USD, geschätzt)"), "USD in eigener Kachel");
   const panel = /<section[^>]*data-medien-panel[^>]*>.*?<\/section>/s.exec(html)?.[0] ?? "";
   const p = sichtbar(panel);
   assert.ok(p.includes("Video / Medien · 1"), p.slice(0, 500));
-  assert.ok(p.includes("Higgsfield-Credits: 8,75 Credits · Deckel 100 · Rest 91,25 · 1 Original(e)"));
+  assert.ok(p.includes("Higgsfield-Credits: 6,5 Credits · Deckel 100 · Rest 93,5 · 1 Original(e)"));
   assert.ok(p.includes("Export #3"));
   assert.match(panel, /href="\/api\/studio\/rittergut-seifersdorf\/medien\/3\/datei"/);
   assert.match(panel, /href="\/api\/studio\/rittergut-seifersdorf\/medien\/2\/datei"/);
   assert.match(panel, /data-startbild-abgleich="nicht_bestanden"/);
-  assert.ok(p.includes("nicht bestanden — größte Abweichung 19"));
+  assert.ok(p.includes("nicht bestanden — größte Abweichung 7"));
   // Seit Schritt 8: das Urteil der Medien-Regel (Server) mit allen Gründen; ohne Protokoll, mit Testwerten.
   assert.match(panel, /data-medien-urteil="gesperrt"/);
   const gruende = [...panel.matchAll(/<li>(.*?)<\/li>/g)].map((m) => ent(m[1]));
@@ -1470,16 +1470,16 @@ test("S-P1 (Schritt 7) Kacheln und Medien-Panel mit einem Video: 8,75 Credits, D
     "Prüfprotokoll fehlt",
     "KI-Hinweis im Bild hat nicht den festgelegten Wortlaut",
     "Anker-Hash des Exports weicht vom Manifest ab",
-    "Startbild-Abgleich nicht bestanden (größte Abweichung 19)",
+    "Startbild-Abgleich nicht bestanden (größte Abweichung 7)",
   ]);
   assert.ok(p.includes("Freigabe (Medien-Regel, Server): gesperrt — 4 Grund/Gründe"));
   assert.ok(p.includes("Noch kein Prüfprotokoll."));
   assert.match(panel, /data-pruefbereich="3"/);
   assert.doesNotMatch(panel, /<video/, "die Prüfansicht wird erst beim Öffnen aufgebaut");
-  assert.ok(p.includes("8,75 Credits (Vorschau 8,75)"));
+  assert.ok(p.includes("6,5 Credits (Vorschau 6,5)"));
   assert.ok(p.includes("„Test-Hinweis im Bild“"));
-  assert.ok(p.includes("0,5–3,5 s im Original (laut Beleg)"));
-  assert.ok(p.includes("1920×1080 · 24 fps · 5,04 s · AIGC-Kennzeichen ja (laut Beleg, ffprobe)"));
+  assert.ok(p.includes("0,25–2,75 s im Original (laut Beleg)"));
+  assert.ok(p.includes("1920×1080 · 24 fps · 4,5 s · AIGC-Kennzeichen ja (laut Beleg, ffprobe)"));
   // Ohne Zeilen: kein Video, keine 0 als Summe.
   zuruecksetzen();
   standardWelt();

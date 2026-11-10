@@ -22,7 +22,7 @@ import type { AbgleichErgebnis, Ausschnitt } from "./typen";
 
 /** Größte zulässige Abweichung je Kanal, damit der Abgleich als bestanden gilt. */
 export const STARTBILD_TOLERANZ = 2;
-/** Obergrenze der Bildpunkte je Eingabe (Anker der Probe: 3000 × 2018 ≈ 6,1 Mio.). */
+/** Obergrenze der Bildpunkte je Eingabe (größter Anker im Manifest: 3000 × 2018 ≈ 6,1 Mio.). */
 export const MAX_PIXEL = 40_000_000;
 
 type SharpFabrik = SharpConstructor;

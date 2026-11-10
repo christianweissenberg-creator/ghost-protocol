@@ -631,7 +631,7 @@ const ZAHL_SPALTEN = new Set<string>([
 ]);
 const JSON_SPALTEN = new Set<string>(["ausschnitt", "parameter", "prompt_klauseln"]);
 
-/** Dezimalwert einer Zahl oder Ziffernfolge ohne führende und nachgestellte Nullen ("8.750" → "8.75"); sonst null. */
+/** Dezimalwert einer Zahl oder Ziffernfolge ohne führende und nachgestellte Nullen ("6.500" → "6.5"); sonst null. */
 export function dezimal(x: unknown): string | null {
   let s: string;
   if (typeof x === "number") {

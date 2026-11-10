@@ -51,8 +51,8 @@ export const QUELLE_KOSTEN =
 export const QUELLE_CREDITS = "Supabase · studio_medium.kosten_credits der Originale (Beleg der erzeugenden Sitzung)";
 
 /**
- * Deckel für Higgsfield-Credits in Stufe 2 (Entscheidung E18 des Inhabers, 10.11.2026): 100 Credits, die Probe
- * vom 05.11.2026 zählt mit. Angezeigt, nicht erzwungen — in Weg 2a erzeugt eine Claude-Sitzung, nicht dieser Server.
+ * Deckel für Higgsfield-Credits in Stufe 2 (Entscheidung E18 des Inhabers, 10.11.2026): 100 Credits, jedes
+ * eingespielte Original zählt mit. Angezeigt, nicht erzwungen — in Weg 2a erzeugt eine Claude-Sitzung, nicht dieser Server.
  */
 export const CREDIT_DECKEL: number | null = 100;
 

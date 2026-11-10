@@ -13,8 +13,8 @@ import type { MediumMime, UploadRolle } from "@/lib/studio/typen";
 // (Objekt-Studio Schritt 7, 10.11.2026).
 //
 // Der Browser lädt jede Datei direkt in den Storage (PUT auf die signierte URL), nicht durch Next: Mit Middleware
-// puffert Next den Körper nur bis 10.485.760 B und schneidet darüber still ab; das Original der Probe hat
-// 15.199.760 B. Eingabe {dateien: [{rolle, bytes, mime}]} mit rolle startbild, original, export oder abgleich
+// puffert Next den Körper nur bis 10.485.760 B und schneidet darüber still ab; ein Original hat
+// leicht 15 MB und mehr. Eingabe {dateien: [{rolle, bytes, mime}]} mit rolle startbild, original, export oder abgleich
 // (je höchstens einmal). Antwort je Datei pfad (eingang/<uuid>.<endung>), token und signedUrl aus
 // createSignedUploadUrl — ohne upsert: Der Token darf nichts überschreiben. Der Server erzeugt den Pfad; der Browser
 // wählt keinen. Vor dem Ausstellen räumt die Route Reste unter eingang/ und arbeit/ auf, die älter als 2 h sind —

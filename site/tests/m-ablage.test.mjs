@@ -120,9 +120,9 @@ const MANIFEST = Object.freeze({
 });
 
 const STARTBILD = await sharp(ANKER_BYTES).extract({ left: REZEPT.x, top: REZEPT.y, width: REZEPT.breite, height: REZEPT.hoehe }).png().toBuffer();
-/** Original in der Größe der Probe (15.199.760 B), Export 704.362 B — synthetisch. */
-const ORIGINAL = mp4(15_199_760);
-const EXPORT = mp4(704_362);
+/** Original über der Puffergrenze von Next (15.000.000 B), Export 650.000 B — synthetisch. */
+const ORIGINAL = mp4(15_000_000);
+const EXPORT = mp4(650_000);
 const DATEIEN = {
   startbild: { bytes: STARTBILD, mime: "image/png" },
   original: { bytes: ORIGINAL, mime: "video/mp4" },
@@ -134,28 +134,28 @@ const KI_HINWEIS = "KI-generierte Visualisierung des geplanten Zustands – unve
 function beleg(extra = {}, dateien = DATEIEN) {
   return {
     erzeuger: "higgsfield-connector",
-    modell: "kling3_0",
+    modell: "test-modell",
     job_id: "test-job-0001",
-    parameter: { mode: "pro", duration: 5, sound: "off" },
-    prompt: "Synthetischer Test-Prompt. Kamera ruhig. Nichts hinzufügen.",
+    parameter: { stufe: "test", laenge_s: 4 },
+    prompt: "Synthetischer Test-Prompt. Licht ruhig. Rahmen fest.",
     prompt_klauseln: [
-      { id: "kamera", text: "Kamera ruhig." },
-      { id: "nichts-hinzufuegen", text: "Nichts hinzufügen." },
+      { id: "licht", text: "Licht ruhig." },
+      { id: "rahmen", text: "Rahmen fest." },
     ],
-    kosten_vorschau_credits: 8.75,
-    kosten_credits: 8.75,
+    kosten_vorschau_credits: 6.5,
+    kosten_credits: 6.5,
     kosten_quelle: "Kostenvorschau im Test",
     anker_id: "test-anker",
     ausschnitt: { ...REZEPT },
     startbild_sha256: sha(dateien.startbild.bytes),
     original_sha256: sha(dateien.original.bytes),
     export_sha256: sha(dateien.export.bytes),
-    schnitt_von_s: 0.5,
-    schnitt_bis_s: 3.5,
+    schnitt_von_s: 0.25,
+    schnitt_bis_s: 2.75,
     ki_hinweis_text: KI_HINWEIS,
     ffprobe: {
-      original: { breite: 1920, hoehe: 1080, fps: 24, dauer_s: 5.04, aigc_kennzeichen: true },
-      export: { breite: 1280, hoehe: 720, fps: 24, dauer_s: 3.04, aigc_kennzeichen: false },
+      original: { breite: 1920, hoehe: 1080, fps: 24, dauer_s: 4.5, aigc_kennzeichen: true },
+      export: { breite: 1280, hoehe: 720, fps: 24, dauer_s: 2.5, aigc_kennzeichen: false },
     },
     hinweise: { startbild: ["Test-Hinweis zum Startbild"], original: ["Test-Hinweis zum Original"] },
     ...extra,
@@ -301,7 +301,7 @@ test("M-P1 Prüflauf schreibt nichts (kein move, kein insert, kein remove) und l
   const [sb, og, ex] = v.body.vorschau.map((z) => z.felder);
   // Hash und Größe vom Server gemessen; der Pfad hängt am Inhalt.
   assert.equal(og.sha256, sha(ORIGINAL));
-  assert.equal(og.bytes, 15_199_760);
+  assert.equal(og.bytes, 15_000_000);
   assert.equal(og.speicher_pfad, `${SLUG}/${sha(ORIGINAL)}.mp4`);
   assert.equal(sb.speicher_pfad, `${SLUG}/${sha(STARTBILD)}.png`);
   assert.equal(sb.startbild_abgleich, "bestanden");
@@ -311,7 +311,7 @@ test("M-P1 Prüflauf schreibt nichts (kein move, kein insert, kein remove) und l
   assert.equal(og.startbild_id, "@startbild");
   assert.equal(ex.abgeleitet_von, "@original");
   // Kosten, Prompt und Klauseln nur am Original; job_id an Original und Export; KI-Hinweis und Schnitt am Export.
-  assert.equal(og.kosten_credits, 8.75);
+  assert.equal(og.kosten_credits, 6.5);
   for (const z of [sb, ex]) {
     assert.equal(z.kosten_credits, null);
     assert.equal(z.prompt, null);
@@ -320,8 +320,8 @@ test("M-P1 Prüflauf schreibt nichts (kein move, kein insert, kein remove) und l
   assert.equal(og.job_id, "test-job-0001");
   assert.equal(ex.job_id, "test-job-0001");
   assert.equal(ex.ki_hinweis_text, KI_HINWEIS);
-  assert.deepEqual([ex.schnitt_von_s, ex.schnitt_bis_s], [0.5, 3.5]);
-  assert.deepEqual(og.parameter, { mode: "pro", duration: 5, sound: "off", hinweise: ["Test-Hinweis zum Original"] });
+  assert.deepEqual([ex.schnitt_von_s, ex.schnitt_bis_s], [0.25, 2.75]);
+  assert.deepEqual(og.parameter, { stufe: "test", laenge_s: 4, hinweise: ["Test-Hinweis zum Original"] });
   for (const z of [sb, og, ex]) {
     assert.ok(!("id" in z) && !("eingespielt_am" in z), "keine id, keine DB-Uhr in der Vorschau");
     assert.equal(z.anker_sha256, sha(ANKER_BYTES));
@@ -441,7 +441,7 @@ test("M-E1 Einspielen: 15-MB-Attrappe, drei Zeilen in Reihenfolge Startbild → 
   assert.equal(z[1].startbild_id, 1);
   assert.equal(z[2].abgeleitet_von, 2);
   assert.equal(z[1].sha256, sha(ORIGINAL));
-  assert.equal(z[1].bytes, 15_199_760);
+  assert.equal(z[1].bytes, 15_000_000);
   assert.ok(z.every((r) => typeof r.eingespielt_am === "string" && /\+00:00$/.test(r.eingespielt_am)), "eingespielt_am setzt die DB-Uhr");
   const einfuegen = welt.log.filter((l) => l.methode === "POST" && l.tabelle === "studio_medium");
   assert.equal(einfuegen.length, 3);
@@ -473,7 +473,7 @@ test("M-E3 Nach dem Prüflauf ausgetauschte Datei im Eingang → 409 beim Einspi
   const eingang = await hochladen();
   const v = await pruefen(eingang);
   assert.equal(v.status, 200);
-  legeObjektAn(welt.studio, eingang.export, mp4(704_362), { mime: "video/mp4" });
+  legeObjektAn(welt.studio, eingang.export, mp4(650_000), { mime: "video/mp4" });
   const r = await einspielen(eingang, beleg(), v.body);
   assert.equal(r.status, 409);
   assert.match(r.body.fehler, /export: SHA-256 der Datei .* weicht vom Beleg ab/);
@@ -514,7 +514,7 @@ test("M-E5 Vorhandene Zeile mit abweichendem Feld → 409 mit Feldliste vor dem 
     { name: "Erzeugung", dateien: DATEIEN, beleg: (d) => beleg({ modell: "anderes-modell", prompt: "Anderer synthetischer Prompt." }, d), felder: ["original.modell", "original.prompt"] },
     { name: "Kosten", dateien: DATEIEN, beleg: (d) => beleg({ kosten_credits: 9 }, d), felder: ["original.kosten_credits"] },
     { name: "ffprobe", dateien: DATEIEN, beleg: (d) => beleg({ ffprobe: { ...beleg().ffprobe, original: { ...beleg().ffprobe.original, fps: 25 } } }, d), felder: ["original.fps"] },
-    { name: "Schnitt und KI-Hinweis", dateien: DATEIEN, beleg: (d) => beleg({ schnitt_von_s: 0.25, ki_hinweis_text: "Anderer Hinweis" }, d), felder: ["export.schnitt_von_s", "export.ki_hinweis_text"] },
+    { name: "Schnitt und KI-Hinweis", dateien: DATEIEN, beleg: (d) => beleg({ schnitt_von_s: 0.5, ki_hinweis_text: "Anderer Hinweis" }, d), felder: ["export.schnitt_von_s", "export.ki_hinweis_text"] },
   ];
   for (const f of faelle) {
     zuruecksetzen();
@@ -578,14 +578,14 @@ test("M-E6 Feldvergleich normalisiert: Zahlen als Dezimalwert (NUMERIC als Text)
   for (const z of zeilen()) {
     if (z.fps !== null) z.fps = "24.000";
     if (z.dauer_s !== null) z.dauer_s = String(z.dauer_s);
-    if (z.kosten_credits !== null) z.kosten_credits = "8.750";
+    if (z.kosten_credits !== null) z.kosten_credits = "6.500";
     if (z.ausschnitt) z.ausschnitt = { skalierung: 1, hoehe: REZEPT.hoehe, breite: REZEPT.breite, y: REZEPT.y, x: REZEPT.x };
   }
   const r = (await ganzEinspielen()).e;
   assert.equal(r.status, 409);
   assert.deepEqual(r.body.vorhanden, { startbild: 1, original: 2, export: 3 });
-  assert.equal(medien.dezimal("8.750"), "8.75");
-  assert.equal(medien.dezimal(8.75), "8.75");
+  assert.equal(medien.dezimal("6.500"), "6.5");
+  assert.equal(medien.dezimal(6.5), "6.5");
   assert.equal(medien.dezimal("007"), "7");
   assert.equal(medien.dezimal("0.000"), "0");
   assert.equal(medien.dezimal("abc"), null);
@@ -600,7 +600,7 @@ test("M-E7 Inhalts-Pfad schon belegt: gleiche Datei → weiter (Arbeitsdatei gel
   zuruecksetzen();
   ablage.setzeSperreZurueck();
   exportMitCover();
-  legeObjektAn(welt.studio, pfad, mp4(704_362), { mime: "video/mp4" });
+  legeObjektAn(welt.studio, pfad, mp4(650_000), { mime: "video/mp4" });
   const r = await ganzEinspielen();
   assert.equal(r.e.status, 409);
   assert.match(r.e.body.fehler, /export: unter .* liegt eine andere Datei/);
@@ -740,7 +740,7 @@ test("M-D1 datei: 302 auf eine signierte URL (10 min) nach dem Nachhashen; Hash 
   assert.match(ok.ort, new RegExp(`^http://supabase\\.test/storage/v1/object/sign/studio/${SLUG}/${sha(EXPORT)}\\.mp4\\?token=lese-\\d+$`));
   const signiert = welt.studio.log.filter((l) => l.op === "sign");
   assert.deepEqual(signiert.map((l) => l.expiresIn), [600]);
-  // Das letzte Byte des Originals (15.199.760 B) ändern: nachgehasht wird jede Größe.
+  // Das letzte Byte des Originals (15.000.000 B) ändern: nachgehasht wird jede Größe.
   const o = welt.studio.objekte.get(`${SLUG}/${sha(ORIGINAL)}.mp4`);
   o.bytes[o.bytes.length - 1] ^= 0xff;
   const r = await holeDatei(2);
@@ -794,10 +794,10 @@ test("M-B1 Attrappe der DB: Insert mit id oder eingespielt_am → 42501; ohne Se
 
 // ═══ GET /api/studio/[objekt]: Medien, Credits, Messplan ═══
 
-test("M-R1 Studio: Credits = Summe der Originale (8,75), Deckel 100, Rest 91,25 — getrennt von USD; Medien-Kette vollständig", async () => {
+test("M-R1 Studio: Credits = Summe der Originale (6,5), Deckel 100, Rest 93,5 — getrennt von USD; Medien-Kette vollständig", async () => {
   assert.equal((await ganzEinspielen()).e.status, 200);
   const s = await holeStudio();
-  assert.deepEqual(s.kosten_credits.wert, { summe: 8.75, deckel: 100, rest: 91.25, originale: 1, originale_ohne_angabe: 0 });
+  assert.deepEqual(s.kosten_credits.wert, { summe: 6.5, deckel: 100, rest: 93.5, originale: 1, originale_ohne_angabe: 0 });
   assert.equal(s.kosten_credits.status, "ok");
   assert.ok(Date.parse(s.kosten_credits.gemessen_am) > 0);
   assert.equal(s.medien.status, "ok", s.medien.hinweis);
@@ -810,7 +810,7 @@ test("M-R1 Studio: Credits = Summe der Originale (8,75), Deckel 100, Rest 91,25 
   zeilen().push({ ...zeilen()[1], id: 10, sha256: "f".repeat(64), speicher_pfad: `${SLUG}/${"f".repeat(64)}.mp4`, erzeuger: "higgsfield-api", kosten_credits: null, kosten_vorschau_credits: null, kosten_usd: 0.42 });
   zeilen().push({ ...zeilen()[2], id: 11, sha256: "9".repeat(64), speicher_pfad: `${SLUG}/${"9".repeat(64)}.mp4`, kosten_credits: 5, kosten_quelle: "falsch" });
   const w = await holeStudio();
-  assert.equal(w.kosten_credits.wert.summe, 8.75);
+  assert.equal(w.kosten_credits.wert.summe, 6.5);
   assert.equal(w.kosten_credits.wert.originale, 2);
   assert.equal(w.kosten_credits.wert.originale_ohne_angabe, 1);
   assert.equal(w.kosten_credits.status, "warnung");
@@ -982,7 +982,7 @@ test("M-K1 Medien-Panel (ladeHoch, pruefen, einspielen) gegen die echten Routen:
   const meldungen = [];
   const hoch = await P.ladeHoch(SLUG, dateien, holen, (m) => meldungen.push(m));
   assert.equal(hoch.art, "ok", JSON.stringify(hoch));
-  assert.ok(meldungen.some((m) => m.startsWith("original hochladen (15,2 MB)")), meldungen.join(" | "));
+  assert.ok(meldungen.some((m) => m.startsWith("original hochladen (15 MB)")), meldungen.join(" | "));
   const puts = browser.filter(([m]) => m === "PUT");
   assert.equal(puts.length, 3);
   assert.ok(puts.every(([, p]) => p.startsWith("/storage/v1/object/upload/sign/studio/eingang/")), JSON.stringify(puts));

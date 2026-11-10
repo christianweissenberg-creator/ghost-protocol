@@ -49,7 +49,7 @@ test("MCF-1 Pflichtzeile: Wortlaut wie lib/studio/ki-hinweis.ts; nur als eigene 
 test("MCF-2 pruefeVideoFreigabe: eine Funktion für Caption und Medium — Gründe in der Reihenfolge Caption, Pflichtzeile, Medien-Regel; der erste ist der Sperrgrund; ohne Medien-Urteil gesperrt", () => {
   const ok = regeln.pruefeVideoFreigabe(FREIGABE, TEXT, TEXT, FREI, P);
   assert.deepEqual([ok.freigebbar, ok.grund, ok.gruende, ok.urteil], [true, null, [], "FREIGABE"]);
-  const medium = { freigebbar: false, gruende: ["Klausel „personen“ nicht bestanden", "Rechte laut Prüfprotokoll nicht geklärt"] };
+  const medium = { freigebbar: false, gruende: ["Klausel „rahmen“ nicht bestanden", "Rechte laut Prüfprotokoll nicht geklärt"] };
   const nurMedium = regeln.pruefeVideoFreigabe(FREIGABE, TEXT, TEXT, medium, P);
   assert.deepEqual([nurMedium.freigebbar, nurMedium.grund, nurMedium.gruende], [false, medium.gruende[0], medium.gruende]);
   const ohne = "Caption zum Video, lang genug für die Regel, ohne Pflichtzeile.";

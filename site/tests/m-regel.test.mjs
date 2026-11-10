@@ -28,11 +28,11 @@ const VORGABEN = {
 
 function kette({ export: ex = {}, original = {}, startbild = {} } = {}) {
   return {
-    export: { id: 3, fassung: "export", abgeleitet_von: 2, job_id: "job-1", sha256: EXPORT_SHA, ki_hinweis_text: KI_HINWEIS_BILD, schnitt_von_s: 0.5, schnitt_bis_s: 3.5, anker_id: "test-anker", anker_sha256: ANKER_SHA, ...ex },
+    export: { id: 3, fassung: "export", abgeleitet_von: 2, job_id: "job-1", sha256: EXPORT_SHA, ki_hinweis_text: KI_HINWEIS_BILD, schnitt_von_s: 0.25, schnitt_bis_s: 2.75, anker_id: "test-anker", anker_sha256: ANKER_SHA, ...ex },
     original:
       original === null
         ? null
-        : { id: 2, fassung: "original", startbild_id: 1, job_id: "job-1", dauer_s: 5.04, anker_id: "test-anker", prompt_klauseln: [{ id: "kamera", text: "Kamera ruhig." }, { id: "personen", text: "Personen bleiben." }], ...original },
+        : { id: 2, fassung: "original", startbild_id: 1, job_id: "job-1", dauer_s: 4.5, anker_id: "test-anker", prompt_klauseln: [{ id: "licht", text: "Licht ruhig." }, { id: "rahmen", text: "Rahmen bleibt." }], ...original },
     startbild: startbild === null ? null : { id: 1, fassung: "startbild", anker_id: "test-anker", startbild_abgleich: "bestanden", startbild_abweichung_max: 0, ...startbild },
   };
 }
@@ -44,8 +44,8 @@ function protokoll(extra = {}) {
     medium_sha256: EXPORT_SHA,
     geprueft_am: "2026-11-11T10:00:00.000000+00:00",
     klauseln: [
-      { id: "kamera", bestanden: true },
-      { id: "personen", bestanden: true },
+      { id: "licht", bestanden: true },
+      { id: "rahmen", bestanden: true },
     ],
     anker_abgleich: "bestanden",
     ki_hinweis_eingebrannt: true,
@@ -61,7 +61,7 @@ const regel = (k = kette(), p = [protokoll()], v = VORGABEN) => pruefeMedienFrei
 test("MR-1 Grundfall: jede Bedingung erfüllt → freigebbar, ohne Grund, mit maßgeblichem Protokoll, id und Hash des Exports", () => {
   assert.deepEqual(regel(), { freigebbar: true, gruende: [], grund: null, pruefung_id: 10, medium_id: 3, medium_sha256: EXPORT_SHA });
   // NUMERIC kann als Text kommen; Werte am Rand des Fensters (von 0, bis = Dauer) sind zulässig.
-  const rand = regel(kette({ export: { schnitt_von_s: "0", schnitt_bis_s: "5.04" }, original: { dauer_s: "5.040" } }));
+  const rand = regel(kette({ export: { schnitt_von_s: "0", schnitt_bis_s: "4.5" }, original: { dauer_s: "4.500" } }));
   assert.equal(rand.freigebbar, true, rand.gruende.join(" | "));
 });
 
@@ -71,20 +71,20 @@ const FAELLE = [
   ["1 ohne Verweis", kette({ export: { abgeleitet_von: null } }), [protokoll()], "Export ohne Verweis auf sein Original"],
   ["2 kein Protokoll", kette(), [], "Prüfprotokoll fehlt"],
   ["2 anderer Hash", kette(), [protokoll({ medium_sha256: "d".repeat(64) })], "Jüngstes Prüfprotokoll gilt einer anderen Datei (SHA-256 weicht ab)"],
-  ["3 Klausel nicht bestanden", kette(), [protokoll({ klauseln: [{ id: "kamera", bestanden: true }, { id: "personen", bestanden: false }] })], "Klausel „personen“ nicht bestanden"],
-  ["3 Klausel fehlt", kette(), [protokoll({ klauseln: [{ id: "kamera", bestanden: true }] })], "Klausel „personen“ fehlt im Prüfprotokoll"],
-  ["3 Klausel doppelt", kette(), [protokoll({ klauseln: [{ id: "kamera", bestanden: true }, { id: "personen", bestanden: true }, { id: "personen", bestanden: true }] })], "Klausel „personen“ steht mehrfach im Prüfprotokoll"],
+  ["3 Klausel nicht bestanden", kette(), [protokoll({ klauseln: [{ id: "licht", bestanden: true }, { id: "rahmen", bestanden: false }] })], "Klausel „rahmen“ nicht bestanden"],
+  ["3 Klausel fehlt", kette(), [protokoll({ klauseln: [{ id: "licht", bestanden: true }] })], "Klausel „rahmen“ fehlt im Prüfprotokoll"],
+  ["3 Klausel doppelt", kette(), [protokoll({ klauseln: [{ id: "licht", bestanden: true }, { id: "rahmen", bestanden: true }, { id: "rahmen", bestanden: true }] })], "Klausel „rahmen“ steht mehrfach im Prüfprotokoll"],
   ["4 Anker-Abgleich", kette(), [protokoll({ anker_abgleich: "nicht_bestanden" })], "Anker-Abgleich nicht bestanden (Architektur, Personen, Wasser)"],
   ["5 nicht eingebrannt", kette(), [protokoll({ ki_hinweis_eingebrannt: false })], "KI-Hinweis nicht vom ersten bis zum letzten Bild eingebrannt (laut Prüfprotokoll)"],
   ["5 Wortlaut", kette({ export: { ki_hinweis_text: "Alter Hinweistext (Testwert)" } }), [protokoll()], "KI-Hinweis im Bild hat nicht den festgelegten Wortlaut"],
   ["6 Durchsicht", kette(), [protokoll({ durchsicht_volle_bildrate: false })], "Durchsicht in voller Bildrate nicht erklärt"],
-  ["7 bis nach dem Ende", kette({ export: { schnitt_bis_s: 5.05 } }), [protokoll()], "Schnittfenster fehlt oder liegt nicht im Original (0 ≤ von < bis ≤ Dauer)"],
-  ["7 von = bis", kette({ export: { schnitt_von_s: 3.5 } }), [protokoll()], "Schnittfenster fehlt oder liegt nicht im Original (0 ≤ von < bis ≤ Dauer)"],
+  ["7 bis nach dem Ende", kette({ export: { schnitt_bis_s: 4.51 } }), [protokoll()], "Schnittfenster fehlt oder liegt nicht im Original (0 ≤ von < bis ≤ Dauer)"],
+  ["7 von = bis", kette({ export: { schnitt_von_s: 2.75 } }), [protokoll()], "Schnittfenster fehlt oder liegt nicht im Original (0 ≤ von < bis ≤ Dauer)"],
   ["7 ohne Fenster", kette({ export: { schnitt_von_s: null, schnitt_bis_s: null } }), [protokoll()], "Schnittfenster fehlt oder liegt nicht im Original (0 ≤ von < bis ≤ Dauer)"],
   ["8 Anker nicht im Manifest", kette({ export: { anker_id: "fremd" }, original: { anker_id: "fremd" }, startbild: { anker_id: "fremd" } }), [protokoll()], "Anker „fremd“ steht nicht als zulässiger Anker im Manifest"],
   ["8 kein zulässiger Anker", kette({ export: { anker_id: "kein-anker", anker_sha256: "b".repeat(64) }, original: { anker_id: "kein-anker" }, startbild: { anker_id: "kein-anker" } }), [protokoll()], "Anker „kein-anker“ steht nicht als zulässiger Anker im Manifest"],
   ["8 Anker-Hash", kette({ export: { anker_sha256: "e".repeat(64) } }), [protokoll()], "Anker-Hash des Exports weicht vom Manifest ab"],
-  ["8 Startbild-Abgleich", kette({ startbild: { startbild_abgleich: "nicht_bestanden", startbild_abweichung_max: 19 } }), [protokoll()], "Startbild-Abgleich nicht bestanden (größte Abweichung 19)"],
+  ["8 Startbild-Abgleich", kette({ startbild: { startbild_abgleich: "nicht_bestanden", startbild_abweichung_max: 7 } }), [protokoll()], "Startbild-Abgleich nicht bestanden (größte Abweichung 7)"],
   ["8 Startbild fehlt", kette({ startbild: null }), [protokoll()], "Startbild des Originals fehlt"],
   ["8 verschiedene Anker", kette({ startbild: { anker_id: "kein-anker" } }), [protokoll()], "Export, Original und Startbild nennen verschiedene Anker"],
   ["9 Rechte offen", kette(), [protokoll({ rechte_status: "offen", rechte_nachweis: null })], "Rechte laut Prüfprotokoll nicht geklärt"],
@@ -100,27 +100,27 @@ for (const [name, k, p, grund] of FAELLE) {
   });
 }
 
-test("MR-3 Alle Gründe zugleich, in der Reihenfolge der Bedingungen (Lage wie bei der Probe: Personen, Wasserspiel, alter Wortlaut, Startbild) — Rechte geklärt, also kein Rechte-Grund", () => {
-  const r = regel(kette({ export: { ki_hinweis_text: "Alter Hinweistext (Testwert)" }, startbild: { startbild_abgleich: "nicht_bestanden", startbild_abweichung_max: 19 } }), [
-    protokoll({ klauseln: [{ id: "kamera", bestanden: true }, { id: "personen", bestanden: false }], anker_abgleich: "nicht_bestanden" }),
+test("MR-3 Alle Gründe zugleich, in der Reihenfolge der Bedingungen — Klausel, Anker, Wortlaut und Startbild; Rechte im Testaufbau geklärt, also kein Rechte-Grund", () => {
+  const r = regel(kette({ export: { ki_hinweis_text: "Alter Hinweistext (Testwert)" }, startbild: { startbild_abgleich: "nicht_bestanden", startbild_abweichung_max: 7 } }), [
+    protokoll({ klauseln: [{ id: "licht", bestanden: true }, { id: "rahmen", bestanden: false }], anker_abgleich: "nicht_bestanden" }),
   ]);
   assert.deepEqual(r.gruende, [
-    "Klausel „personen“ nicht bestanden",
+    "Klausel „rahmen“ nicht bestanden",
     "Anker-Abgleich nicht bestanden (Architektur, Personen, Wasser)",
     "KI-Hinweis im Bild hat nicht den festgelegten Wortlaut",
-    "Startbild-Abgleich nicht bestanden (größte Abweichung 19)",
+    "Startbild-Abgleich nicht bestanden (größte Abweichung 7)",
   ]);
-  assert.equal(r.grund, "Klausel „personen“ nicht bestanden");
+  assert.equal(r.grund, "Klausel „rahmen“ nicht bestanden");
   assert.equal(r.pruefung_id, 10);
   // Alles auf einmal falsch: jede Bedingung meldet sich.
   const alle = regel(
     kette({ export: { ki_hinweis_text: "x", schnitt_bis_s: 9, anker_sha256: "e".repeat(64) }, original: { job_id: "job-2" }, startbild: { startbild_abgleich: "nicht_bestanden", startbild_abweichung_max: null } }),
-    [protokoll({ klauseln: [{ id: "kamera", bestanden: false }], anker_abgleich: "nicht_bestanden", ki_hinweis_eingebrannt: false, durchsicht_volle_bildrate: false, rechte_status: "offen" })],
+    [protokoll({ klauseln: [{ id: "licht", bestanden: false }], anker_abgleich: "nicht_bestanden", ki_hinweis_eingebrannt: false, durchsicht_volle_bildrate: false, rechte_status: "offen" })],
   );
   assert.deepEqual(alle.gruende, [
     "Original und Export tragen nicht dieselbe job_id",
-    "Klausel „kamera“ nicht bestanden",
-    "Klausel „personen“ fehlt im Prüfprotokoll",
+    "Klausel „licht“ nicht bestanden",
+    "Klausel „rahmen“ fehlt im Prüfprotokoll",
     "Anker-Abgleich nicht bestanden (Architektur, Personen, Wasser)",
     "KI-Hinweis nicht vom ersten bis zum letzten Bild eingebrannt (laut Prüfprotokoll)",
     "KI-Hinweis im Bild hat nicht den festgelegten Wortlaut",

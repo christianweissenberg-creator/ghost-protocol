@@ -54,7 +54,7 @@ const SLUG = "rittergut-seifersdorf";
 const HOF = anker.ANKER_MANIFESTE[SLUG].eintraege.find((e) => e.id === "hof-nacht");
 const sha = (b) => createHash("sha256").update(b).digest("hex");
 const EXPORT = (() => {
-  const b = Buffer.alloc(704_362);
+  const b = Buffer.alloc(650_000);
   randomFillSync(b);
   b.write("ftypisom", 4, "latin1");
   return b;
@@ -71,9 +71,9 @@ function video({ startbild = {}, original = {}, export: ex = {} } = {}) {
     kosten_usd: null, kosten_quelle: null, startbild_id: null, abgeleitet_von: null, eingespielt_am: "2026-11-10T14:30:00.000000+00:00",
   };
   welt.tabellen.studio_medium = [
-    { ...basis, id: 1, art: "bild", fassung: "startbild", sha256: "1".repeat(64), speicher_pfad: `${SLUG}/${"1".repeat(64)}.png`, bytes: 10, mime: "image/png", breite: 3000, hoehe: 1687, ausschnitt: { x: 0, y: 264, breite: 3000, hoehe: 1687, skalierung: 1 }, startbild_abgleich: "bestanden", startbild_abweichung_max: 0, ...startbild },
-    { ...basis, id: 2, art: "video", fassung: "original", sha256: "2".repeat(64), speicher_pfad: `${SLUG}/${"2".repeat(64)}.mp4`, bytes: 15_199_760, mime: "video/mp4", startbild_id: 1, erzeuger: "higgsfield-connector", modell: "kling3_0", job_id: "job-1", fps: 24, dauer_s: 5.04, prompt: "Test-Prompt", prompt_klauseln: [{ id: "kamera", text: "Kamera ruhig." }, { id: "personen", text: "Personen bleiben." }], kosten_credits: 8.75, kosten_quelle: "Test", ...original },
-    { ...basis, id: 3, art: "video", fassung: "export", sha256: EXPORT_SHA, speicher_pfad: EXPORT_PFAD, bytes: EXPORT.length, mime: "video/mp4", abgeleitet_von: 2, job_id: "job-1", breite: 1280, hoehe: 720, fps: 24, dauer_s: 3.04, schnitt_von_s: 0.5, schnitt_bis_s: 3.5, ki_hinweis_text: KI_HINWEIS_BILD, ...ex },
+    { ...basis, id: 1, art: "bild", fassung: "startbild", sha256: "1".repeat(64), speicher_pfad: `${SLUG}/${"1".repeat(64)}.png`, bytes: 10, mime: "image/png", breite: 3000, hoehe: 1687, ausschnitt: { x: 0, y: 120, breite: 3000, hoehe: 1687, skalierung: 1 }, startbild_abgleich: "bestanden", startbild_abweichung_max: 0, ...startbild },
+    { ...basis, id: 2, art: "video", fassung: "original", sha256: "2".repeat(64), speicher_pfad: `${SLUG}/${"2".repeat(64)}.mp4`, bytes: 15_000_000, mime: "video/mp4", startbild_id: 1, erzeuger: "higgsfield-connector", modell: "test-modell", job_id: "job-1", fps: 24, dauer_s: 4.5, prompt: "Test-Prompt", prompt_klauseln: [{ id: "licht", text: "Licht ruhig." }, { id: "rahmen", text: "Rahmen bleibt." }], kosten_credits: 6.5, kosten_quelle: "Test", ...original },
+    { ...basis, id: 3, art: "video", fassung: "export", sha256: EXPORT_SHA, speicher_pfad: EXPORT_PFAD, bytes: EXPORT.length, mime: "video/mp4", abgeleitet_von: 2, job_id: "job-1", breite: 1280, hoehe: 720, fps: 24, dauer_s: 2.5, schnitt_von_s: 0.25, schnitt_bis_s: 2.75, ki_hinweis_text: KI_HINWEIS_BILD, ...ex },
   ];
   legeObjektAn(welt.studio, EXPORT_PFAD, EXPORT, { mime: "video/mp4" });
 }
@@ -83,8 +83,8 @@ function eingabe(extra = {}) {
     medium_sha256: EXPORT_SHA,
     pruefer_kuerzel: "TS",
     klauseln: [
-      { id: "kamera", bestanden: true },
-      { id: "personen", bestanden: true },
+      { id: "licht", bestanden: true },
+      { id: "rahmen", bestanden: true },
     ],
     anker_abgleich: "bestanden",
     ki_hinweis_eingebrannt: true,
@@ -154,11 +154,11 @@ test("MP-1 Prüfroute: speichert das Protokoll; urteil berechnet der Server mit 
   const gesendet = welt.log.filter((l) => l.methode === "POST" && l.tabelle === "studio_pruefung").map((l) => l.body);
   assert.ok(gesendet.every((b) => !("id" in b) && !("geprueft_am" in b)));
   // Mit einer nicht bestandenen Klausel: nicht bestanden, mit dem Grund der Regel; das jüngste Protokoll zählt.
-  const schlecht = await pruefe(3, eingabe({ klauseln: [{ id: "kamera", bestanden: true }, { id: "personen", bestanden: false }] }));
-  assert.deepEqual([schlecht.body.urteil, schlecht.body.gruende], ["nicht_bestanden", ["Klausel „personen“ nicht bestanden"]]);
+  const schlecht = await pruefe(3, eingabe({ klauseln: [{ id: "licht", bestanden: true }, { id: "rahmen", bestanden: false }] }));
+  assert.deepEqual([schlecht.body.urteil, schlecht.body.gruende], ["nicht_bestanden", ["Klausel „rahmen“ nicht bestanden"]]);
   const studio = await (await studioRoute.GET(new NextRequest(`http://harness.local/api/studio/${SLUG}`, { headers: { cookie: "gp-auth=test" } }), { params: Promise.resolve({ objekt: SLUG }) })).json();
   const k = studio.medien.wert.ketten[0];
-  assert.deepEqual(k.urteil, { freigebbar: false, gruende: ["Klausel „personen“ nicht bestanden"], pruefung_id: 2 });
+  assert.deepEqual(k.urteil, { freigebbar: false, gruende: ["Klausel „rahmen“ nicht bestanden"], pruefung_id: 2 });
   assert.deepEqual(k.pruefungen.map((p) => p.id), [2, 1], "jüngstes zuerst");
   // Ohne Protokoll vorher: das Urteil sperrt mit „Prüfprotokoll fehlt“ (nur wenn keines da ist).
   zuruecksetzen();
@@ -201,9 +201,9 @@ test("MP-3 Prüfroute: fremder Hash → 409; Datei nachgehasht — verändert od
 test("MP-4 Prüfroute: Klauseln genau einmal, Verweis bei „geklärt“, kein urteil und kein durch vom Browser, Kürzel, Herkunft, Größe → 400/403/413/415", async () => {
   video();
   const faelle = [
-    [eingabe({ klauseln: [{ id: "kamera", bestanden: true }] }), /fehlt: personen/],
+    [eingabe({ klauseln: [{ id: "licht", bestanden: true }] }), /fehlt: rahmen/],
     [eingabe({ klauseln: [...eingabe().klauseln, { id: "wasser", bestanden: true }] }), /fremd oder doppelt: wasser/],
-    [eingabe({ klauseln: [...eingabe().klauseln, { id: "kamera", bestanden: true }] }), /fremd oder doppelt: kamera/],
+    [eingabe({ klauseln: [...eingabe().klauseln, { id: "licht", bestanden: true }] }), /fremd oder doppelt: licht/],
     [eingabe({ rechte_nachweis: "   " }), /geklaert nur mit Nachweis-Verweis/],
     [eingabe({ rechte_nachweis: null }), /geklaert nur mit Nachweis-Verweis/],
     [{ ...eingabe(), urteil: "bestanden" }, /urteil setzt der Server/],
@@ -228,14 +228,14 @@ test("MP-4 Prüfroute: Klauseln genau einmal, Verweis bei „geklärt“, kein u
 // ═══ Freigeben mit metadata.medium_id ═══
 
 test("MP-5 „freigeben“ mit medium_id: Medien-Regel sperrt → 409 mit erstem Grund und allen Gründen; die Zeile bleibt unverändert", async () => {
-  video({ startbild: { startbild_abgleich: "nicht_bestanden", startbild_abweichung_max: 19 } });
-  assert.equal((await pruefe(3, eingabe({ klauseln: [{ id: "kamera", bestanden: true }, { id: "personen", bestanden: false }], anker_abgleich: "nicht_bestanden" }))).status, 200);
+  video({ startbild: { startbild_abgleich: "nicht_bestanden", startbild_abweichung_max: 7 } });
+  assert.equal((await pruefe(3, eingabe({ klauseln: [{ id: "licht", bestanden: true }, { id: "rahmen", bestanden: false }], anker_abgleich: "nicht_bestanden" }))).status, 200);
   caption();
   const vorher = structuredClone(zeile(50));
   const r = await freigeben(50);
   assert.equal(r.status, 409);
-  assert.equal(r.body.fehler, "Klausel „personen“ nicht bestanden");
-  assert.deepEqual(r.body.gruende, ["Klausel „personen“ nicht bestanden", "Anker-Abgleich nicht bestanden (Architektur, Personen, Wasser)", "Startbild-Abgleich nicht bestanden (größte Abweichung 19)"]);
+  assert.equal(r.body.fehler, "Klausel „rahmen“ nicht bestanden");
+  assert.deepEqual(r.body.gruende, ["Klausel „rahmen“ nicht bestanden", "Anker-Abgleich nicht bestanden (Architektur, Personen, Wasser)", "Startbild-Abgleich nicht bestanden (größte Abweichung 7)"]);
   assert.deepEqual(zeile(50), vorher, "nichts geschrieben");
   assert.ok(!welt.log.some((l) => l.methode === "PATCH"), "kein Update");
   assert.ok(welt.studio.log.some((l) => l.op === "download" && l.pfad === EXPORT_PFAD), "Export vorher nachgehasht");
@@ -374,24 +374,24 @@ test("MP-14 Prüfroute: Zeitüberschreitung beim Speichern (postgrest-js liefert
 });
 
 test("MP-15 „freigeben“ mit medium_id (Schritt 9): eine Prüfung für Caption und Medium — Pflichtzeile fehlt oder steht nur im Satz → 409; Caption-Grund vor Pflichtzeile vor Medien-Gründen", async () => {
-  video({ startbild: { startbild_abgleich: "nicht_bestanden", startbild_abweichung_max: 19 } });
+  video({ startbild: { startbild_abgleich: "nicht_bestanden", startbild_abweichung_max: 7 } });
   assert.equal((await pruefe(3, eingabe())).status, 200);
   const ohne = "Caption zum Video, lang genug für die Regel, ohne die Pflichtzeile.";
   const imSatz = `Caption zum Video: ${PFLICHTZEILE}`;
   for (const text of [ohne, imSatz]) {
     zuruecksetzen();
-    video({ startbild: { startbild_abgleich: "nicht_bestanden", startbild_abweichung_max: 19 } });
+    video({ startbild: { startbild_abgleich: "nicht_bestanden", startbild_abweichung_max: 7 } });
     await pruefe(3, eingabe());
     legeAn({ id: 50, title: "Caption", status: "zur_freigabe", body: text, review_notes: "URTEIL: FREIGABE-EMPFEHLUNG", metadata: { objekt_slug: SLUG, steps: [{ agent: "researcher", output: "r" }, { agent: "scribe", output: text }], medium_id: 3 } });
     const r = await freigeben(50);
     assert.equal(r.status, 409, text);
-    assert.deepEqual(r.body.gruende, [`Pflichtzeile zum KI-Hinweis fehlt im Freigabetext („${PFLICHTZEILE}“ als eigene Zeile)`, "Startbild-Abgleich nicht bestanden (größte Abweichung 19)"]);
+    assert.deepEqual(r.body.gruende, [`Pflichtzeile zum KI-Hinweis fehlt im Freigabetext („${PFLICHTZEILE}“ als eigene Zeile)`, "Startbild-Abgleich nicht bestanden (größte Abweichung 7)"]);
     assert.equal(r.body.fehler, r.body.gruende[0]);
     assert.equal(zeile(50).status, "zur_freigabe");
   }
   // COUNSEL sperrt: dessen Grund zuerst, danach Pflichtzeile und Medium.
   zuruecksetzen();
-  video({ startbild: { startbild_abgleich: "nicht_bestanden", startbild_abweichung_max: 19 } });
+  video({ startbild: { startbild_abgleich: "nicht_bestanden", startbild_abweichung_max: 7 } });
   await pruefe(3, eingabe());
   legeAn({ id: 50, title: "Caption", status: "zur_freigabe", body: ohne, review_notes: "URTEIL: ABLEHNUNG", metadata: { objekt_slug: SLUG, steps: [{ agent: "researcher", output: "r" }, { agent: "scribe", output: ohne }], medium_id: 3 } });
   const r = await freigeben(50);
@@ -412,16 +412,16 @@ async function dreiStellen() {
 
 test("MP-16 Schritt 9: Freigeben, Stapel und Studio-Karte nennen für eine Caption zu einem Video denselben Sperrgrund (eine Funktion); der Stapel zeigt medium mit Art, Hash und Prüfurteil", async () => {
   freigabenCache.setzeFreigabenZurueck();
-  video({ startbild: { startbild_abgleich: "nicht_bestanden", startbild_abweichung_max: 19 } });
+  video({ startbild: { startbild_abgleich: "nicht_bestanden", startbild_abweichung_max: 7 } });
   assert.equal((await pruefe(3, eingabe())).status, 200);
   caption();
   const { eintrag, karte } = await dreiStellen();
   const server = await freigeben(50);
   assert.equal(server.status, 409);
-  assert.equal(server.body.fehler, "Startbild-Abgleich nicht bestanden (größte Abweichung 19)");
+  assert.equal(server.body.fehler, "Startbild-Abgleich nicht bestanden (größte Abweichung 7)");
   assert.equal(eintrag.freigabe_sperre, server.body.fehler, "Stapel");
   assert.equal(karte.freigabe_sperre, server.body.fehler, "Studio-Karte");
-  assert.deepEqual(eintrag.medium, { id: 3, art: "video", fassung: "export", sha256: EXPORT_SHA, pruefung_id: 1, freigebbar: false, gruende: ["Startbild-Abgleich nicht bestanden (größte Abweichung 19)"] });
+  assert.deepEqual(eintrag.medium, { id: 3, art: "video", fassung: "export", sha256: EXPORT_SHA, pruefung_id: 1, freigebbar: false, gruende: ["Startbild-Abgleich nicht bestanden (größte Abweichung 7)"] });
   // Pflichtzeile fehlt: an allen drei Stellen der Pflichtzeilen-Grund zuerst.
   zuruecksetzen();
   freigabenCache.setzeFreigabenZurueck();
@@ -465,29 +465,29 @@ test("MP-17 Schritt 9: Die Änderungsprobe des Stapels erkennt ein neues Prüfpr
 
 // ═══ Prüfansicht ═══
 
-test("MP-8 Prüfansicht (rein): Bildschritt = 1/fps, Gesamtzahl round(dauer × fps) (Export: 73), Zähler zählt distinkte Bilder, Pflichtfelder, Anfrage", () => {
+test("MP-8 Prüfansicht (rein): Bildschritt = 1/fps, Gesamtzahl round(dauer × fps) (Export 2,5 s: 60), Zähler zählt distinkte Bilder, Pflichtfelder, Anfrage", () => {
   assert.equal(P.bildSchritt(24), 1 / 24);
   assert.equal(P.bildSchritt(25), 1 / 25);
   assert.equal(P.bildSchritt(null), null);
   assert.equal(P.bildSchritt(0), null);
-  assert.equal(P.bilderGesamt(3.04, 24), 73);
-  assert.equal(P.bilderGesamt(5.04, 24), 121);
+  assert.equal(P.bilderGesamt(2.49, 24), 60, "gerundet, nicht abgeschnitten");
+  assert.equal(P.bilderGesamt(4.5, 24), 108);
   assert.equal(P.bilderGesamt(null, 24), null);
   const z = P.bildZaehler(24);
   for (const t of [0, 0, 0.004, 1 / 24, 1 / 24 + 0.001, 2 / 24, 1 / 24]) z.sieh(t);
   assert.equal(z.anzahl, 3, "Bilder 0, 1 und 2 — Wiederholungen zählen nicht");
-  const klauseln = [{ id: "kamera" }, { id: "personen" }];
+  const klauseln = [{ id: "licht" }, { id: "rahmen" }];
   const e = P.leereEingaben(klauseln);
   assert.equal(e.rechte, "offen", "Rechtefeld steht anfangs auf offen");
-  assert.deepEqual(P.eingabenFehler(e, klauseln), ["Kürzel (2–6 Buchstaben)", "Klausel „kamera“", "Klausel „personen“", "Architektur", "Personen", "Wasser", "KI-Hinweis"]);
-  const voll = { ...e, kuerzel: "TS", klauseln: { kamera: "bestanden", personen: "nicht_bestanden" }, architektur: "bestanden", personen: "bestanden", wasser: "nicht_bestanden", hinweis: "bestanden", durchsicht: true };
+  assert.deepEqual(P.eingabenFehler(e, klauseln), ["Kürzel (2–6 Buchstaben)", "Klausel „licht“", "Klausel „rahmen“", "Architektur", "Personen", "Wasser", "KI-Hinweis"]);
+  const voll = { ...e, kuerzel: "TS", klauseln: { licht: "bestanden", rahmen: "nicht_bestanden" }, architektur: "bestanden", personen: "bestanden", wasser: "nicht_bestanden", hinweis: "bestanden", durchsicht: true };
   assert.deepEqual(P.eingabenFehler(voll, klauseln), []);
   assert.deepEqual(P.eingabenFehler({ ...voll, rechte: "geklaert", nachweis: " " }, klauseln), ["Nachweis-Verweis zu den Rechten"]);
   const anfrage = P.alsAnfrage({ ...voll, rechte: "geklaert", nachweis: " Verweis " }, EXPORT_SHA, klauseln);
   assert.deepEqual(anfrage, {
     medium_sha256: EXPORT_SHA,
     pruefer_kuerzel: "TS",
-    klauseln: [{ id: "kamera", bestanden: true }, { id: "personen", bestanden: false }],
+    klauseln: [{ id: "licht", bestanden: true }, { id: "rahmen", bestanden: false }],
     anker_abgleich: "nicht_bestanden",
     ki_hinweis_eingebrannt: true,
     durchsicht_volle_bildrate: true,
@@ -497,9 +497,9 @@ test("MP-8 Prüfansicht (rein): Bildschritt = 1/fps, Gesamtzahl round(dauer × f
   });
   assert.equal(P.alsAnfrage({ ...voll, wasser: "bestanden" }, EXPORT_SHA, klauseln).anker_abgleich, "bestanden");
   assert.equal(P.alsAnfrage(voll, EXPORT_SHA, klauseln).rechte_nachweis, null, "offen: kein Verweis");
-  assert.deepEqual(P.ausschnittStil({ x: 0, y: 264, breite: 3000, hoehe: 1687, skalierung: 1 }, { breite: 3000, hoehe: 2018 }), {
-    rahmen: { aspectRatio: "3000 / 1687" },
-    bild: { width: "100%", left: "0%", top: "-15.6491%" },
+  assert.deepEqual(P.ausschnittStil({ x: 0, y: 120, breite: 2400, hoehe: 1350, skalierung: 1 }, { breite: 2400, hoehe: 1600 }), {
+    rahmen: { aspectRatio: "2400 / 1350" },
+    bild: { width: "100%", left: "0%", top: "-8.8889%" },
   });
 });
 
@@ -509,7 +509,7 @@ async function kette() {
   return s.medien.wert.ketten[0];
 }
 
-test("MP-9 Prüfansicht (Markup): Export zuerst, Original nur auf Wunsch; Bildzähler 0 von 73; Anker-ID neben dem Rechtefeld; Rechte anfangs offen; jede Klausel einzeln", async () => {
+test("MP-9 Prüfansicht (Markup): Export zuerst, Original nur auf Wunsch; Bildzähler 0 von 60; Anker-ID neben dem Rechtefeld; Rechte anfangs offen; jede Klausel einzeln", async () => {
   video();
   const k = await kette();
   const html = renderToStaticMarkup(
@@ -517,7 +517,7 @@ test("MP-9 Prüfansicht (Markup): Export zuerst, Original nur auf Wunsch; Bildz�
   );
   assert.match(html, /<video[^>]*src="\/api\/studio\/rittergut-seifersdorf\/medien\/3\/datei"[^>]*data-pruef-video="export"/);
   assert.match(html, /Original abspielen \(groß\)/);
-  assert.match(html, /Einzelbilder gesehen: 0 von 73/);
+  assert.match(html, /Einzelbilder gesehen: 0 von 60/);
   assert.match(html, /Einzelbild-Schritt 41,67 ms \(1\/24 s\)/);
   assert.match(html, /Rechte · Anker hof-nacht/);
   assert.match(html, /<option value="offen" selected="">offen<\/option>/);
@@ -557,7 +557,7 @@ test("MP-10 Prüfansicht (Ablauf): Auswahl → POST …/pruefung mit genau diese
     finde(baum, (n) => n.props?.[attr] !== undefined && (n.type === "input" || n.type === "select")).props.onChange({ currentTarget: { value: wert, checked: wert } });
     baum = lz.rendere();
   };
-  for (const [punkt, w] of [["klausel-kamera", "bestanden"], ["klausel-personen", "nicht_bestanden"], ["architektur", "bestanden"], ["personen", "bestanden"], ["wasser", "nicht_bestanden"], ["hinweis", "bestanden"]]) waehle(punkt, w);
+  for (const [punkt, w] of [["klausel-licht", "bestanden"], ["klausel-rahmen", "nicht_bestanden"], ["architektur", "bestanden"], ["personen", "bestanden"], ["wasser", "nicht_bestanden"], ["hinweis", "bestanden"]]) waehle(punkt, w);
   tippe("data-durchsicht", true);
   tippe("data-kuerzel", "TS");
   const form = finde(baum, (n) => n.type === "form");
@@ -568,7 +568,7 @@ test("MP-10 Prüfansicht (Ablauf): Auswahl → POST …/pruefung mit genau diese
   assert.deepEqual(gesendet[0].body, {
     medium_sha256: EXPORT_SHA,
     pruefer_kuerzel: "TS",
-    klauseln: [{ id: "kamera", bestanden: true }, { id: "personen", bestanden: false }],
+    klauseln: [{ id: "licht", bestanden: true }, { id: "rahmen", bestanden: false }],
     anker_abgleich: "nicht_bestanden",
     ki_hinweis_eingebrannt: true,
     durchsicht_volle_bildrate: true,

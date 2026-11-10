@@ -110,14 +110,14 @@ test("M-S6 EXIF-Drehung → nicht bestanden mit Grund (Pixelvergleich nicht eind
 
 test("M-S7 Rezept-Regeln: skalierung nur 1, ganze Zahlen, Rechteck im Anker (sonst Grund für 400)", () => {
   const { pruefeAusschnitt, rezeptImAnker } = medien;
-  assert.deepEqual(pruefeAusschnitt({ x: 0, y: 264, breite: 3000, hoehe: 1687, skalierung: 1 }), { ok: true, wert: { x: 0, y: 264, breite: 3000, hoehe: 1687, skalierung: 1 } });
+  assert.deepEqual(pruefeAusschnitt({ x: 0, y: 120, breite: 2400, hoehe: 1350, skalierung: 1 }), { ok: true, wert: { x: 0, y: 120, breite: 2400, hoehe: 1350, skalierung: 1 } });
   assert.match(pruefeAusschnitt({ x: 0, y: 0, breite: 10, hoehe: 10, skalierung: 2 }).grund, /skalierung muss 1 sein/);
   assert.match(pruefeAusschnitt({ x: 0.5, y: 0, breite: 10, hoehe: 10, skalierung: 1 }).grund, /ausschnitt\.x: ganze Zahl/);
   assert.match(pruefeAusschnitt({ x: 0, y: 0, breite: 0, hoehe: 10, skalierung: 1 }).grund, /ausschnitt\.breite/);
   assert.match(pruefeAusschnitt({ x: 0, y: 0, breite: 10, hoehe: 10, skalierung: 1, drehung: 0 }).grund, /unbekanntes Feld drehung/);
-  const a = { id: "hof", breite: 3000, hoehe: 2018 };
-  assert.equal(rezeptImAnker({ x: 0, y: 264, breite: 3000, hoehe: 1687, skalierung: 1 }, a), null);
-  assert.equal(rezeptImAnker({ x: 0, y: 331, breite: 3000, hoehe: 1687, skalierung: 1 }, a), null, "bündig mit dem unteren Rand");
-  assert.match(rezeptImAnker({ x: 0, y: 332, breite: 3000, hoehe: 1687, skalierung: 1 }, a), /außerhalb des Ankers hof \(3000×2018\)/);
-  assert.match(rezeptImAnker({ x: 1, y: 0, breite: 3000, hoehe: 10, skalierung: 1 }, a), /außerhalb/);
+  const a = { id: "hof", breite: 2400, hoehe: 1600 };
+  assert.equal(rezeptImAnker({ x: 0, y: 120, breite: 2400, hoehe: 1350, skalierung: 1 }, a), null);
+  assert.equal(rezeptImAnker({ x: 0, y: 250, breite: 2400, hoehe: 1350, skalierung: 1 }, a), null, "bündig mit dem unteren Rand");
+  assert.match(rezeptImAnker({ x: 0, y: 251, breite: 2400, hoehe: 1350, skalierung: 1 }, a), /außerhalb des Ankers hof \(2400×1600\)/);
+  assert.match(rezeptImAnker({ x: 1, y: 0, breite: 2400, hoehe: 10, skalierung: 1 }, a), /außerhalb/);
 });
