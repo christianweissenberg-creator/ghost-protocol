@@ -1924,6 +1924,11 @@ test("P-P26 Auftragskennung (Gegenprüfung PR #10, B3): metadata.pruefauftrag be
   const html = ketteHtml(mit);
   assert.ok(html.includes(`data-pruefauftrag="true">Prüfauftrag COUNSEL ${p.kennung} · mit Prüfpunkt Datierung</p>`), html.slice(0, 800));
   assert.ok(ketteHtml(ohne).includes(`>Prüfauftrag COUNSEL ${ohne.metadata.pruefauftrag.kennung}</p>`));
+  // Fail-closed: „mit Prüfpunkt Datierung“ nur bei ausdrücklichem true (metadata kommt ungeprüft aus der DB)
+  for (const unklar of [{ kennung: p.kennung }, { kennung: p.kennung, datierung_pruefpunkt: "ja" }, { kennung: p.kennung, datierung_pruefpunkt: 1 }]) {
+    const k = ketteHtml({ ...mit, metadata: { ...mit.metadata, pruefauftrag: unklar } });
+    assert.ok(k.includes(`>Prüfauftrag COUNSEL ${p.kennung}</p>`), JSON.stringify(unklar));
+  }
   for (const pruefauftrag of [undefined, null, "x", { kennung: "abc" }, { kennung: `${p.kennung}0` }, { kennung: NAME }, { kennung: "ABCDEF0123456789" }]) {
     const k = ketteHtml({ ...mit, metadata: { ...mit.metadata, pruefauftrag } });
     assert.ok(!k.includes("data-pruefauftrag") && !k.includes("Prüfauftrag COUNSEL"), JSON.stringify(pruefauftrag));
