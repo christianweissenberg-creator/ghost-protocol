@@ -46,6 +46,8 @@ const lade = (rel) => import(pathToFileURL(path.join(SITE, rel)).href);
 const pruefRoute = await lade("src/app/api/studio/[objekt]/medien/[id]/pruefung/route.ts");
 const statusRoute = await lade("src/app/api/content/status/route.ts");
 const studioRoute = await lade("src/app/api/studio/[objekt]/route.ts");
+const freigabenRoute = await lade("src/app/api/freigaben/route.ts");
+const freigabenCache = await lade("src/lib/freigaben-cache.ts");
 const P = ladeStudioBausteine({ react: React, "react/jsx-runtime": jsxRuntime, "@/lib/counsel-urteil": counsel, "@/lib/freigabe-regeln": regeln }).pruef;
 
 const SLUG = "rittergut-seifersdorf";
@@ -114,7 +116,9 @@ async function freigeben(id) {
   return { status: res.status, body: await res.json() };
 }
 
-const CAPTION = `Caption zum Video, lang genug für die Regel. ${"Bild-/Videomaterial: KI-generierte Visualisierung, kein Foto der Bestandsimmobilie"}`;
+// Seit Schritt 9 steht die Pflichtzeile als eigene Zeile im Freigabetext (pruefeVideoFreigabe).
+const PFLICHTZEILE = "Bild-/Videomaterial: KI-generierte Visualisierung, kein Foto der Bestandsimmobilie";
+const CAPTION = `Caption zum Video, lang genug für die Regel.\n\n${PFLICHTZEILE}`;
 
 /** Caption-Zeile zur Freigabe: COUNSEL FREIGABE über genau diesen Text (Format vor der Endprüfung: steps[1] = SCRIBE). */
 function caption(metadata = {}) {
@@ -367,6 +371,96 @@ test("MP-14 Prüfroute: Zeitüberschreitung beim Speichern (postgrest-js liefert
   } finally {
     welt.vorAntwort = null;
   }
+});
+
+test("MP-15 „freigeben“ mit medium_id (Schritt 9): eine Prüfung für Caption und Medium — Pflichtzeile fehlt oder steht nur im Satz → 409; Caption-Grund vor Pflichtzeile vor Medien-Gründen", async () => {
+  video({ startbild: { startbild_abgleich: "nicht_bestanden", startbild_abweichung_max: 19 } });
+  assert.equal((await pruefe(3, eingabe())).status, 200);
+  const ohne = "Caption zum Video, lang genug für die Regel, ohne die Pflichtzeile.";
+  const imSatz = `Caption zum Video: ${PFLICHTZEILE}`;
+  for (const text of [ohne, imSatz]) {
+    zuruecksetzen();
+    video({ startbild: { startbild_abgleich: "nicht_bestanden", startbild_abweichung_max: 19 } });
+    await pruefe(3, eingabe());
+    legeAn({ id: 50, title: "Caption", status: "zur_freigabe", body: text, review_notes: "URTEIL: FREIGABE-EMPFEHLUNG", metadata: { objekt_slug: SLUG, steps: [{ agent: "researcher", output: "r" }, { agent: "scribe", output: text }], medium_id: 3 } });
+    const r = await freigeben(50);
+    assert.equal(r.status, 409, text);
+    assert.deepEqual(r.body.gruende, [`Pflichtzeile zum KI-Hinweis fehlt im Freigabetext („${PFLICHTZEILE}“ als eigene Zeile)`, "Startbild-Abgleich nicht bestanden (größte Abweichung 19)"]);
+    assert.equal(r.body.fehler, r.body.gruende[0]);
+    assert.equal(zeile(50).status, "zur_freigabe");
+  }
+  // COUNSEL sperrt: dessen Grund zuerst, danach Pflichtzeile und Medium.
+  zuruecksetzen();
+  video({ startbild: { startbild_abgleich: "nicht_bestanden", startbild_abweichung_max: 19 } });
+  await pruefe(3, eingabe());
+  legeAn({ id: 50, title: "Caption", status: "zur_freigabe", body: ohne, review_notes: "URTEIL: ABLEHNUNG", metadata: { objekt_slug: SLUG, steps: [{ agent: "researcher", output: "r" }, { agent: "scribe", output: ohne }], medium_id: 3 } });
+  const r = await freigeben(50);
+  assert.equal(r.status, 409);
+  assert.match(r.body.gruende[0], /^COUNSEL-Urteil ABLEHNUNG/);
+  assert.equal(r.body.gruende.length, 3);
+});
+
+/** Stapel, Studio-Karte und Freigeben für Zeile 50 (Schritt 9): Sperrgrund je Stelle. */
+async function dreiStellen() {
+  const stapel = await freigabenRoute.GET();
+  const s = await stapel.json();
+  const eintrag = s.wartend.find((e) => e.id === "50");
+  const studio = await (await studioRoute.GET(new NextRequest(`http://harness.local/api/studio/${SLUG}`, { headers: { cookie: "gp-auth=test" } }), { params: Promise.resolve({ objekt: SLUG }) })).json();
+  const karte = studio.assets.wert.find((a) => a.id === 50);
+  return { eintrag, karte, abfrage: stapel.headers.get("x-freigaben-abfrage") };
+}
+
+test("MP-16 Schritt 9: Freigeben, Stapel und Studio-Karte nennen für eine Caption zu einem Video denselben Sperrgrund (eine Funktion); der Stapel zeigt medium mit Art, Hash und Prüfurteil", async () => {
+  freigabenCache.setzeFreigabenZurueck();
+  video({ startbild: { startbild_abgleich: "nicht_bestanden", startbild_abweichung_max: 19 } });
+  assert.equal((await pruefe(3, eingabe())).status, 200);
+  caption();
+  const { eintrag, karte } = await dreiStellen();
+  const server = await freigeben(50);
+  assert.equal(server.status, 409);
+  assert.equal(server.body.fehler, "Startbild-Abgleich nicht bestanden (größte Abweichung 19)");
+  assert.equal(eintrag.freigabe_sperre, server.body.fehler, "Stapel");
+  assert.equal(karte.freigabe_sperre, server.body.fehler, "Studio-Karte");
+  assert.deepEqual(eintrag.medium, { id: 3, art: "video", fassung: "export", sha256: EXPORT_SHA, pruefung_id: 1, freigebbar: false, gruende: ["Startbild-Abgleich nicht bestanden (größte Abweichung 19)"] });
+  // Pflichtzeile fehlt: an allen drei Stellen der Pflichtzeilen-Grund zuerst.
+  zuruecksetzen();
+  freigabenCache.setzeFreigabenZurueck();
+  video();
+  await pruefe(3, eingabe());
+  const ohne = "Caption zum Video, lang genug für die Regel, ohne die Pflichtzeile.";
+  legeAn({ id: 50, title: "Caption", status: "zur_freigabe", body: ohne, review_notes: "URTEIL: FREIGABE-EMPFEHLUNG", metadata: { objekt_slug: SLUG, steps: [{ agent: "researcher", output: "r" }, { agent: "scribe", output: ohne }], medium_id: 3 } });
+  const zwei = await dreiStellen();
+  const r = await freigeben(50);
+  assert.equal(r.status, 409);
+  assert.match(r.body.fehler, /^Pflichtzeile zum KI-Hinweis fehlt im Freigabetext/);
+  assert.equal(zwei.eintrag.freigabe_sperre, r.body.fehler);
+  assert.equal(zwei.karte.freigabe_sperre, r.body.fehler);
+  assert.equal(zwei.eintrag.medium.freigebbar, true);
+  // Zeile ohne Video: kein medium, Sperre wie bisher.
+  zuruecksetzen();
+  freigabenCache.setzeFreigabenZurueck();
+  legeAn({ id: 51, title: "Text", status: "zur_freigabe", body: CAPTION, review_notes: "URTEIL: FREIGABE-EMPFEHLUNG", metadata: { steps: [{ agent: "researcher", output: "r" }, { agent: "scribe", output: CAPTION }] } });
+  const s = await (await freigabenRoute.GET()).json();
+  assert.equal(s.wartend[0].medium, null);
+  assert.equal(s.wartend[0].freigabe_sperre, null);
+  assert.ok(!welt.log.some((l) => String(l.tabelle).startsWith("studio_")), "ohne Video kein Zugriff auf die Medien");
+});
+
+test("MP-17 Schritt 9: Die Änderungsprobe des Stapels erkennt ein neues Prüfprotokoll (voll) — vorher wäre es bis zu 30 min unsichtbar geblieben; ohne Änderung nur die Probe", async () => {
+  freigabenCache.setzeFreigabenZurueck();
+  video();
+  assert.equal((await pruefe(3, eingabe({ rechte_status: "offen", rechte_nachweis: null }))).status, 200);
+  caption();
+  const eins = await dreiStellen();
+  assert.equal(eins.abfrage, "voll");
+  assert.equal(eins.eintrag.freigabe_sperre, "Rechte laut Prüfprotokoll nicht geklärt");
+  assert.equal((await dreiStellen()).abfrage, "unveraendert");
+  assert.equal((await pruefe(3, eingabe())).body.urteil, "bestanden");
+  const drei = await dreiStellen();
+  assert.equal(drei.abfrage, "voll", "neues Protokoll → volle Abfrage");
+  assert.equal(drei.eintrag.freigabe_sperre, null);
+  assert.equal(drei.eintrag.medium.pruefung_id, 2);
+  assert.equal((await freigeben(50)).status, 200, "der Server gibt jetzt frei");
 });
 
 // ═══ Prüfansicht ═══

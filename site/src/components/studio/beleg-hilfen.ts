@@ -14,8 +14,10 @@ import {
   STUFE_ENDPRUEFUNG,
   enthaeltGeschuetztenNamen,
   geprueftenTextAusSchritten,
+  PFLICHTZEILE_VIDEO_CAPTION,
   maskiereGeschuetzteNamen,
   pruefeFreigabe,
+  pruefeVideoFreigabe,
 } from "@/lib/freigabe-regeln";
 import type { FreigabePruefung } from "@/lib/freigabe-regeln";
 import type { CounselUrteil } from "@/lib/status-types";
@@ -99,6 +101,8 @@ export interface ContentMetadata {
   researcher_quellen?: string;
   freigabe_hinweis?: { geprueft?: string; zur_freigabe?: string; identisch?: boolean };
   freigabe?: AktionsVermerk;
+  /** Seit Objekt-Studio Schritt 9: Video zu dieser Caption (studio_medium.id), ungeprüft aus der Datenbank. */
+  medium_id?: unknown;
   gepostet?: AktionsVermerk;
   abgelehnt_durch?: string;
   metriken_verlauf?: unknown[];
@@ -127,7 +131,15 @@ export interface FreigabeLage {
   geprueftText: string | null;
   /** Der Freigabetext enthält den geschützten Namen. */
   nameImText: boolean;
+  /**
+   * Seit Objekt-Studio Schritt 9: Caption zu einem Video (metadata.medium_id); null = Zeile ohne Video. Der Browser prüft
+   * Caption und Pflichtzeile; das Urteil der Medien-Regel fällt der Server (Freigeben, Stapel, Studio-Karte).
+   */
+  medium?: { id: number | null };
 }
+
+/** Im Browser unbekannt: Die Medien-Regel prüft der Server; hier zählt sie nicht als Sperre (Bedienhilfe). */
+const MEDIEN_PRUEFT_DER_SERVER = { freigebbar: true, gruende: [] };
 
 // ═══ KONSTANTEN ═══
 
@@ -308,10 +320,21 @@ export function freigabeLage(item: Pick<BelegEintrag, "body" | "review_notes" | 
   const meta = alsObjekt(item.metadata) ?? {};
   const counsel = werteCounselAus(item.review_notes);
   const geprueftText = geprueftenText(meta, item.review_notes);
+  // Schritt 9: Caption zu einem Video — dieselbe Funktion wie auf dem Server, ohne das Urteil der Medien-Regel.
+  const mediumRoh = meta.medium_id;
+  const medium =
+    mediumRoh === undefined || mediumRoh === null
+      ? null
+      : { id: typeof mediumRoh === "number" && Number.isSafeInteger(mediumRoh) && mediumRoh > 0 ? mediumRoh : null };
   return {
     counsel,
     // Paket B (R2): mit dem geprüften Text — dieselbe Sperre wie beim Freigeben auf dem Server.
-    pruefung: pruefeFreigabe(counsel, item.body, geprueftText),
+    pruefung:
+      medium === null
+        ? pruefeFreigabe(counsel, item.body, geprueftText)
+        : pruefeVideoFreigabe(counsel, item.body, geprueftText, MEDIEN_PRUEFT_DER_SERVER, PFLICHTZEILE_VIDEO_CAPTION),
+    // Nur bei einer Caption zu einem Video: Zeilen ohne Video behalten genau die bisherige Lage (s-content-unveraendert).
+    ...(medium === null ? {} : { medium }),
     bezug: fassungsBezug(item.body, geprueftText, alsObjekt(meta.freigabe_hinweis)),
     geprueftText,
     nameImText: enthaeltGeschuetztenNamen(item.body),

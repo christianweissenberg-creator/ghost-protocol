@@ -191,3 +191,68 @@ export function pruefeFreigabe(
   }
   return { freigebbar: true, grund: null, ...basis };
 }
+
+// ═══ Caption zu einem Video (Objekt-Studio Stufe 2, Schritt 9, 10.11.2026) ═══
+//
+// Eine content-Zeile mit metadata.medium_id ist die Caption zu einem Video. Für sie gilt die Caption-Regel oben,
+// dazu die Pflichtzeile zum KI-Hinweis als eigene Zeile im Freigabetext und die Medien-Regel (lib/medien-freigabe.ts,
+// pruefeMedienFreigabe) für das Video. Eine Funktion für beides, an allen vier Stellen: Freigeben
+// (api/content/status), Stapel (api/freigaben), Studio-Karte (lib/studio/lesen.ts) und Beleg-Kette. Der Sperrgrund ist
+// der erste Grund (Spez. §8.6). Der Wortlaut der Pflichtzeile kommt vom Aufrufer (lib/studio/ki-hinweis.ts,
+// KI_PFLICHTZEILE_CAPTION), weil diese Datei ohne Laufzeit-Importe bleibt.
+
+/** Urteil der Medien-Regel für ein Video, wie pruefeMedienFreigabe es liefert (freigebbar, alle Gründe). */
+export interface MedienSperre {
+  freigebbar: boolean;
+  gruende: readonly string[];
+}
+
+export interface VideoFreigabePruefung extends FreigabePruefung {
+  /** Alle Gründe: Caption-Regel, dann Pflichtzeile, dann Medien-Regel; grund ist der erste. */
+  gruende: string[];
+}
+
+/**
+ * Wortlaut der Pflichtzeile, wie lib/studio/ki-hinweis.ts (KI_PFLICHTZEILE_CAPTION) — dort ist die Quelle; diese Kopie
+ * braucht der Browser-Code der Beleg-Kette, der ki-hinweis.ts nicht lädt. Ein Test hält beide gleich (m-caption-freigabe).
+ */
+export const PFLICHTZEILE_VIDEO_CAPTION = "Bild-/Videomaterial: KI-generierte Visualisierung, kein Foto der Bestandsimmobilie";
+
+/** Steht die Pflichtzeile als eigene Zeile im Text — wörtlich, nur Leerraum am Rand der Zeile zählt nicht? */
+export function enthaeltPflichtzeile(text: string | null | undefined, pflichtzeile: string): boolean {
+  const soll = pflichtzeile.trim();
+  if (typeof text !== "string" || soll === "") return false;
+  return text.split(/\r?\n/).some((zeile) => zeile.trim() === soll);
+}
+
+/** Text mit Pflichtzeile: unverändert, wenn sie schon als eigene Zeile dasteht; sonst als letzte Zeile nach einer Leerzeile. */
+export function mitPflichtzeile(text: string, pflichtzeile: string): string {
+  if (enthaeltPflichtzeile(text, pflichtzeile)) return text;
+  const rumpf = text.replace(/\s+$/u, "");
+  return rumpf === "" ? pflichtzeile.trim() : `${rumpf}\n\n${pflichtzeile.trim()}`;
+}
+
+/** Sperrgrund, wenn die Pflichtzeile fehlt. */
+export function pflichtzeileFehlt(pflichtzeile: string): string {
+  return `Pflichtzeile zum KI-Hinweis fehlt im Freigabetext („${pflichtzeile.trim()}“ als eigene Zeile)`;
+}
+
+/**
+ * Darf die Caption zu einem Video freigegeben werden? Caption-Regel (pruefeFreigabe, mit R2), Pflichtzeile und
+ * Medien-Regel zusammen; medium null = Urteil der Medien-Regel nicht ermittelt → gesperrt (fail-closed).
+ */
+export function pruefeVideoFreigabe(
+  counsel: CounselAuswertung,
+  body: string | null | undefined,
+  geprueft: string | null,
+  medium: MedienSperre | null,
+  pflichtzeile: string,
+): VideoFreigabePruefung {
+  const caption = pruefeFreigabe(counsel, body, geprueft);
+  const gruende: string[] = [];
+  if (!caption.freigebbar) gruende.push(caption.grund ?? "Caption-Regel sperrt");
+  if (!enthaeltPflichtzeile(body, pflichtzeile)) gruende.push(pflichtzeileFehlt(pflichtzeile));
+  if (medium === null) gruende.push("Urteil der Medien-Regel nicht ermittelt");
+  else if (!medium.freigebbar) gruende.push(...(medium.gruende.length > 0 ? medium.gruende : ["Medien-Regel sperrt"]));
+  return { ...caption, freigebbar: gruende.length === 0, grund: gruende[0] ?? null, gruende };
+}

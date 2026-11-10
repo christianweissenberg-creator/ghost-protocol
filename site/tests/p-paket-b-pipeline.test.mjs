@@ -19,6 +19,8 @@
 // - Gegenprüfung des Nachtrags (neun niedrige Punkte): Masken-Reihenfolge und Markdown in der Zahl (P-P22),
 //   Pflichtzeilen im PUBLISHER-Satz und „seit N Jahren …“ (P-P19), RESEARCHER-Text an SCRIBE maskiert (P-P24),
 //   Textregel-Befunde einzeln (P-P25), Auftragskennung der COUNSEL-Prüfanweisungen (P-P26).
+// - Gegenprüfung PR #13 (Paket C, 10.11.2026): Namensmaske vor Kampagnenmaske im Review an PUBLISHER (X01, P-P27),
+//   Textregel-Befunde vor dem Kürzen maskiert (X02, P-P28).
 // Die Umgebungswerte unten sind Testwerte dieses Prozesses, keine echten Schlüssel.
 // Z_ROUTE_<NAME>=<pfad> und Z_TSX_<NAME>=<pfad> prüfen Kopien statt der Repo-Dateien (Mutationstests).
 import { test, beforeEach } from "node:test";
@@ -1922,4 +1924,66 @@ test("P-P26 Auftragskennung (Gegenprüfung PR #10, B3): metadata.pruefauftrag be
 
   // Die Beleg-Kette zeigt die Kennung nicht: Die Studio-Bausteine (components/studio/) baut Paket C um, dieser Nachtrag
   // lässt sie unverändert. Die Kennung steht in metadata.pruefauftrag und damit im Beleg der Zeile.
+});
+
+// ═══ Gegenprüfung PR #13 (Paket C, 10.11.2026): Masken-Reihenfolge im Review, Befunde vor dem Kürzen maskiert ═══
+
+test("P-P27 Name direkt vor einer Kampagnenseite im Review (X01): erst Namens-, dann Kampagnenmaske — im PUBLISHER-Auftrag ist beides maskiert; übernimmt PUBLISHER das Review, endet der Lauf nicht nach vier Aufrufen", async () => {
+  const E = regeln.NAMENS_ERSATZ;
+  const X = kurz.KAMPAGNENSEITE_MASKIERT;
+  // Meldungen nennen den Fall, nicht den Satz: Er trägt den geschützten Namen im Klartext.
+  for (const [fall, satz, erwartet] of [
+    // Ohne Trenner zwischen Name und Adresse: Der letzte Buchstabe des Namens sperrte den Lookbehind von STEINADEL_ADRESSE
+    ["ohne Trenner", `Befunde: keine. Quelle ${NAME}steinadel.de/l/afa-rechner-p1 nicht verlinken.`, `Befunde: keine. Quelle ${E}${X} nicht verlinken.`],
+    ["klein, /L/ mit Query", `Befunde: keine. ${NAME.toLowerCase()}steinadel.de/L/afa-rechner-p1?utm_source=x`, `Befunde: keine. ${E}${X}`],
+    ["groß, //l/", `Befunde: keine. ${NAME.toUpperCase()}steinadel.de//l/denkmal-invest-p3, sonst nichts.`, `Befunde: keine. ${E}${X}, sonst nichts.`],
+    // Mit Formatierung dazwischen traf die Kampagnenmaske schon vorher; das Ergebnis bleibt gleich
+    ["Formatierung dazwischen", `Befunde: keine. **${NAME}**steinadel.de/l/afa-rechner-p1`, `Befunde: keine. **${E}**${X}`],
+  ]) {
+    zuruecksetzen();
+    welt.pipelineModul = pipeline;
+    exportMit(RITTERGUT);
+    agentenMitLink({ publisher: (task) => `Final: ${linkAusAuftrag(task)}\nAus dem Review: ${reviewAus(task)}` });
+    welt.agentAntworten.counsel = (task) =>
+      agentOk("counsel", task.startsWith("ENDPRUEFUNG (R2)") ? FREIGABE_END : `${satz}\nURTEIL: FREIGABE-EMPFEHLUNG`);
+    const r = await pipePost(RITTERGUT_X);
+    // Vorher stand „[geschützter Name]steinadel.de/l/…“ im Auftrag; PUBLISHER übernahm es, und die Kurzlink-Prüfung der
+    // Endfassung brach nach vier bezahlten Aufrufen ab (Direktlink auf eine Kampagnenseite).
+    assert.equal(r.body.status, "complete", `${fall}: ${JSON.stringify(r.body.fehler ?? null)}`);
+    assert.equal(welt.aktivierungen.length, 6, fall);
+    const t = auftrag("publisher");
+    assert.equal(reviewAus(t), erwartet, fall);
+    assert.doesNotMatch(t, /steinadel\.de\/+l\//i, `${fall}: keine Kampagnenseite im PUBLISHER-Auftrag`);
+    assert.doesNotMatch(t, NAME_RE, `${fall}: kein geschützter Name im PUBLISHER-Auftrag`);
+    // Der Beleg behält das Review ungekürzt; maskiert wird nur der Auftrag an PUBLISHER
+    assert.ok(r.body.steps[2].output.startsWith(satz), fall);
+  }
+});
+
+test("P-P28 Textregel-Befund mit dem geschützten Namen an der Schnittgrenze (X02): maskiert vor dem Kürzen — kein Bruchstück des Namens, kein Eintrag über 160 Zeichen, auch nicht im Detail", async () => {
+  const PRAEFIX = "Direktlink auf eine Kampagnenseite statt Kurzlink: ";
+  // Adresse ohne Schema (die URL-Bereinigung ersetzt sie nicht) und höchstens 120 Zeichen lang (der Befund kürzt sie nicht)
+  for (const [fall, fuell] of [
+    ["Name über der Schnittgrenze", 89], // Name ab Zeichen 155 des Befunds: vorher blieb ein Namensbruchstück stehen
+    ["Name kurz davor", 80], // Befund genau 160 Zeichen: vorher machte der längere Platzhalter 169 daraus
+  ]) {
+    zuruecksetzen();
+    welt.pipelineModul = pipeline;
+    exportMit(RITTERGUT);
+    const adresse = `steinadel.de/l/${"a".repeat(fuell)}${NAME}-ende`;
+    agentenMitLink({ scribe: (task) => `Thread 1/1 ${linkAusAuftrag(task)}\nQuelle: ${adresse}` });
+    const r = await pipePost(RITTERGUT_X);
+    assert.equal(r.body.status, "fehler", fall);
+    assert.deepEqual(welt.aktivierungen.map((a) => a.agent), ["researcher", "scribe"], fall);
+    assert.deepEqual([r.body.fehler.stufe, r.body.fehler.grund], ["scribe", "Kurzlink-Prüfung nicht bestanden (E12)"], fall);
+    assert.equal(`${PRAEFIX}${adresse}`.indexOf(NAME), PRAEFIX.length + 15 + fuell, `${fall}: Lage des Namens im ungekürzten Befund`);
+    const { befunde, detail } = r.body.fehler;
+    assert.equal(befunde.length, 1, fall);
+    for (const text of [...befunde, detail]) {
+      assert.ok(Array.from(text).length <= 160, `${fall}: ${Array.from(text).length} Zeichen`);
+      assert.doesNotMatch(text, /imm/i, `${fall}: kein Bruchstück des Namens: ${text}`);
+      assert.ok(text.startsWith(`${PRAEFIX}steinadel.de/l/${"a".repeat(fuell)}[ges`), `${fall}: Platzhalter an der Stelle des Namens: ${text}`);
+    }
+    assert.deepEqual(zeile(r.body.contentId).metadata.fehler.befunde, befunde, `${fall}: gespeichert wie geantwortet`);
+  }
 });

@@ -43,6 +43,13 @@ export function BelegZeile({ titel, vermerk, children }: { titel: string; vermer
   );
 }
 
+/** Schritt 9: Freigabe-Beleg eines Videos (metadata.freigabe mit medium_sha256 und pruefung_id); sonst leer. */
+function medienFreigabe(metadata: BelegEintrag["metadata"]): string {
+  const f = alsObjekt(alsObjekt(metadata)?.freigabe) as Record<string, unknown> | null;
+  if (!f || typeof f.medium_sha256 !== "string") return "";
+  return ` · freigegeben mit SHA-256 ${f.medium_sha256.slice(0, 16)}… nach Prüfprotokoll #${typeof f.pruefung_id === "number" ? f.pruefung_id : "?"}`;
+}
+
 export function BelegKette({
   item,
   kopiere,
@@ -143,6 +150,16 @@ export function BelegKette({
           ) : (
             <p style={{ color: FARBE_ROT }}>nicht erfüllt: {maskiert(lage.pruefung.grund ?? "ohne Grund")}</p>
           )}
+        </BelegZeile>
+      )}
+
+      {/* Schritt 9: nur bei einer Caption zu einem Video — Zeilen ohne Video bleiben unverändert. */}
+      {lage.medium && (
+        <BelegZeile titel="Video" vermerk="Die Medien-Regel prüft der Server beim Freigeben; Urteil im Stapel und im Studio.">
+          <p data-beleg-medium>
+            {lage.medium.id === null ? "Medium der Zeile nicht lesbar (metadata.medium_id)" : `Medium #${lage.medium.id}`}
+            {medienFreigabe(item.metadata)}
+          </p>
         </BelegZeile>
       )}
 

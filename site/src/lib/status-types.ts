@@ -230,8 +230,14 @@ export interface FreigabeEintrag {
   objekt_slug: string | null;
   /** Aus review_notes mit werteCounselAus() abgeleitet — kein gespeichertes Feld; zeile mit maskiertem Namen. */
   counsel: { urteil: CounselUrteil; zeile: string | null; abgeleitet: true };
-  /** Sperrgrund aus pruefeFreigabe() (lib/freigabe-regeln.ts); null = serverseitig freigebbar. */
+  /**
+   * Sperrgrund aus pruefeFreigabe() (lib/freigabe-regeln.ts), bei einer Caption zu einem Video (medium gesetzt) aus
+   * pruefeVideoFreigabe() — der erste Grund aus Caption-Regel, Pflichtzeile und Medien-Regel; null = serverseitig
+   * freigebbar.
+   */
   freigabe_sperre: string | null;
+  /** Seit Objekt-Studio Schritt 9: Video zu dieser Caption (metadata.medium_id); null = Zeile ohne Video. */
+  medium?: FreigabeMedium | null;
   /** body leer oder nur Leerraum. */
   text_leer: boolean;
   text_zeichen: number;
@@ -240,6 +246,25 @@ export interface FreigabeEintrag {
    * lib/freigabe-regeln.ts): seit Paket B die wörtlich geprüfte Endfassung, davor metadata.steps[1].output.
    */
   geprueft_ungleich_freigabe: boolean;
+}
+
+/**
+ * Video einer Caption im Freigabe-Stapel (Objekt-Studio Schritt 9): Art, Fassung, Hash und das Urteil der Medien-Regel
+ * (lib/medien-freigabe.ts) mit allen Gründen. Der Stapel hasht die Datei nicht nach; das tut erst „freigeben“.
+ */
+export interface FreigabeMedium {
+  /** metadata.medium_id; null = nicht lesbar (keine positive ganze Zahl). */
+  id: number | null;
+  /** studio_medium.art ("bild" | "video"); null = Medium nicht gelesen. */
+  art: string | null;
+  /** studio_medium.fassung; freigebbar ist nur "export". */
+  fassung: string | null;
+  sha256: string | null;
+  /** Maßgebliches (jüngstes) Prüfprotokoll; null = keins. */
+  pruefung_id: number | null;
+  freigebbar: boolean;
+  /** Gründe der Medien-Regel (bzw. warum sie nicht anwendbar war); leer, wenn freigebbar. */
+  gruende: string[];
 }
 
 export interface FreigabenAntwort {

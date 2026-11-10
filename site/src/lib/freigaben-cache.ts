@@ -36,6 +36,14 @@
 // Antwort ohne volle Abfrage trägt die Zeilen genau des Zwischenstands, gegen den ihre Probe verglichen
 // hat (die Route liest ihn einmal, vor der Probe), nicht die des Stands, der inzwischen im Speicher liegt.
 //
+// Seit Objekt-Studio Schritt 9 (10.11.2026): Captions zu einem Video (metadata.medium_id) sperren auch nach der
+// Medien-Regel, und die hängt an Zeilen außerhalb von content — Medien (studio_medium, unveränderlich) und
+// Prüfprotokolle (studio_pruefung, nur angehängt). Die Probe liest deshalb metadata->medium_id mit und die Route
+// ergänzt die Kennung um einen Medienteil: die ids der Videos und für ihre Prüfprotokolle die exakte Zählung und die
+// höchste id. Ein neues Protokoll ändert beides, und die Route liest voll — vorher wäre es bis zu 30 min unsichtbar
+// geblieben. Medien-Zeilen ändern sich nie; ein neues Video an einer Zeile ändert deren updated_at. Der Zwischenstand
+// hält die gelesenen Medien mit, damit eine Antwort ohne volle Abfrage dieselben Urteile zeigt.
+//
 // Nur die Route importiert diese Datei ("server-only"); kein Browser-Code erreicht sie (Wächter R5-W7 in
 // tests/r-content-waechter.test.mjs). Verhalten: tests/r-freigaben-probe.test.mjs.
 
@@ -46,7 +54,7 @@ import { contentKennung } from "./content-liste-cache";
 export const FREIGABEN_VOLL_SPAETESTENS_MS = 30 * 60_000;
 
 /** Spalten der Änderungsprobe; Filter, Sortierung, Grenzen und count "exact" wie bei der vollen Abfrage. */
-export const FREIGABEN_PROBE_SPALTEN = "id,updated_at";
+export const FREIGABEN_PROBE_SPALTEN = "id,updated_at,metadata->medium_id";
 
 /** Diagnose-Header der Antwort (nur bei 200): "unveraendert" (nur Probe, Antwort aus dem Zwischenstand) oder "voll". */
 export const FREIGABEN_ABFRAGE_HEADER = "x-freigaben-abfrage";
@@ -59,11 +67,20 @@ export interface FreigabenListe {
   readonly gesamt: number;
 }
 
+/** Medienteil (Schritt 9): Kennung der Videos und ihrer Prüfprotokolle ("" = keine Videos) und die gelesenen Medien. */
+export interface FreigabenMedien {
+  readonly kennung: string;
+  readonly daten: unknown;
+}
+
+const OHNE_MEDIEN: FreigabenMedien = { kennung: "", daten: null };
+
 export interface FreigabenStand {
-  /** Kennung beider Listen (freigabenKennung). */
+  /** Kennung beider Listen und des Medienteils (freigabenKennung). */
   readonly kennung: string;
   readonly wartend: FreigabenListe;
   readonly haengend: FreigabenListe;
+  readonly medien: FreigabenMedien;
   /** Uhr des Servers (ms) unmittelbar vor der vollen Abfrage — so ist das Alter eher zu hoch als zu niedrig geschätzt. */
   readonly vollAm: number;
 }
@@ -81,12 +98,30 @@ export function istZaehlung(wert: unknown): wert is number {
  * Zahl oder nicht leerer Text) oder kein Feld updated_at (Text oder null) trägt — dann lässt sich nicht
  * sagen, ob sich der Stapel geändert hat.
  */
-export function freigabenKennung(wartend: FreigabenListe, haengend: FreigabenListe): string | null {
+export function freigabenKennung(wartend: FreigabenListe, haengend: FreigabenListe, medien = ""): string | null {
   if (!istZaehlung(wartend.gesamt) || !istZaehlung(haengend.gesamt)) return null;
   const w = contentKennung(wartend.zeilen);
   const h = contentKennung(haengend.zeilen);
   if (w === null || h === null) return null;
-  return JSON.stringify([wartend.gesamt, w, haengend.gesamt, h]);
+  return JSON.stringify(medien === "" ? [wartend.gesamt, w, haengend.gesamt, h] : [wartend.gesamt, w, haengend.gesamt, h, medien]);
+}
+
+/** Höchstzahl der Videos, deren Urteil der Stapel je Anfrage liest; weitere zeigen „nicht ermittelt“ (gesperrt). */
+export const FREIGABEN_MEDIEN_HOECHSTENS = 25;
+
+/**
+ * ids der Videos aus den Zeilen (metadata->medium_id als positive ganze Zahl), aufsteigend und ohne Doppelte,
+ * höchstens FREIGABEN_MEDIEN_HOECHSTENS. Unlesbare Werte zählen nicht: Sie sperren ohne Lesen.
+ */
+export function freigabenMedienIds(...listen: readonly (readonly unknown[])[]): number[] {
+  const ids = new Set<number>();
+  for (const liste of listen) {
+    for (const z of liste) {
+      const id = typeof z === "object" && z !== null ? (z as Record<string, unknown>).medium_id : undefined;
+      if (typeof id === "number" && Number.isSafeInteger(id) && id > 0) ids.add(id);
+    }
+  }
+  return [...ids].sort((a, b) => a - b).slice(0, FREIGABEN_MEDIEN_HOECHSTENS);
 }
 
 /**
@@ -104,9 +139,9 @@ export function gueltigerFreigabenStand(jetzt: number): FreigabenStand | null {
  * Zählungen. Lässt sich aus ihnen keine Kennung bilden, hält der Speicher danach keinen Stand — die
  * nächste Anfrage liest wieder voll, wie vor der Änderungsprobe.
  */
-export function merkeFreigaben(wartend: FreigabenListe, haengend: FreigabenListe, vollAm: number): void {
-  const kennung = freigabenKennung(wartend, haengend);
-  stand = kennung === null ? null : { kennung, wartend, haengend, vollAm };
+export function merkeFreigaben(wartend: FreigabenListe, haengend: FreigabenListe, vollAm: number, medien: FreigabenMedien = OHNE_MEDIEN): void {
+  const kennung = freigabenKennung(wartend, haengend, medien.kennung);
+  stand = kennung === null ? null : { kennung, wartend, haengend, medien, vollAm };
 }
 
 /** Zwischenstand verwerfen (Tests: jeder Test beginnt ohne). */

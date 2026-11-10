@@ -169,11 +169,26 @@ function counselBadges(e: FreigabeEintrag): BadgeDaten[] {
   return badges;
 }
 
+/**
+ * Medienstatus einer Caption zu einem Video (Objekt-Studio Schritt 9): Video mit Fassung und Hash-Anfang, Urteil der
+ * Medien-Regel; im title alle Gründe. Ohne medium (Zeile ohne Video, ältere Antwort) kein Badge.
+ */
+function medienBadge(e: FreigabeEintrag): { text: string; ton: Ton; title: string } | null {
+  const m = e.medium;
+  if (m === undefined || m === null) return null;
+  const was = `Video ${m.id === null ? "(id unlesbar)" : `#${m.id}`}${m.fassung ? ` · ${m.fassung}` : ""}${m.sha256 ? ` · ${m.sha256.slice(0, 8)}…` : ""}`;
+  const gruende = m.gruende.map((g) => maskiereGeschuetzteNamen(g)).join(" · ");
+  return m.freigebbar
+    ? { text: `${was} · Medien-Regel erfüllt`, ton: "emerald", title: `Medien-Regel erfüllt (Prüfprotokoll #${m.pruefung_id ?? "?"}); die Datei hasht erst „freigeben“ nach` }
+    : { text: `${was} · Medien-Regel sperrt`, ton: "rose", title: `Medien-Regel: ${gruende || "ohne Grund"}` };
+}
+
 function FreigabeZeile({ e }: { e: FreigabeEintrag }) {
   const titel = maskiereGeschuetzteNamen(e.title?.trim() || "ohne Titel");
   const alter = Number.isFinite(e.alter_stunden) ? `seit ${EINE_STELLE.format(e.alter_stunden)} h` : "Alter unbekannt";
   const badges = counselBadges(e);
-  // Sperrgrund aus pruefeFreigabe() auf dem Server; null = serverseitig freigebbar.
+  const medium = medienBadge(e);
+  // Sperrgrund aus pruefeFreigabe() bzw. pruefeVideoFreigabe() auf dem Server; null = serverseitig freigebbar.
   const sperre =
     typeof e.freigabe_sperre === "string" && e.freigabe_sperre.trim() !== ""
       ? maskiereGeschuetzteNamen(e.freigabe_sperre.trim())
@@ -198,6 +213,7 @@ function FreigabeZeile({ e }: { e: FreigabeEintrag }) {
         {badges.map((b) => (
           <Badge key={b.text} text={b.text} ton={b.ton} title={b.title} />
         ))}
+        {medium && <Badge text={medium.text} ton={medium.ton} title={medium.title} />}
       </div>
       {sperre && (
         <p

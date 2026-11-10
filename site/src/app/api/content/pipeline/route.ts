@@ -8,11 +8,13 @@ import {
   enthaeltGeschuetztenNamen,
   geprueftenTextAusSchritten,
   maskiereGeschuetzteNamen,
+  mitPflichtzeile,
 } from "@/lib/freigabe-regeln";
-import { bereinigeFehler, leseProtokollEintraege, pruefeAnfrageHerkunft } from "@/lib/status-server";
+import { ABFRAGE_TIMEOUT_MS, bereinigeFehler, leseProtokollEintraege, pruefeAnfrageHerkunft } from "@/lib/status-server";
 import { STEINADEL_REGELPAKET } from "@/lib/steinadel-regelpaket";
 import { baueKurzlink, maskiereKampagnenseiten, pruefeKurzlinksImText } from "@/lib/steinadel-kurzlink";
 import type { KurzlinkPruefung, KurzlinkTextPruefung } from "@/lib/steinadel-kurzlink";
+import { KI_PFLICHTZEILE_CAPTION } from "@/lib/studio/ki-hinweis";
 import { DATIERUNG_AUSNAHMEN, istStudioObjekt } from "@/lib/studio/objekte";
 
 const BASE_URL = process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000";
@@ -60,6 +62,21 @@ const BASE_URL = process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000";
 //   PUBLISHER-Satz nimmt die Pflichtzeilen vom Zitierverbot aus; Textregel-Befunde einzeln in metadata.fehler.befunde;
 //   Auftragskennung der COUNSEL-Prüfanweisungen in metadata.pruefauftrag; AMPLIFIER mit Umfangsrahmen (maxTokens 4096
 //   in lib/agent-prompts.ts).
+//
+// Objekt-Studio Stufe 2, Paket C, Schritt 9 (10.11.2026; Spezifikation §6.3, Bauplan §4.3) — Caption zu einem Video:
+// - Optionales Feld medium_id: eine positive ganze Zahl, nur mit objekt_slug (sonst 400). Die Zeile in studio_medium muss
+//   existieren (sonst 404), zum Objekt des Laufs gehören und die Fassung "export" haben (sonst 400); ein Lesefehler gibt 502.
+//   Geprüft vor dem Insert und damit vor jedem bezahlten Aufruf (leseMedium). Ohne medium_id läuft alles wie bisher:
+//   keine Abfrage auf studio_medium, keine Pflichtzeile, metadata ohne medium_id.
+// - metadata.medium_id ist die Zahl. Der SCRIBE-Auftrag nennt die Auftragsart „Caption zu einem Video, Pflichtzeile
+//   KI-Hinweis“ und die Pflichtzeile (KI_PFLICHTZEILE_CAPTION, lib/studio/ki-hinweis.ts) als eigene Zeile (CAPTION_AUFTRAG).
+// - Fehlt die Pflichtzeile in der PUBLISHER-Fassung, ergänzt die Pipeline sie im PUBLISHER-Text selbst (steps[3].output,
+//   mitPflichtzeile aus lib/freigabe-regeln.ts) — nach der Mindestlänge (die Zeile allein ist kein Content), vor Namensschutz,
+//   Textregeln und Endprüfung. Grund: R2 gibt nur den wörtlich geprüften PUBLISHER-Text frei (geprueftenTextAusSchritten);
+//   eine erst an body angehängte Zeile sperrte die Freigabe. So prüft COUNSEL genau den Text mit Pflichtzeile, und body ist
+//   dieser Text. metadata.pflichtzeile belegt den Wortlaut und ob die Pipeline ergänzt hat.
+// - Gegenprüfung PR #13: Im Review an PUBLISHER läuft die Namensmaske vor der Kampagnenmaske (X01), und Textregel-Befunde
+//   werden vor dem Kürzen maskiert (X02, textregelVermerk).
 //
 // Stufe 1 (05.11.2026) — Freigabe und Beleg-Kette:
 // - Das COUNSEL-Urteil wertet werteCounselAus() aus (lib/counsel-urteil.ts); die frühere
@@ -205,6 +222,7 @@ interface PipelineRequest {
   repurpose_from?: string; // Original-Content für Repurposing
   objekt_slug?: string; // Steinadel-Objekt (optional) — bindet Objektdaten in RESEARCHER/SCRIBE ein
   lauf_id?: string; // Idempotenzschlüssel (optional, Fixrunde 06.11.2026, R10)
+  medium_id?: number; // Caption zu einem Video: id des Exports in studio_medium (optional, Paket C Schritt 9)
 }
 
 interface PipelineStep {
@@ -249,9 +267,12 @@ function vermerk(stufe: Vermerk["stufe"], grund: string, detail?: string): Verme
  * verschluckte den Trenner hinter einer Adresse („[URL] Alter …“). Jetzt wird jeder Befund einzeln bereinigt
  * und steht vollständig in befunde; das Detail entsteht aus den bereinigten Befunden (Trenner bleiben) und
  * bleibt gekürzt wie bisher.
+ * Gegenprüfung PR #13 (X02): Der geschützte Name wird VOR dem Kürzen maskiert. fehlerText maskiert erst nach
+ * bereinigeFehler, also nach dem Schnitt bei 160 Zeichen: Stand der Name an der Schnittgrenze, blieb ein unmaskiertes
+ * Bruchstück stehen, und ein Name kurz davor machte den Eintrag mit dem längeren Platzhalter länger als 160 Zeichen.
  */
 function textregelVermerk(stufe: Stufe, grund: string, befunde: string[]): Vermerk {
-  const einzeln = befunde.map((b) => fehlerText(b));
+  const einzeln = befunde.map((b) => fehlerText(maskiereGeschuetzteNamen(b)));
   return { ...vermerk(stufe, grund, einzeln.join("; ")), befunde: einzeln };
 }
 
@@ -564,6 +585,22 @@ const OBJEKT_TIMEOUT_MS = 20_000;
 
 // Lauf-ID (R10): vom Browser erzeugt (crypto.randomUUID()), Vertrag mit der Content-Seite.
 const LAUF_ID_MUSTER = /^[A-Za-z0-9:_-]{8,80}$/;
+
+/** medium_id (Paket C, Schritt 9): positive ganze Zahl im sicheren Bereich, wie die ids in studio_medium. */
+function istMediumId(wert: unknown): wert is number {
+  return typeof wert === "number" && Number.isSafeInteger(wert) && wert > 0;
+}
+
+/**
+ * Auftragsart im SCRIBE-Auftrag für die Caption zu einem Video (Paket C, Schritt 9; Spezifikation §6.3 und Z. 1262).
+ * Die Pflichtzeile steht allein in ihrer Zeile, damit SCRIBE sie Zeichen für Zeichen übernehmen kann. Fehlt sie in der
+ * PUBLISHER-Fassung, ergänzt die Pipeline sie vor der Endprüfung (mitPflichtzeile).
+ */
+const CAPTION_AUFTRAG =
+  "AUFTRAGSART: Caption zu einem Video, Pflichtzeile KI-Hinweis\n" +
+  "- Der Content ist die Caption zu einem KI-generierten Video dieses Objekts.\n" +
+  "- Die Caption enthält diese Pflichtzeile wörtlich als eigene Zeile, Zeichen für Zeichen, ohne Formatierung und ohne Zusatz in derselben Zeile:\n" +
+  KI_PFLICHTZEILE_CAPTION;
 
 // Namensschutz (R24): Grund, mit dem ein Freigabetext mit geschütztem Namen endet.
 const NAMENSSCHUTZ_GRUND = "Namensschutz: Freigabetext enthält einen geschützten Namen";
@@ -1246,6 +1283,32 @@ async function zeilenZuLauf(supabase: Dienst, laufId: string, hoechstens: number
   return { art: "ok", zeilen };
 }
 
+type MediumLesung = { art: "ok"; objekt_slug: string; fassung: string } | { art: "fehlt" } | { art: "fehler"; meldung: string };
+
+/**
+ * Paket C, Schritt 9: Objekt und Fassung des Mediums zu medium_id aus studio_medium, mit dem Service-Client und dem
+ * Zeitlimit der Medien-Routen (ABFRAGE_TIMEOUT_MS). "fehlt", wenn es die Zeile nicht gibt; "fehler" bei Lesefehler,
+ * Zeitüberschreitung oder unerwarteter Form (fail-closed: dann startet kein Lauf).
+ */
+async function leseMedium(supabase: Dienst, id: number): Promise<MediumLesung> {
+  try {
+    const { data, error } = await supabase
+      .from("studio_medium")
+      .select("id, objekt_slug, fassung")
+      .eq("id", id)
+      .abortSignal(AbortSignal.timeout(ABFRAGE_TIMEOUT_MS))
+      .maybeSingle();
+    if (error) return { art: "fehler", meldung: fehlerText(error, ABFRAGE_TIMEOUT_MS) };
+    if (data === null || data === undefined) return { art: "fehlt" };
+    if (!istObjekt(data) || typeof data.objekt_slug !== "string" || typeof data.fassung !== "string") {
+      return { art: "fehler", meldung: "unerwartete Zeilenform" };
+    }
+    return { art: "ok", objekt_slug: data.objekt_slug, fassung: data.fassung };
+  } catch (err) {
+    return { art: "fehler", meldung: fehlerText(err, ABFRAGE_TIMEOUT_MS) };
+  }
+}
+
 // POST — Run full content pipeline for a topic (optional: an ein Steinadel-Objekt gebunden)
 export async function POST(request: NextRequest) {
   let supabase: Dienst | null = null;
@@ -1356,8 +1419,15 @@ export async function POST(request: NextRequest) {
     if (laufId !== undefined && (typeof laufId !== "string" || !LAUF_ID_MUSTER.test(laufId))) {
       return fehlerAntwort(400, "lauf_id ungültig (8 bis 80 Zeichen: Buchstaben, Ziffern, Doppelpunkt, _ oder -)");
     }
-
-    // ═══ R10: Lauf-ID schon vergeben? Dann kein neuer Lauf (vor jedem weiteren Abruf) ═══
+    // Paket C, Schritt 9: medium_id ist optional; wenn gesetzt, eine positive ganze Zahl und nur mit Objekt.
+    const mediumRoh: unknown = roh.medium_id;
+    if (mediumRoh !== undefined && !istMediumId(mediumRoh)) {
+      return fehlerAntwort(400, "medium_id ungültig (positive ganze Zahl)");
+    }
+    const mediumId: number | null = istMediumId(mediumRoh) ? mediumRoh : null;
+    if (mediumId !== null && !objekt_slug) {
+      return fehlerAntwort(400, "medium_id nur mit objekt_slug: Die Caption gehört zum Video eines Objekts");
+    }
     if (laufId !== undefined) {
       const vorher = await zeilenZuLauf(supabase, laufId, 1);
       if (vorher.art === "fehler") {
@@ -1369,6 +1439,26 @@ export async function POST(request: NextRequest) {
           409,
           `Lauf-ID schon vergeben (#${erste.id}, Status ${erste.status}) — kein neuer Lauf gestartet`,
           { content_id: erste.id, status: erste.status }
+        );
+      }
+    }
+
+    // ═══ Paket C, Schritt 9: Medium der Caption (falls medium_id gesetzt) — vor dem Insert, kein bezahlter Aufruf ═══
+    if (mediumId !== null) {
+      const medium = await leseMedium(supabase, mediumId);
+      if (medium.art === "fehler") {
+        return fehlerAntwort(502, `Medium ${mediumId} nicht lesbar: ${medium.meldung} — Lauf nicht gestartet`);
+      }
+      if (medium.art === "fehlt") {
+        return fehlerAntwort(404, `Medium ${mediumId} nicht gefunden — Lauf nicht gestartet`);
+      }
+      if (medium.objekt_slug !== objekt_slug) {
+        return fehlerAntwort(400, `Medium ${mediumId} gehört nicht zum Objekt dieses Laufs — Lauf nicht gestartet`);
+      }
+      if (medium.fassung !== "export") {
+        return fehlerAntwort(
+          400,
+          `Medium ${mediumId} ist keine Export-Fassung (Fassung "${eingabeText(medium.fassung)}") — eine Caption gehört zum Export eines Videos`
         );
       }
     }
@@ -1417,6 +1507,8 @@ export async function POST(request: NextRequest) {
     basisMetadata = {
       thema,
       objekt_slug: objekt_slug ?? null,
+      // Paket C, Schritt 9: nur bei einer Caption zu einem Video (sonst fehlt das Feld, wie bisher).
+      ...(mediumId !== null ? { medium_id: mediumId } : {}),
       ...(laufId !== undefined ? { lauf_id: laufId } : {}),
       ...(objektSnapshot ? { objekt_snapshot: objektSnapshot } : {}),
       regelpaket: REGELPAKET,
@@ -1697,12 +1789,14 @@ format === "reel" ? `REEL (30-90 Sek):
     // (maskiereAlter, wie das Review an PUBLISHER). Übernahm SCRIBE ein „691 Jahre“ daraus, auch verneint oder in
     // einer Notiz, brach altersBefund den Lauf nach zwei bezahlten Aufrufen ab. Der Beleg (steps[0].output) bleibt
     // ungekürzt.
+    // Paket C, Schritt 9: Bei einer Caption zu einem Video (medium_id) steht die Auftragsart mit der Pflichtzeile
+    // direkt unter Plattform und Kategorie (CAPTION_AUFTRAG); sonst ist der Auftrag unverändert.
     await fuehreStufeAus(
       steps[1],
       `CONTENT-PRODUKTION: Schreibe Content zum Thema "${thema}".
 
 PLATTFORM: ${platformLabel[platform]}
-KATEGORIE: ${kategorieLabel}
+KATEGORIE: ${kategorieLabel}${mediumId !== null ? `\n\n${CAPTION_AUFTRAG}` : ""}
 
 RECHERCHE-ERGEBNISSE (von RESEARCHER):
 ${maskiereAlter(steps[0].output ?? "", datierung)}
@@ -1835,6 +1929,9 @@ ${URTEIL_SCHLUSS}`,
     // geschützten Namen, verhindert dessen erster Buchstabe den Treffer ((?!\p{L}) in altersMuster); erst der
     // Platzhalter „[…]“ der Namensmaske macht daraus ein Alter, das altersBefund trifft. Die Platzhalter
     // beider Masken enthalten keine Ziffer, maskiereAlter ändert sie also nicht.
+    // Die Namensmaske läuft vor der Kampagnenmaske (Gegenprüfung PR #13, X01): Steht der geschützte Name ohne Trenner
+    // direkt vor „steinadel.de/l/…“, verhindert sein letzter Buchstabe den Treffer (Lookbehind in STEINADEL_ADRESSE,
+    // lib/steinadel-kurzlink.ts), und die Kampagnenseite blieb unmaskiert; erst der Platzhalter „[…]“ gibt sie frei.
     await fuehreStufeAus(
       steps[3],
       `PUBLISHING-AUFTRAG: Bereite diesen Content für die Veröffentlichung vor.
@@ -1846,7 +1943,7 @@ CONTENT (von SCRIBE, COUNSEL-geprüft):
 ${steps[1].output}
 
 COUNSEL-REVIEW:
-${maskiereAlter(maskiereGeschuetzteNamen(maskiereKampagnenseiten(ohneUrteilZeilen(counselOutput))), datierung)}
+${maskiereAlter(maskiereKampagnenseiten(maskiereGeschuetzteNamen(ohneUrteilZeilen(counselOutput))), datierung)}
 
 AUFGABEN:
 1. Qualitätsprüfung: Fakten-Check, Ton, Länge
@@ -1878,7 +1975,7 @@ Modellrechnung-Disclaimer wörtlich.${datierungsHinweisPublisher(datierung)}${ob
     // Vor "zur_freigabe" (Stufe 1, 05.11.2026): Ein leerer oder fast leerer Text darf nicht
     // in den Freigabe-Stapel. Geprüft direkt nach PUBLISHER, damit AMPLIFIER nicht auf
     // einem leeren Text läuft.
-    const freigabeText = steps[3].output ?? "";
+    let freigabeText = steps[3].output ?? "";
     const freigabeZeichen = freigabeText.trim().length;
     if (freigabeZeichen < MIN_FREIGABE_ZEICHEN) {
       steps[3].status = "error";
@@ -1890,6 +1987,21 @@ Modellrechnung-Disclaimer wörtlich.${datierungsHinweisPublisher(datierung)}${ob
           `${freigabeZeichen} Zeichen nach Trimmen (Mindestlänge ${MIN_FREIGABE_ZEICHEN})`
         )
       );
+    }
+
+    // Paket C, Schritt 9: Caption zu einem Video — fehlt die Pflichtzeile, ergänzt die Pipeline sie im PUBLISHER-Text
+    // selbst (steps[3].output) als letzte Zeile (mitPflichtzeile). Erst nach der Mindestlänge, denn die Zeile allein ist
+    // kein Content; vor Namensschutz, Textregeln und Endprüfung, damit COUNSEL genau den Text mit Pflichtzeile prüft und
+    // body dieser Text ist. R2 (geprueftenTextAusSchritten) gibt nur den wörtlich geprüften PUBLISHER-Text frei; eine
+    // erst an body angehängte Zeile sperrte die Freigabe. Steht die Zeile schon da, bleibt der Text, wie er ist.
+    if (mediumId !== null) {
+      const mitZeile = mitPflichtzeile(freigabeText, KI_PFLICHTZEILE_CAPTION);
+      const ergaenzt = mitZeile !== freigabeText;
+      if (ergaenzt) {
+        steps[3].output = mitZeile;
+        freigabeText = mitZeile;
+      }
+      basisMetadata = { ...basisMetadata, pflichtzeile: { wortlaut: KI_PFLICHTZEILE_CAPTION, von_pipeline_ergaenzt: ergaenzt } };
     }
 
     // R24 Namensschutz: Ein Freigabetext mit geschütztem Namen geht nie auf "zur_freigabe".

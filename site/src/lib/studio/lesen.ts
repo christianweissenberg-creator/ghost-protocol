@@ -11,14 +11,15 @@
 
 import "server-only";
 import { werteCounselAus } from "../counsel-urteil";
-import { geprueftenTextAusSchritten, maskiereGeschuetzteNamen, pruefeFreigabe } from "../freigabe-regeln";
+import { geprueftenTextAusSchritten, maskiereGeschuetzteNamen, pruefeFreigabe, pruefeVideoFreigabe } from "../freigabe-regeln";
+import type { MedienSperre } from "../freigabe-regeln";
 import { PREIS_STAND_AB } from "../kosten";
 import { STATUS_WARTEND, bereinigeFehler, isoOderNull, istObjekt, mitternachtBerlin, textOderNull, verbinde } from "../status-server";
 import type { Seitenergebnis } from "../status-server";
 import { pruefeMedienFreigabe } from "../medien-freigabe";
 import type { MedienRegelVorgaben } from "../medien-freigabe";
 import { ankerManifest } from "./anker";
-import { KI_HINWEIS_BILD } from "./ki-hinweis";
+import { KI_HINWEIS_BILD, KI_PFLICHTZEILE_CAPTION } from "./ki-hinweis";
 import { pruefeAusschnitt } from "./medien";
 import { DATIERUNG_AUSNAHMEN, nochNichtGebautText } from "./objekte";
 import type { StudioObjekt } from "./objekte";
@@ -259,6 +260,41 @@ export function assetKosten(metadata: ContentMetadata | null, gemessenAm: string
     };
   }
   return { wert: k, status: "ok", quelle: QUELLE_KOSTEN, gemessen_am: gemessenAm };
+}
+
+/**
+ * Schritt 9 (10.11.2026): Captions zu einem Video (metadata.medium_id) sperren auf der Karte mit derselben Funktion wie
+ * Freigeben und Stapel (pruefeVideoFreigabe): Caption-Regel, Pflichtzeile und das Urteil der Medien-Regel aus dem Teil
+ * medien (Kette des Exports). Ist der Teil nicht lesbar, gilt das Urteil als nicht ermittelt; ein Medium, das nicht zu
+ * den Videos dieses Objekts gehört, als nicht gefunden. Karten ohne medium_id bleiben unverändert.
+ */
+export function mitMedienUrteil(assets: StudioAssetsTeil, medien: StudioMedienTeil): StudioAssetsTeil {
+  if (assets.wert === null) return assets;
+  const lesbar = medien.status !== "fehler" && medien.wert !== null;
+  const urteile = new Map<number, MedienSperre>();
+  if (lesbar && medien.wert !== null) for (const k of medien.wert.ketten) urteile.set(k.export.id, { freigebbar: k.urteil.freigebbar, gruende: k.urteil.gruende });
+  const wert = assets.wert.map((a) => {
+    const meta = a.beleg.metadata as Record<string, unknown> | null;
+    const roh = meta?.medium_id;
+    if (roh === undefined || roh === null) return a;
+    const id = typeof roh === "number" && Number.isSafeInteger(roh) && roh > 0 ? roh : null;
+    const sperre: MedienSperre | null =
+      id === null
+        ? { freigebbar: false, gruende: ["Medium der Zeile nicht lesbar (metadata.medium_id)"] }
+        : !lesbar
+          ? null
+          : (urteile.get(id) ?? { freigebbar: false, gruende: [`Medium ${id} nicht gefunden`] });
+    const p = pruefeVideoFreigabe(
+      werteCounselAus(a.beleg.review_notes),
+      a.beleg.body,
+      geprueftenTextAusSchritten(a.beleg.metadata?.steps, a.beleg.review_notes),
+      sperre,
+      KI_PFLICHTZEILE_CAPTION,
+    );
+    const grund = p.grund ?? (a.beleg.status === STATUS_WARTEND ? null : `Status "${a.beleg.status}" — freigebbar ist nur "${STATUS_WARTEND}"`);
+    return { ...a, freigabe_sperre: grund === null ? null : maskiereGeschuetzteNamen(grund) };
+  });
+  return { ...assets, wert };
 }
 
 /** Eine content-Zeile als Asset; wirft StudioLeseFehler, wenn Pflichtfelder unlesbar sind. */

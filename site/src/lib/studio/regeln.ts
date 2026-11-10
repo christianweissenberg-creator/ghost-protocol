@@ -96,6 +96,14 @@ export const STUDIO_REGELN: readonly StudioRegel[] = [
     pruefung: "Code, serverseitig beim Freigeben (409 mit Grund, Export-Datei vorher nachgehasht); Prüfprotokoll mit vom Server berechnetem Urteil",
   },
   {
+    // Seit Schritt 9 (10.11.2026).
+    regel:
+      "Die Caption zu einem Video trägt die Pflichtzeile zum KI-Hinweis wörtlich als eigene Zeile und wird nur zusammen mit dem Video freigegeben (Caption-Regel, Pflichtzeile und Medien-Regel in einer Prüfung).",
+    fundstelle:
+      "site/src/lib/freigabe-regeln.ts (pruefeVideoFreigabe, enthaeltPflichtzeile); site/src/lib/studio/ki-hinweis.ts (KI_PFLICHTZEILE_CAPTION); site/src/app/api/content/pipeline/route.ts",
+    pruefung: "Code, serverseitig beim Freigeben, im Stapel und auf der Studio-Karte; die Pipeline ergänzt eine fehlende Pflichtzeile vor der COUNSEL-Endprüfung",
+  },
+  {
     regel: "Bauträger öffentlich nicht namentlich nennen.",
     fundstelle: "Vorgabe des Inhabers; im Repo ohne eigene Fundstelle",
     pruefung: "nicht automatisch geprüft — es gibt keinen Namensfilter dafür",
