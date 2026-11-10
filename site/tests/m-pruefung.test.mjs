@@ -756,6 +756,17 @@ test("MP-26 leseKetten (Nachtrag d1-regression-1): je Medium dieselbe Kette wie 
   const runden = welt.log.slice(vorher).filter((l) => l.tabelle === "studio_medium").map((l) => inListe(l.query, "id"));
   assert.equal(runden.length, 3);
   assert.equal(new Set(runden.flat()).size, runden.flat().length, "keine id doppelt gefragt");
+  // Eine Zeile ohne lesbare id lässt sich keiner Kette zuordnen: Die ganze Rundreise gilt als unlesbar, statt die
+  // gefragten Medien als „fehlt“ zu melden.
+  welt.stoerung = (a) => (a.art === "supabase" && a.tabelle === "studio_medium" ? { status: 200, body: [{ ...zeilen.find((z) => z.id === 3), id: null }] } : null);
+  try {
+    const ohneId = await urteil.leseKetten(client, [3, 43]);
+    assert.equal(ohneId.get(3).art, "fehler");
+    assert.match(ohneId.get(3).grund, /^Zeile nicht lesbar: /);
+    assert.deepEqual(ohneId.get(43), ohneId.get(3), "dieselbe Rundreise, derselbe Grund");
+  } finally {
+    welt.stoerung = null;
+  }
   // Scheitert die zweite Rundreise (Originale), trifft das nur die Ketten mit Original; die ohne bleiben lesbar.
   let nr = 0;
   welt.stoerung = (a) => (a.art === "supabase" && a.tabelle === "studio_medium" && (nr += 1) === 2 ? { status: 500, body: { message: "Rundreise 2 gestört" } } : null);
@@ -787,6 +798,22 @@ test("MP-27 Studio-Karte (Nachtrag d1-nachweis-3, F2): fremde Medien höchstens 
     const erwartet = i < 25 ? `Medium ${101 + i} nicht gefunden` : "Urteil der Medien-Regel nicht ermittelt";
     assert.equal(karte.freigabe_sperre, erwartet, `Karte ${200 + i}`);
     assert.equal(eintrag.freigabe_sperre, erwartet, `Stapel ${200 + i}`);
+  }
+});
+
+test("MP-28 Stapel: Lesefehler der Prüfprotokolle eines Videos (Nachtrag d1-regression-1) — „Medium 3 nicht lesbar“ mit Grund, nie „kein Prüfprotokoll“ oder frei; die Kennung bleibt lesbar", async () => {
+  freigabenCache.setzeFreigabenZurueck();
+  video();
+  await pruefe(3, eingabe());
+  caption();
+  welt.stoerung = (a) => (a.art === "supabase" && a.tabelle === "studio_pruefung" && a.params.get("limit") !== "1" ? { status: 500, body: { message: "Protokolle gestört" } } : null);
+  try {
+    const { eintrag, abfrage } = await stapelEintrag();
+    assert.equal(abfrage, "voll");
+    assert.equal(eintrag.freigabe_sperre, "Medium 3 nicht lesbar: Protokolle gestört");
+    assert.deepEqual(eintrag.medium.gruende, ["Medium 3 nicht lesbar: Protokolle gestört"]);
+  } finally {
+    welt.stoerung = null;
   }
 });
 
