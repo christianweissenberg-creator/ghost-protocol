@@ -45,6 +45,11 @@ const BASE_URL = process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000";
 //   jeder Schreibweise erkannt; COUNSEL erfährt den Umfang der Code-Prüfung (nur steinadel.de) und die
 //   Zählweise ohne Personenbezug; kein Content mit URTEIL-Zeile geht an COUNSEL, PUBLISHER bekommt das
 //   Review ohne URTEIL-Zeile; Textregel §8.1 (Datierung) im Code.
+// - Abnahmelauf 10.11.2026 (content 11, abgelehnt): Beide COUNSEL-Aufträge enden mit der wörtlichen Form
+//   der URTEIL-Zeile (URTEIL_SCHLUSS); werteCounselAus bleibt streng. Datierung: Die Datierungszeile
+//   verbietet, aus dem Jahr der Ersterwähnung ein Alter oder eine Bauzeit abzuleiten; COUNSEL bekommt dieselbe
+//   Regel als Prüfpunkt im Auftrag (datierungsPruefpunkt, nicht im Regelpaket); der Code erkennt „N Jahre“
+//   mit N = aktuelles Jahr − Jahr der Ausnahme ± 1 (altersBefund).
 //
 // Stufe 1 (05.11.2026) — Freigabe und Beleg-Kette:
 // - Das COUNSEL-Urteil wertet werteCounselAus() aus (lib/counsel-urteil.ts); die frühere
@@ -448,6 +453,16 @@ function ganzeZahl(wert: string | number | null): number | null {
   return null;
 }
 
+/**
+ * Verbotene Formen der Datierungsregel (Abnahmelauf 10.11.2026), für die Datierungszeile und den
+ * COUNSEL-Prüfpunkt. Die Beispiele nennen „N“ statt der Zahl (2026: 691): Zitiert PUBLISHER die Regel in
+ * seinem Fakten-Check oder COUNSEL sie im Review, das an PUBLISHER geht, träfe die Zahl sonst altersBefund,
+ * und der Lauf bräche nach bezahlten Aufrufen ab, obwohl der Text die Regel einhält.
+ */
+function abgeleiteteAlter(jahr: number): string {
+  return `„N Jahre Bausubstanz“, „N Jahre Geschichte“, „N Jahre alt“ (N = Jahre seit ${jahr}), „seit ${jahr} steht …“, „Substanz/Mauern aus ${jahr}“`;
+}
+
 function datierungFuer(o: ObjektApi): Datierung {
   const ausnahme = istStudioObjekt(o.slug) ? (DATIERUNG_AUSNAHMEN[o.slug] ?? null) : null;
   const baujahrZeile = `Baujahr: ${anzeige(o.baujahr)}`;
@@ -472,10 +487,20 @@ function datierungFuer(o: ObjektApi): Datierung {
     };
   }
   const wert = anzeige(o.baujahr);
+  const jahr = ausnahme.jahr;
   return {
     // Gegenprüfung 10.11.2026: Die Zeile nennt das verbotene Wortpaar nicht (ein Verbot, das es nennt,
     // bringt es erst bei, siehe buildObjektBlock); die Code-Prüfung datierungsBefund fängt es ab.
-    zeile: `${ausnahme.bezeichnung}: ${wert} (Exportfeld baujahr; gemeint ist die erste urkundliche Erwähnung, nicht das Errichtungsjahr — im Text immer „${ausnahme.bezeichnung} ${wert}“)`,
+    // Abnahmelauf 10.11.2026 (content 11): SCRIBE schrieb trotz „nicht das Errichtungsjahr“ „Seit 1335 steht
+    // das RitterGut … 691 Jahre Bausubstanz“, PUBLISHER übernahm es. Die zweite Zeile verbietet deshalb
+    // ausdrücklich, aus dem Jahr ein Alter oder eine Bauzeit abzuleiten, mit den Formen aus dem Lauf
+    // (abgeleiteteAlter). Eine Bauzeit nennt sie nicht: Die Quelle (DATIERUNG_FUNDSTELLE,
+    // extraktion-rohdaten.json:552) datiert nur die Stallungen, je Wohneinheit (WE 1 ca. 1750, WE 4 Ende
+    // 19. Jh.), nicht das ganze Gut, und der Export trägt sie nicht.
+    zeile:
+      `${ausnahme.bezeichnung}: ${wert} (Exportfeld baujahr; gemeint ist die erste urkundliche Erwähnung, nicht das Errichtungsjahr — im Text immer „${ausnahme.bezeichnung} ${wert}“)\n` +
+      `  Aus ${jahr} kein Alter und keine Bauzeit ableiten — das Jahr sagt nichts darüber, wann die heutigen Gebäude entstanden. ` +
+      `Nicht: ${abgeleiteteAlter(jahr)}. Erlaubt: „${ausnahme.bezeichnung} ${jahr}“, „${jahr} urkundlich erstmals erwähnt“.`,
     beleg,
     warnung: null,
   };
@@ -934,6 +959,36 @@ Geprüft hat der Code nur die Adressen auf steinadel.de: Der CTA-Link steht unve
 Prüfe den Kurzlink anhand dieser aufgelösten Ziel-URL (Regelpaket §2 Ziel-Links, §3 UTM-Konvention). Alle übrigen Inhalte und Links prüfst du wie immer nach dem Regelpaket.`;
 }
 
+/**
+ * Schluss beider COUNSEL-Aufträge (Abnahmelauf 10.11.2026, content 11): Die Endprüfung schrieb ihre Checkliste
+ * mit ✓ und hängte den Haken auch an die Urteilszeile („**URTEIL: FREIGABE-EMPFEHLUNG** ✓“). werteCounselAus
+ * wertet das als UNKLAR (lib/counsel-urteil.ts, Regel 5: jeder Zusatz macht die Zeile UNKLAR), der Lauf endete
+ * „abgelehnt“. Der Parser bleibt streng. Stattdessen sagt der Auftrag wörtlich, wie die letzte Zeile aussieht,
+ * und zwar ganz am Ende, direkt vor der Antwort (activate schickt den Auftrag unverändert als Nachricht).
+ */
+const URTEIL_SCHLUSS =
+  "LETZTE ZEILE: Deine Antwort endet mit einer Zeile, die wörtlich nur 'URTEIL: FREIGABE-EMPFEHLUNG' oder 'URTEIL: ABLEHNUNG' lautet. " +
+  "Sie steht allein in ihrer Zeile, ohne Anführungszeichen und ohne Formatierung; dahinter steht nichts — kein ✓, kein Emoji, " +
+  "keine Klammer, kein Kommentar. 'URTEIL:' steht nur in dieser Zeile.";
+
+/**
+ * Prüfpunkt beider COUNSEL-Aufträge bei greifender Datierungs-Ausnahme (Abnahmelauf 10.11.2026, content 11):
+ * „Seit 1335 steht … 691 Jahre Bausubstanz“ kam durch beide Prüfungen („Seit 1335 ✓“), denn das Regelpaket
+ * kennt die Regel nicht. Es bleibt unverändert; die Regel steht deshalb im Auftrag, wie in der Datierungszeile.
+ * Leer ohne greifende Ausnahme.
+ */
+function datierungsPruefpunkt(datierung: Datierung | null): string {
+  const beleg = datierung?.beleg;
+  if (!beleg || !beleg.ausnahme_greift) return "";
+  const jahr = beleg.ausnahme_jahr;
+  return (
+    `\n\nPRÜFPUNKT DATIERUNG (Auftrag, zusätzlich zum Regelpaket): ${jahr} ist bei diesem Objekt nur die ${beleg.bezeichnung}, ` +
+    `die erste urkundliche Erwähnung — kein Bau- oder Errichtungsjahr. Eine Alters- oder Bauangabe aus diesem Jahr ist ein Verstoß ` +
+    `und führt zu ABLEHNUNG, etwa ${abgeleiteteAlter(jahr)}. Erlaubt sind „${beleg.bezeichnung} ${jahr}“ und ` +
+    `„${jahr} urkundlich erstmals erwähnt“.`
+  );
+}
+
 /** Ergebnis einer Kurzlink-Prüfung für metadata.kurzlink; Befunde mit maskiertem Namen (sie zitieren den Text). */
 function textPruefungBeleg(p: KurzlinkTextPruefung) {
   return {
@@ -982,6 +1037,36 @@ function datierungsBefund(text: string, datierung: Datierung | null): string | n
   return muster.test(text.replace(DATIERUNG_MARKDOWN, ""))
     ? `Jahr ${beleg.ausnahme_jahr} als Baujahr bezeichnet statt „${beleg.bezeichnung} ${beleg.ausnahme_jahr}“ (Objekt-Ausnahme)`
     : null;
+}
+
+/** Zwischen Zahl und „Jahre“: nur Leerraum und Bindestriche („691 Jahre“, „691-jährig“, auch U+2010/U+2011). */
+const ALTER_TRENNER = "[\\s\\u2010\\u2011-]*";
+
+/**
+ * Abnahmelauf 10.11.2026 (content 11): „Seit 1335 steht das RitterGut … 691 Jahre Bausubstanz“ kam durch Code-
+ * und beide COUNSEL-Prüfungen. Für Objekte mit greifender Datierungs-Ausnahme erkennt der Code deshalb ein Alter,
+ * das aus dem Jahr abgeleitet ist. Eng, denn ein Fehlalarm bricht einen bezahlten Lauf ab: eine Zahl N direkt
+ * vor „Jahre“/„Jahren“ (auch „N-jährig…“) mit N = aktuelles Jahr − Jahr der Ausnahme ± 1 (Jahreswechsel,
+ * „über 690 Jahre“). Keine Nähe-Heuristik für Bauwörter: „Ersterwähnung 1335. Das Gutshaus wurde um 1750
+ * errichtet“ und „seit 1335 urkundlich belegt“ sind kein Befund, ebenso andere Zahlen („fast 700 Jahre“) und
+ * „seit 1335 steht“ — das prüft nur COUNSEL (datierungsPruefpunkt). Markdown wird vorher entfernt wie bei
+ * datierungsBefund. null, wenn nichts auffällt.
+ */
+function altersBefund(text: string, datierung: Datierung | null): string | null {
+  const beleg = datierung?.beleg;
+  if (!beleg || !beleg.ausnahme_greift) return null;
+  const jahr = beleg.ausnahme_jahr;
+  const alter = new Date().getFullYear() - jahr;
+  // Eine Ziffer direkt hinter der Zahl ("6910 Jahre") scheitert ohne eigene Regel: Der Trenner nimmt keine
+  // Ziffer auf, und danach muss „Jahre“ oder „jährig“ folgen.
+  const muster = new RegExp(
+    `(?<!\\p{N}[.,]?)(?:${alter - 1}|${alter}|${alter + 1})${ALTER_TRENNER}(?:Jahren?(?!\\p{L})|jährig)`,
+    "iu",
+  );
+  const treffer = muster.exec(text.replace(DATIERUNG_MARKDOWN, ""));
+  // Kurz gehalten: Der Vermerk fasst Leerraum zusammen und kürzt das Detail auf 160 Zeichen (bereinigeFehler,
+  // lib/status-server.ts), und neben diesem Befund kann der Baujahr-Befund stehen.
+  return treffer ? `Alter „${treffer[0]}“ aus ${jahr} abgeleitet (${jahr} ist nur die ${beleg.bezeichnung})` : null;
 }
 
 type Dienst = ReturnType<typeof createServiceClient>;
@@ -1325,6 +1410,8 @@ export async function POST(request: NextRequest) {
       if (enthaeltUrteil(text)) befunde.push("URTEIL-Zeile im Content (ein COUNSEL-Urteil gehört nicht in den Text)");
       const datierungFalsch = datierungsBefund(text, datierung);
       if (datierungFalsch) befunde.push(datierungFalsch);
+      const alterFalsch = altersBefund(text, datierung);
+      if (alterFalsch) befunde.push(alterFalsch);
       return befunde.length > 0 ? { grund, befunde } : null;
     };
 
@@ -1499,12 +1586,14 @@ Liefere den fertigen Content, sofort publishbar.${objektBlock ? `\n\n${objektBlo
     // ═══ STEP 3: COUNSEL — Pflicht-Review, fail-closed ═══
     await fuehreStufeAus(
       steps[2],
-      `Pruefe den folgenden Content STRIKT gegen dein STEINADEL-REGELPAKET (fail-closed). Zahlen NUR gegen die mitgelieferten Objektdaten abgleichen. Zitiere Verstoesse. HALTE das Review KOMPAKT (max. ~300 Woerter — nur Befunde, keine langen Tabellen) und schliesse ZWINGEND mit der URTEIL:-Zeile ab ('URTEIL: FREIGABE-EMPFEHLUNG' oder 'URTEIL: ABLEHNUNG').
+      `Pruefe den folgenden Content STRIKT gegen dein STEINADEL-REGELPAKET (fail-closed). Zahlen NUR gegen die mitgelieferten Objektdaten abgleichen. Zitiere Verstoesse. HALTE das Review KOMPAKT (max. ~300 Woerter — nur Befunde, keine langen Tabellen) und schliesse ZWINGEND mit der URTEIL:-Zeile ab (Form: LETZTE ZEILE am Ende dieses Auftrags).${datierungsPruefpunkt(datierung)}
 
 CONTENT:
 ${steps[1].output}
 
-${objektBlock ?? "OBJEKTDATEN: keine (Freitext-Content ohne Steinadel-Objektbezug)"}${kurzlink ? `\n\n${kurzlinkBlock(kurzlink)}` : ""}`,
+${objektBlock ?? "OBJEKTDATEN: keine (Freitext-Content ohne Steinadel-Objektbezug)"}${kurzlink ? `\n\n${kurzlinkBlock(kurzlink)}` : ""}
+
+${URTEIL_SCHLUSS}`,
       cookie,
       true,
       warnungen
@@ -1668,12 +1757,14 @@ Modellrechnung-Disclaimer wörtlich.${objektBlock ? `\n\n${objektBlock}` : ""}${
     // AMPLIFIER nicht; das spart dessen Aufruf und hält die Zeile bei "abgelehnt".
     await fuehreStufeAus(
       steps[4],
-      `ENDPRUEFUNG (R2): Pruefe die folgende ENDFASSUNG WOERTLICH und STRIKT gegen dein STEINADEL-REGELPAKET (fail-closed). Genau dieser Text geht unveraendert zur Freigabe — geprueft wird ALLES darin, auch Metadaten, Hashtags, Zeitpunkt-Empfehlung und Cross-Promotion-Texte. Zahlen NUR gegen die mitgelieferten Objektdaten abgleichen. Zitiere Verstoesse. HALTE das Review KOMPAKT (max. ~300 Woerter — nur Befunde, keine langen Tabellen) und schliesse ZWINGEND mit der URTEIL:-Zeile ab ('URTEIL: FREIGABE-EMPFEHLUNG' oder 'URTEIL: ABLEHNUNG').
+      `ENDPRUEFUNG (R2): Pruefe die folgende ENDFASSUNG WOERTLICH und STRIKT gegen dein STEINADEL-REGELPAKET (fail-closed). Genau dieser Text geht unveraendert zur Freigabe — geprueft wird ALLES darin, auch Metadaten, Hashtags, Zeitpunkt-Empfehlung und Cross-Promotion-Texte. Zahlen NUR gegen die mitgelieferten Objektdaten abgleichen. Zitiere Verstoesse. HALTE das Review KOMPAKT (max. ~300 Woerter — nur Befunde, keine langen Tabellen) und schliesse ZWINGEND mit der URTEIL:-Zeile ab (Form: LETZTE ZEILE am Ende dieses Auftrags).${datierungsPruefpunkt(datierung)}
 
 ENDFASSUNG (PUBLISHER):
 ${freigabeText}
 
-${objektBlock ?? "OBJEKTDATEN: keine (Freitext-Content ohne Steinadel-Objektbezug)"}${kurzlink ? `\n\n${kurzlinkBlock(kurzlink)}` : ""}`,
+${objektBlock ?? "OBJEKTDATEN: keine (Freitext-Content ohne Steinadel-Objektbezug)"}${kurzlink ? `\n\n${kurzlinkBlock(kurzlink)}` : ""}
+
+${URTEIL_SCHLUSS}`,
       cookie,
       true,
       warnungen
