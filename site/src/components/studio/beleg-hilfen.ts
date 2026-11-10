@@ -204,11 +204,15 @@ export function snapshotWert(feld: string, wert: unknown): string[] {
 // ═══ PAKET B (Objekt-Studio Stufe 2, Schritte 4 und 5, 10.11.2026) ═══
 // Nur Läufe ab Paket B tragen die Felder; ältere Zeilen rendern unverändert.
 
-/** Etikett einer Snapshot-Zeile: für baujahr die Bezeichnung im Prompt (z. B. "Ersterwähnung"), sonst das übliche. */
+/**
+ * Etikett einer Snapshot-Zeile: für baujahr die Bezeichnung im Prompt (z. B. "Ersterwähnung") — nur, wenn
+ * der Beleg ausdrücklich sagt, dass die Objekt-Ausnahme gegriffen hat; sonst das übliche (fail-closed).
+ */
 export function snapshotEtikett(snapshot: ObjektSnapshot | null, feld: string, etikett: string): string {
   if (feld !== "baujahr" || !snapshot) return etikett;
   const d = alsObjekt(snapshot.datierung ?? null);
-  return d && typeof d.bezeichnung === "string" && d.bezeichnung.trim() !== "" ? maskiert(d.bezeichnung) : etikett;
+  if (!d || d.ausnahme_greift !== true) return etikett;
+  return typeof d.bezeichnung === "string" && d.bezeichnung.trim() !== "" ? maskiert(d.bezeichnung) : etikett;
 }
 
 /** Hinweis zur Datierungszeile: Exportfeld und Objekt-Ausnahme; null ohne Beleg (Läufe vor Paket B). */

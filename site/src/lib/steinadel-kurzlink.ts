@@ -177,10 +177,11 @@ export function baueKurzlink(eingabe: { plattform: string; kampagne: string; lpU
  * Adressen auf steinadel.de im Text, mit oder ohne Schema und Subdomain; Pfad, Query und Anker bis zum
  * ersten Leerraum oder Trennzeichen. Nicht davor: Buchstabe, Ziffer oder ein Zeichen, das die Adresse
  * zum Teil einer anderen macht ("evilsteinadel.de", ".../steinadel.de/…", "?r=steinadel.de/…", E-Mail).
- * Nicht danach: weitere Domain-Zeichen ("steinadel.dev").
+ * Eine längere Domain wie "steinadel.dev/k/…" ergibt nur die nackte Domain "steinadel.de" ohne Pfad (der
+ * Pfad muss mit "/", "?", "#" oder einem Port beginnen) und zählt damit nicht als Kurzlink.
  */
 const STEINADEL_ADRESSE =
-  /(?<![\p{L}\p{N}._\-/=&?#%@+~])(?:https?:\/\/)?(?:[a-z0-9-]+\.)*steinadel\.de(?![a-z0-9-])(?::\d+)?(?:[/?#][^\s<>()[\]{}"'`|\\]*)?/giu;
+  /(?<![\p{L}\p{N}._\-/=&?#%@+~])(?:https?:\/\/)?(?:[a-z0-9-]+\.)*steinadel\.de(?::\d+)?(?:[/?#][^\s<>()[\]{}"'`|\\]*)?/giu;
 /** Satzzeichen und Hervorhebung am Ende gehören nicht zur Adresse (wie bei der automatischen Verlinkung). */
 const ENDE_OHNE_ADRESSE = /[.,;:!?…*_~'"’”»]+$/u;
 const KURZ_MAX = 120;

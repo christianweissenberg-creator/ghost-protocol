@@ -1622,7 +1622,7 @@ ${objektBlock ?? "OBJEKTDATEN: keine (Freitext-Content ohne Steinadel-Objektbezu
         status: endAbgelehnt ? "abgelehnt" : "counsel_geprueft",
         metadata: metadataMit(),
       },
-      endAbgelehnt ? "Status abgelehnt (Endprüfung)" : "Endprüfung gespeichert"
+      endAbgelehnt ? "Status abgelehnt (Endprüfung)" : "Status counsel_geprueft (Endprüfung)"
     );
     // R6 wie bei der Vorprüfung: ohne gespeichertes Urteil kein weiterer Aufruf, Lauf "fehler".
     if (!endGespeichert) {

@@ -67,6 +67,8 @@ const KOSTEN = 0.0007; // usage.cost_usd der Attrappe agentOk
 const KOSTEN_END = 0.0123; // eigene Kosten der Endprüfung, damit sie im Beleg unterscheidbar sind
 const FREIGABE = "Befunde: keine.\nURTEIL: FREIGABE-EMPFEHLUNG";
 const ABLEHNUNG = "Befund: Disclaimer fehlt in der Endfassung.\nURTEIL: ABLEHNUNG";
+// Antwort der Endprüfung, verschieden von der Vorprüfung — so ist jede Verwechslung der beiden sichtbar.
+const FREIGABE_END = "Endfassung wörtlich geprüft, Kurzlink und Pflichtzeilen vorhanden.\nURTEIL: FREIGABE-EMPFEHLUNG";
 const R2_ANDERS = "Freigabetext nicht wörtlich geprüft: COUNSEL prüfte eine andere Fassung (R2)";
 const R2_UNBEKANNT = "Freigabetext nicht wörtlich geprüft: geprüfter Text nicht gespeichert oder nicht dem COUNSEL-Urteil zuzuordnen (R2)";
 
@@ -105,7 +107,7 @@ function linkAusAuftrag(task) {
  * Agenten mit Texten, die den CTA-Link aus dem Auftrag wörtlich übernehmen (Pflichtzeilen dabei).
  * counsel: Antwort der Vorprüfung; endpruefung: Antwort der Endprüfung (beide rufen COUNSEL auf).
  */
-function agentenMitLink({ scribe, publisher, counsel = FREIGABE, endpruefung = FREIGABE, endKosten = KOSTEN_END } = {}) {
+function agentenMitLink({ scribe, publisher, counsel = FREIGABE, endpruefung = FREIGABE_END, endKosten = KOSTEN_END } = {}) {
   welt.agentAntworten.scribe = (task) =>
     agentOk("scribe", scribe ? scribe(task) : `Thread 1/2 Denkmal-AfA bis 100 %. Modellrechnung. Visualisierung: KI-generiert. Impressum: steinadel.de/impressum\n2/2 Mehr: ${linkAusAuftrag(task)}`);
   welt.agentAntworten.publisher = (task) =>
@@ -400,8 +402,9 @@ test("P-P1 RitterGut (x): Ersterwähnung, Kurzlink-CTA, aufgelöste Ziel-URL fü
   const z = zeile(id);
   assert.equal(z.status, "zur_freigabe");
   assert.equal(z.body, pub);
-  assert.equal(z.review_notes, FREIGABE);
+  assert.equal(z.review_notes, FREIGABE_END, "review_notes = Antwort der Endprüfung");
   assert.equal(z.metadata.steps[4].output, z.review_notes);
+  assert.equal(z.metadata.steps[2].output, FREIGABE, "Vorprüfung bleibt als Beleg in steps[2]");
   assert.equal(z.metadata.cta_link, link);
   assert.equal(z.metadata.utm_content, `x-rittergut-seifersdorf-${id}`);
   assert.equal(z.metadata.kampagne, "afa-rechner-p1");
@@ -614,7 +617,7 @@ test("P-P7 Speichern der Endprüfung scheitert → Abbruch ohne AMPLIFIER, Revie
   agentenMitLink();
   let gestoert = false;
   welt.stoerung = (a) => {
-    if (!gestoert && a.art === "supabase" && a.methode === "PATCH" && a.body?.review_notes === FREIGABE && a.body?.metadata?.counsel_vorpruefung) {
+    if (!gestoert && a.art === "supabase" && a.methode === "PATCH" && a.body?.review_notes === FREIGABE_END && a.body?.metadata?.counsel_vorpruefung) {
       gestoert = true;
       return { status: 500, body: { code: "XX000", message: "Schreibfehler (Test)" } };
     }
@@ -625,10 +628,51 @@ test("P-P7 Speichern der Endprüfung scheitert → Abbruch ohne AMPLIFIER, Revie
   assert.equal(r.body.status, "fehler");
   assert.equal(r.body.fehler.grund, "COUNSEL-Endprüfung nicht gespeichert — AMPLIFIER nicht gestartet");
   assert.equal(welt.aktivierungen.filter((a) => a.agent === "amplifier").length, 0);
+  assert.match(r.body.speicherfehler[0], /^Status counsel_geprueft \(Endprüfung\): /);
   const z = zeile(r.body.contentId);
   assert.equal(z.status, "fehler");
-  assert.equal(z.review_notes, FREIGABE);
+  assert.equal(z.review_notes, FREIGABE_END, "Review der Endprüfung im Abbruch gespeichert");
   assert.match(z.metadata.counsel.geprueft, /^PUBLISHER-Text/);
+});
+
+test("P-P7b Speichern der ablehnenden Endprüfung scheitert → Abbruch mit Anlass „Status abgelehnt (Endprüfung)“, Review gespeichert, kein AMPLIFIER", async () => {
+  exportMit(RITTERGUT);
+  agentenMitLink({ endpruefung: ABLEHNUNG });
+  let gestoert = false;
+  welt.stoerung = (a) => {
+    if (!gestoert && a.art === "supabase" && a.methode === "PATCH" && a.body?.status === "abgelehnt") {
+      gestoert = true;
+      return { status: 500, body: { code: "XX000", message: "Schreibfehler (Test)" } };
+    }
+    return null;
+  };
+  const r = await pipePost(RITTERGUT_X);
+  assert.equal(gestoert, true);
+  assert.equal(r.body.status, "fehler");
+  assert.equal(r.body.fehler.grund, "COUNSEL-Endprüfung nicht gespeichert");
+  assert.match(r.body.speicherfehler[0], /^Status abgelehnt \(Endprüfung\): /);
+  assert.equal(r.body.counsel.urteil, "ABLEHNUNG");
+  assert.equal(welt.aktivierungen.filter((a) => a.agent === "amplifier").length, 0);
+  const z = zeile(r.body.contentId);
+  assert.equal(z.status, "fehler");
+  assert.equal(z.review_notes, ABLEHNUNG);
+  assert.equal(z.metadata.counsel.urteil, "ABLEHNUNG");
+});
+
+test("P-P11 AMPLIFIER scheitert technisch nach bestandener Endprüfung → Lauf fehler, kein Freigabetext, Endprüfung bleibt gespeichert", async () => {
+  exportMit(RITTERGUT);
+  agentenMitLink();
+  welt.agentAntworten.amplifier = [{ status: 502, body: { fehler: "Claude-API-Fehler: HTTP 529" } }];
+  const r = await pipePost(RITTERGUT_X);
+  assert.equal(r.body.status, "fehler");
+  assert.equal(r.body.fehler.stufe, "amplifier");
+  assert.deepEqual(r.body.steps.map((s) => s.status), ["done", "done", "done", "done", "done", "error"]);
+  assert.equal(welt.aktivierungen.length, 6);
+  const z = zeile(r.body.contentId);
+  assert.equal(z.status, "fehler");
+  assert.equal(z.body, null, "nicht zur Freigabe gestellt");
+  assert.equal(z.review_notes, FREIGABE_END);
+  assert.equal(z.metadata.counsel.urteil, "FREIGABE");
 });
 
 test("P-P8 Datierung: Ausnahme greift nur beim Exportwert 1335 (auch als Text); sonst Baujahr mit Warnung; andere Objekte unverändert", async () => {
@@ -843,6 +887,15 @@ test("P-B2 Beleg-Kette: Datierung ohne greifende Ausnahme, Endprüfung abgebroch
   assert.match(alt, />Baujahr<\/th>/);
   const leerBezeichnung = ketteHtml({ ...basis, metadata: { objekt_snapshot: { objekt: { baujahr: 1 }, datierung: { bezeichnung: "  ", ausnahme_greift: true } } } });
   assert.match(leerBezeichnung, />Baujahr<\/th><td[^>]*><div>1<\/div><div[^>]*data-datierung="true">Exportfeld baujahr · Objekt-Ausnahme<\/div>/);
+  // Fail-closed: ohne ausdrückliches ausnahme_greift === true weder Sondername noch "greift"
+  const ohneAngabe = ketteHtml({ ...basis, metadata: { objekt_snapshot: { objekt: { baujahr: 1335 }, datierung: { bezeichnung: "Ersterwähnung" } } } });
+  assert.match(ohneAngabe, />Baujahr<\/th><td[^>]*><div>1335<\/div><div[^>]*data-datierung="true">Exportfeld baujahr · Objekt-Ausnahme greift nicht/);
+  // Textprüfung ohne lesbares Ergebnis gilt als nicht bestanden
+  const ohneOk = ketteHtml({ ...basis, metadata: { kurzlink: { link: "https://steinadel.de/k/a/x-b-70", pruefung_scribe: {} } } });
+  assert.ok(ohneOk.includes("Kurzlink im Text geprüft: SCRIBE-Text nicht bestanden</p>"), ohneOk);
+  // Endprüfung ohne Status: nicht ausgeführt, keine Kosten (auch wenn ein Kostenwert dasteht)
+  const ohneStatus = ketteHtml({ ...basis, metadata: { steps: [{ agent: "counsel_endfassung", cost: 0.5 }] } });
+  assert.ok(ohneStatus.includes("Endprüfung · Freigabetext, wörtlich: </span>nicht ausgeführt · <span class=\"font-[family-name:var(--font-jbmono)]\">keine Kosten</span>"), ohneStatus);
 });
 
 test("P-C1 /content: frisches Ergebnis mit Endprüfung → grünes FREIGABE; Stufenname COUNSEL 2; Ergebnis ohne Endprüfung wie bisher", async () => {
