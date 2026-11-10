@@ -235,7 +235,10 @@ export interface FreigabeEintrag {
   /** body leer oder nur Leerraum. */
   text_leer: boolean;
   text_zeichen: number;
-  /** body (PUBLISHER-Fassung) weicht vom COUNSEL-geprüften Text (metadata.steps[1].output) ab. */
+  /**
+   * body (PUBLISHER-Fassung) weicht vom COUNSEL-geprüften Text ab (geprueftenTextAusSchritten,
+   * lib/freigabe-regeln.ts): seit Paket B die wörtlich geprüfte Endfassung, davor metadata.steps[1].output.
+   */
   geprueft_ungleich_freigabe: boolean;
 }
 

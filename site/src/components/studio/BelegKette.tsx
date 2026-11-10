@@ -11,15 +11,25 @@ import {
   SNAPSHOT_ZEILEN,
   STATUS_MIT_TEXT,
   alsObjekt,
+  counselPruefungen,
+  datierungsHinweis,
   freigabeLageGemerkt,
   istObjekt,
+  kurzlinkAnzeige,
   maskiert,
   maskiertWert,
+  snapshotEtikett,
   snapshotWert,
   urteilAnzeige,
   zeitText,
 } from "@/components/studio/beleg-hilfen";
 import type { BelegEintrag } from "@/components/studio/beleg-hilfen";
+
+// Objekt-Studio Stufe 2, Paket B (10.11.2026): Bei Läufen ab Paket B zeigt die Kette zusätzlich die
+// Bezeichnung der Datierungszeile im Prompt ("Ersterwähnung" statt "Baujahr", Exportfeld baujahr), beide
+// COUNSEL-Prüfungen mit geschätzten Kosten (R2: Vorprüfung des SCRIBE-Texts, Endprüfung des
+// Freigabetexts) und das aufgelöste Ziel des Kurzlinks samt Ergebnis der Textprüfung (E12). Zeilen ohne
+// diese Felder rendern unverändert.
 
 export function BelegZeile({ titel, vermerk, children }: { titel: string; vermerk?: string; children: ReactNode }) {
   return (
@@ -64,6 +74,9 @@ export function BelegKette({
   const freigabe = alsObjekt(meta.freigabe);
   const gepostet = alsObjekt(meta.gepostet);
   const mitText = STATUS_MIT_TEXT.includes(item.status);
+  const pruefungen = counselPruefungen(meta);
+  const kurzlink = kurzlinkAnzeige(meta);
+  const datierung = datierungsHinweis(snapshot);
 
   const kopfZeilen: [string, string][] = [
     ["Export-Version", exportKopf?.version ?? "nicht im Export-Kopf"],
@@ -106,6 +119,20 @@ export function BelegKette({
         )}
       </BelegZeile>
 
+      {pruefungen && (
+        <BelegZeile
+          titel="COUNSEL-Prüfungen"
+          vermerk="R2: Freigegeben wird nur der Text, den COUNSEL wörtlich geprüft hat. Kosten geschätzt (Tokens × Preistabelle)."
+        >
+          {pruefungen.map((p) => (
+            <p key={p.art} data-counsel-pruefung={p.art}>
+              <span className="text-text-muted">{p.titel}: </span>
+              {p.ergebnis} · <span className="font-[family-name:var(--font-jbmono)]">{p.kosten}</span>
+            </p>
+          ))}
+        </BelegZeile>
+      )}
+
       {mitText && (
         <BelegZeile
           titel="Prüfregel"
@@ -146,12 +173,17 @@ export function BelegKette({
                   SNAPSHOT_ZEILEN.map(([feld, label]) => (
                     <tr key={feld} className="align-top border-t" style={{ borderColor: "var(--gp-hairline)" }}>
                       <th scope="row" className="text-left font-normal text-text-muted pr-3 py-0.5 whitespace-nowrap">
-                        {label}
+                        {snapshotEtikett(snapshot, feld, label)}
                       </th>
                       <td className="py-0.5 font-[family-name:var(--font-jbmono)] break-words">
                         {snapshotWert(feld, snapshotObjekt[feld]).map((zeile, i) => (
                           <div key={i}>{maskiert(zeile)}</div>
                         ))}
+                        {feld === "baujahr" && datierung && (
+                          <div className="text-[10px] text-text-muted" data-datierung>
+                            {datierung}
+                          </div>
+                        )}
                       </td>
                     </tr>
                   ))
@@ -214,6 +246,13 @@ export function BelegKette({
         ) : (
           <p>kein CTA-Link gespeichert</p>
         )}
+        {kurzlink?.ziel && (
+          <p data-kurzlink-ziel>
+            <span className="text-text-muted">leitet weiter auf (im Code aufgelöst): </span>
+            <span className="font-mono break-all">{kurzlink.ziel}</span>
+          </p>
+        )}
+        {kurzlink?.pruefungen && <p data-kurzlink-pruefung>{kurzlink.pruefungen}</p>}
         {meta.utm_content && (
           <p>
             <span className="text-text-muted">utm_content: </span>

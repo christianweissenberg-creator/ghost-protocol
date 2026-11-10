@@ -11,7 +11,7 @@
 
 import "server-only";
 import { werteCounselAus } from "../counsel-urteil";
-import { maskiereGeschuetzteNamen, pruefeFreigabe } from "../freigabe-regeln";
+import { geprueftenTextAusSchritten, maskiereGeschuetzteNamen, pruefeFreigabe } from "../freigabe-regeln";
 import { PREIS_STAND_AB } from "../kosten";
 import { STATUS_WARTEND, bereinigeFehler, isoOderNull, istObjekt, mitternachtBerlin, textOderNull, verbinde } from "../status-server";
 import type { Seitenergebnis } from "../status-server";
@@ -266,7 +266,7 @@ export function zuAsset(z: unknown, gemessenAm: string): StudioAsset {
 
   // Urteil und Sperre mit derselben Regel wie GET /api/freigaben und das Freigeben (content/status).
   const counsel = werteCounselAus(reviewNotes);
-  const pruefung = pruefeFreigabe(counsel, body);
+  const pruefung = pruefeFreigabe(counsel, body, geprueftenTextAusSchritten(metadata?.steps, reviewNotes));
   const sperre = pruefung.grund ?? (status === STATUS_WARTEND ? null : `Status "${status}" — freigebbar ist nur "${STATUS_WARTEND}"`);
 
   return {

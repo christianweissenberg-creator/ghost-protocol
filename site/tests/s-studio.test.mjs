@@ -933,10 +933,16 @@ test("S-N1 (SPEZ-1) Karte: COUNSEL-Urteil nach R2 wie die Beleg-Kette — grüne
     assert.deepEqual(karte, { stil: `color:${farbe}`, bezug, text }, `Karte ${id}`);
     assert.deepEqual(urteilSpan(k, "data-urteil-anzeige"), karte, `Karte ${id}: dieselbe Anzeige wie ihre Beleg-Kette`);
   }
-  // Feld "Freigabe": freigebbar, aber COUNSEL prüfte nicht genau diesen Text — Hinweis wie am Freigeben-Knopf auf /content.
-  assert.ok(sichtbar(karteVon(html, 3)).includes("Freigabe freigebbar laut Server-Regel Freigabetext ungeprüft — COUNSEL prüfte die Vorfassung"));
-  assert.ok(sichtbar(karteVon(html, 4)).includes("Freigabe freigebbar laut Server-Regel Bezug zur geprüften Fassung nicht prüfbar"));
-  for (const id of [1, 2, 5]) assert.doesNotMatch(karteVon(html, id), /data-bezug-hinweis/, `Karte ${id}: gesperrt oder genau geprüft`);
+  // Feld "Freigabe": Bis Paket B war eine Fassung, die COUNSEL nicht genau geprüft hat, freigebbar (mit
+  // Hinweis). Seit Paket B (10.11.2026, R2/E13) sperrt die Server-Regel sie — dieselbe Sperre wie beim
+  // Freigeben (409) und im Stapel (lib/studio/lesen.ts übergibt den geprüften Text an pruefeFreigabe).
+  assert.ok(sichtbar(karteVon(html, 3)).includes("Freigabe gesperrt: Freigabetext nicht wörtlich geprüft: COUNSEL prüfte eine andere Fassung (R2)"));
+  assert.ok(
+    sichtbar(karteVon(html, 4)).includes(
+      "Freigabe gesperrt: Freigabetext nicht wörtlich geprüft: geprüfter Text nicht gespeichert oder nicht dem COUNSEL-Urteil zuzuordnen (R2)",
+    ),
+  );
+  for (const id of [1, 2, 3, 4, 5]) assert.doesNotMatch(karteVon(html, id), /data-bezug-hinweis/, `Karte ${id}: gesperrt oder genau geprüft`);
 });
 
 test("S-N2 (SPEZ-2) Kosten: Vorbehalte der Schätzung stehen sichtbar unter den Kennzahlen, nicht nur im title", async () => {

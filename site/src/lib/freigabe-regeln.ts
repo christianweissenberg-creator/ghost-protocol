@@ -111,11 +111,61 @@ export interface FreigabePruefung {
   zeile: string | null;
 }
 
+// ═══ R2: nur wörtlich geprüfter Text (Objekt-Studio Stufe 2, Schritt 5, 10.11.2026) ═══
+//
+// Entscheidung E13 (Inhaber, 10.11.2026): Freigegeben wird nur Text, den COUNSEL wörtlich geprüft
+// hat. Dafür prüft COUNSEL in der Pipeline (api/content/pipeline) ein zweites Mal, und zwar die
+// PUBLISHER-Endfassung, die als body zur Freigabe geht: Stufe "counsel_endfassung" in
+// metadata.steps, ihre Antwort steht in review_notes. Läufe davor haben diese Stufe nicht; dort hat
+// COUNSEL den SCRIBE-Text (steps[1]) geprüft, und review_notes ist diese Prüfung.
+
+/** Stufe der Pipeline, in der COUNSEL die Endfassung (PUBLISHER-Text = body) wörtlich prüft. */
+export const STUFE_ENDPRUEFUNG = "counsel_endfassung";
+
+const SPERRE_WORTLAUT_UNBEKANNT = "Freigabetext nicht wörtlich geprüft: geprüfter Text nicht gespeichert oder nicht dem COUNSEL-Urteil zuzuordnen (R2)";
+const SPERRE_WORTLAUT_ANDERS = "Freigabetext nicht wörtlich geprüft: COUNSEL prüfte eine andere Fassung (R2)";
+
+function istEintrag(wert: unknown): wert is Record<string, unknown> {
+  return typeof wert === "object" && wert !== null && !Array.isArray(wert);
+}
+
+/**
+ * Text, dem das gespeicherte COUNSEL-Urteil (review_notes) gilt; null, wenn er nicht feststeht.
+ * - Mit Stufe counsel_endfassung (Läufe ab Schritt 5): die Ausgabe der Stufe publisher — nur wenn die
+ *   Endprüfung fertig ("done") ist und review_notes genau ihre Antwort ist. Sonst null (fail-closed):
+ *   Ein Urteil, das nicht zur Endprüfung gehört, belegt die Endfassung nicht.
+ * - Ohne diese Stufe (Läufe davor): die SCRIBE-Ausgabe in steps[1], wie bisher.
+ * steps ist metadata.steps, ungeprüft aus der Datenbank.
+ */
+export function geprueftenTextAusSchritten(steps: unknown, reviewNotes: string | null | undefined): string | null {
+  if (!Array.isArray(steps)) return null;
+  const endpruefung: unknown = steps.find((s) => istEintrag(s) && s.agent === STUFE_ENDPRUEFUNG);
+  if (endpruefung !== undefined) {
+    if (!istEintrag(endpruefung) || endpruefung.status !== "done" || typeof endpruefung.output !== "string") return null;
+    if (typeof reviewNotes !== "string" || reviewNotes !== endpruefung.output) return null;
+    const publisher: unknown = steps.find((s) => istEintrag(s) && s.agent === "publisher");
+    return istEintrag(publisher) && typeof publisher.output === "string" ? publisher.output : null;
+  }
+  const schritt: unknown = steps[1];
+  if (!istEintrag(schritt) || typeof schritt.output !== "string") return null;
+  if (typeof schritt.agent === "string" && schritt.agent.toLowerCase() !== "scribe") return null;
+  return schritt.output;
+}
+
 /**
  * Darf dieser Text freigegeben werden? Nur bei COUNSEL-Urteil FREIGABE, einem Text ab
- * MIN_FREIGABE_ZEICHEN Zeichen und ohne geschützten Namen. Alles andere sperrt.
+ * MIN_FREIGABE_ZEICHEN Zeichen, ohne geschützten Namen und (R2) nur, wenn der Text genau der von
+ * COUNSEL geprüfte ist (nach Trimmen). Alles andere sperrt.
+ *
+ * geprueft: Ergebnis von geprueftenTextAusSchritten (null = nicht feststellbar → sperrt). Ohne
+ * Argument entfällt nur die R2-Prüfung — für Aufrufer, die noch nicht umgestellt sind; das
+ * Freigeben (api/content/status), der Stapel (api/freigaben) und die Beleg-Kette übergeben es immer.
  */
-export function pruefeFreigabe(counsel: CounselAuswertung, body: string | null | undefined): FreigabePruefung {
+export function pruefeFreigabe(
+  counsel: CounselAuswertung,
+  body: string | null | undefined,
+  geprueft?: string | null,
+): FreigabePruefung {
   const zeile = counsel.zeile === null ? null : maskiereGeschuetzteNamen(counsel.zeile);
   const basis = { urteil: counsel.urteil, zeile };
   if (counsel.urteil !== "FREIGABE") {
@@ -134,6 +184,10 @@ export function pruefeFreigabe(counsel: CounselAuswertung, body: string | null |
   }
   if (enthaeltGeschuetztenNamen(text)) {
     return { freigebbar: false, grund: "Freigabetext enthält einen geschützten Namen", ...basis };
+  }
+  if (geprueft !== undefined) {
+    if (geprueft === null) return { freigebbar: false, grund: SPERRE_WORTLAUT_UNBEKANNT, ...basis };
+    if (geprueft.trim() !== text) return { freigebbar: false, grund: SPERRE_WORTLAUT_ANDERS, ...basis };
   }
   return { freigebbar: true, grund: null, ...basis };
 }
