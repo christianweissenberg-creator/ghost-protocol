@@ -806,7 +806,8 @@ test("MP-27 Studio-Karte (Nachtrag d1-nachweis-3, F2): fremde Medien höchstens 
   }
 });
 
-test("MP-28 Stapel: Lesefehler der Prüfprotokolle eines Videos (Nachtrag d1-regression-1) — „Medium 3 nicht lesbar“ mit Grund, nie „kein Prüfprotokoll“ oder frei; die Kennung bleibt lesbar", async () => {
+test("MP-28 Stapel: Lesefehler der Prüfprotokolle eines Videos (Nachtrag d1-regression-1) — „Medium 3 nicht lesbar“ mit Grund, nie „kein Prüfprotokoll“ oder frei; die Kennung bleibt lesbar; der Stand gilt dann nur 90 s wie bei einem Kettenfehler (Nachtrag d2, Mutant V4)", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: Date.parse("2026-11-10T15:00:00.000Z") });
   freigabenCache.setzeFreigabenZurueck();
   video();
   await pruefe(3, eingabe());
@@ -820,6 +821,13 @@ test("MP-28 Stapel: Lesefehler der Prüfprotokolle eines Videos (Nachtrag d1-reg
   } finally {
     welt.stoerung = null;
   }
+  // Ein Protokoll-Lesefehler macht den Stand zum Fehlerstand: nach 90 s liest die Route voll und nennt das richtige Urteil.
+  t.mock.timers.tick(freigabenCache.FREIGABEN_FEHLERSTAND_MS - 1);
+  assert.equal((await stapelEintrag()).abfrage, "unveraendert");
+  t.mock.timers.tick(1);
+  const danach = await stapelEintrag();
+  assert.equal(danach.abfrage, "voll", "nach 90 s voll, nicht erst nach 30 min");
+  assert.equal(danach.eintrag.freigabe_sperre, null, "das richtige Urteil: frei");
 });
 
 test("MP-29 Stapel (Nachtrag d2-stapel-1, d2-stapel-4 a): Die Protokolle je Video beginnen, bevor die erste Rundreise der Ketten endet (parallel, nicht danach); bei gestörten Protokollen zählt wie beim Freigeben zuerst gefunden, Objekt und Fassung", async () => {
