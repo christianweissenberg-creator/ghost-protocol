@@ -16,6 +16,7 @@ import {
   geprueftenTextAusSchritten,
   PFLICHTZEILE_VIDEO_CAPTION,
   maskiereGeschuetzteNamen,
+  mediumIdAus,
   pruefeFreigabe,
   pruefeVideoFreigabe,
 } from "@/lib/freigabe-regeln";
@@ -320,12 +321,10 @@ export function freigabeLage(item: Pick<BelegEintrag, "body" | "review_notes" | 
   const meta = alsObjekt(item.metadata) ?? {};
   const counsel = werteCounselAus(item.review_notes);
   const geprueftText = geprueftenText(meta, item.review_notes);
-  // Schritt 9: Caption zu einem Video — dieselbe Funktion wie auf dem Server, ohne das Urteil der Medien-Regel.
-  const mediumRoh = meta.medium_id;
-  const medium =
-    mediumRoh === undefined || mediumRoh === null
-      ? null
-      : { id: typeof mediumRoh === "number" && Number.isSafeInteger(mediumRoh) && mediumRoh > 0 ? mediumRoh : null };
+  // Schritt 9: Caption zu einem Video — dieselbe Funktion wie auf dem Server, ohne das Urteil der Medien-Regel. Ob die
+  // Zeile ein Video hat, entscheidet mediumIdAus wie an den anderen drei Stellen (Nachbesserung caption9-2).
+  const m = mediumIdAus(meta.medium_id);
+  const medium = m.video ? { id: m.id } : null;
   return {
     counsel,
     // Paket B (R2): mit dem geprüften Text — dieselbe Sperre wie beim Freigeben auf dem Server.

@@ -11,7 +11,15 @@
 
 import "server-only";
 import { werteCounselAus } from "../counsel-urteil";
-import { geprueftenTextAusSchritten, maskiereGeschuetzteNamen, pruefeFreigabe, pruefeVideoFreigabe } from "../freigabe-regeln";
+import {
+  MEDIUM_ID_UNLESBAR,
+  MEDIUM_KEIN_EXPORT,
+  geprueftenTextAusSchritten,
+  maskiereGeschuetzteNamen,
+  mediumIdAus,
+  pruefeFreigabe,
+  pruefeVideoFreigabe,
+} from "../freigabe-regeln";
 import type { MedienSperre } from "../freigabe-regeln";
 import { PREIS_STAND_AB } from "../kosten";
 import { STATUS_WARTEND, bereinigeFehler, isoOderNull, istObjekt, mitternachtBerlin, textOderNull, verbinde } from "../status-server";
@@ -263,27 +271,61 @@ export function assetKosten(metadata: ContentMetadata | null, gemessenAm: string
 }
 
 /**
+ * Medien außerhalb der Zeilen dieses Objekts, auf die eine Caption zeigt (GET /api/studio liest sie nach; Nachbesserung
+ * caption9-2): je id Objekt und Fassung, null = keine Zeile mit dieser id. "nicht_gelesen" = Abfrage gescheitert.
+ */
+export type FremdeMedien =
+  | { art: "gelesen"; slug: string; zeilen: ReadonlyMap<number, { objekt_slug: unknown; fassung: unknown } | null> }
+  | { art: "nicht_gelesen" };
+
+/** Höchstzahl nachgelesener Medien außerhalb des Objekts je Anfrage (wie der Stapel, FREIGABEN_MEDIEN_HOECHSTENS). */
+export const FREMDE_MEDIEN_HOECHSTENS = 25;
+
+/** ids aus metadata.medium_id der Karten, die nicht unter den Zeilen dieses Objekts stehen (höchstens FREMDE_MEDIEN_HOECHSTENS). */
+export function fremdeMedienIds(assets: StudioAssetsTeil, medien: StudioMedienTeil): number[] {
+  if (assets.wert === null || medien.wert === null || medien.status === "fehler" || medien.wert.abgeschnitten) return [];
+  const eigene = new Set(medien.wert.zeilen.map((z) => z.id));
+  const ids = new Set<number>();
+  for (const a of assets.wert) {
+    const m = mediumIdAus((a.beleg.metadata as Record<string, unknown> | null)?.medium_id);
+    if (m.video && m.id !== null && !eigene.has(m.id)) ids.add(m.id);
+  }
+  return [...ids].sort((x, y) => x - y).slice(0, FREMDE_MEDIEN_HOECHSTENS);
+}
+
+/**
  * Schritt 9 (10.11.2026): Captions zu einem Video (metadata.medium_id) sperren auf der Karte mit derselben Funktion wie
  * Freigeben und Stapel (pruefeVideoFreigabe): Caption-Regel, Pflichtzeile und das Urteil der Medien-Regel aus dem Teil
- * medien (Kette des Exports). Ist der Teil nicht lesbar, gilt das Urteil als nicht ermittelt; ein Medium, das nicht zu
- * den Videos dieses Objekts gehört, als nicht gefunden. Karten ohne medium_id bleiben unverändert.
+ * medien (Kette des Exports). Ist der Teil nicht lesbar (oder gekappt), gilt das Urteil als nicht ermittelt. Seit der
+ * Nachbesserung caption9-2 mit denselben Gründen wie Freigeben und Stapel: kein Export (Zeile dieses Objekts), fremdes
+ * Objekt oder nicht gefunden (aus fremde, von der Route nachgelesen; ohne Lesung: nicht ermittelt). Ob eine Karte ein
+ * Video hat, entscheidet mediumIdAus (null wie fehlend). Karten ohne Video bleiben unverändert.
  */
-export function mitMedienUrteil(assets: StudioAssetsTeil, medien: StudioMedienTeil): StudioAssetsTeil {
+export function mitMedienUrteil(assets: StudioAssetsTeil, medien: StudioMedienTeil, fremde: FremdeMedien = { art: "nicht_gelesen" }): StudioAssetsTeil {
   if (assets.wert === null) return assets;
   const lesbar = medien.status !== "fehler" && medien.wert !== null;
   const urteile = new Map<number, MedienSperre>();
   if (lesbar && medien.wert !== null) for (const k of medien.wert.ketten) urteile.set(k.export.id, { freigebbar: k.urteil.freigebbar, gruende: k.urteil.gruende });
+  const gesperrt = (grund: string): MedienSperre => ({ freigebbar: false, gruende: [grund] });
+  /** Urteil für eine id ohne Kette dieses Objekts: dieselben Gründe in derselben Reihenfolge wie mediumZurFreigabe. */
+  const ohneKette = (id: number): MedienSperre | null => {
+    if (medien.wert === null) return null;
+    const eigene = medien.wert.zeilen.find((z) => z.id === id);
+    if (eigene !== undefined) return eigene.fassung === "export" ? null : gesperrt(MEDIUM_KEIN_EXPORT);
+    if (medien.wert.abgeschnitten || fremde.art !== "gelesen" || !fremde.zeilen.has(id)) return null;
+    const f = fremde.zeilen.get(id) ?? null;
+    if (f === null) return gesperrt(`Medium ${id} nicht gefunden`);
+    // Vorhanden, aber nicht unter den (vollständig gelesenen) Zeilen dieses Objekts: ein anderes Objekt. Trägt die
+    // Zeile doch dieses Objekt, ist sie seit dem Lesen neu — dann nicht ermittelt.
+    return f.objekt_slug === fremde.slug ? null : gesperrt(`Medium ${id} gehört nicht zum Objekt dieser Zeile`);
+  };
   const wert = assets.wert.map((a) => {
     const meta = a.beleg.metadata as Record<string, unknown> | null;
-    const roh = meta?.medium_id;
-    if (roh === undefined || roh === null) return a;
-    const id = typeof roh === "number" && Number.isSafeInteger(roh) && roh > 0 ? roh : null;
+    const m = mediumIdAus(meta?.medium_id);
+    if (!m.video) return a;
+    const id = m.id;
     const sperre: MedienSperre | null =
-      id === null
-        ? { freigebbar: false, gruende: ["Medium der Zeile nicht lesbar (metadata.medium_id)"] }
-        : !lesbar
-          ? null
-          : (urteile.get(id) ?? { freigebbar: false, gruende: [`Medium ${id} nicht gefunden`] });
+      id === null ? gesperrt(MEDIUM_ID_UNLESBAR) : !lesbar ? null : (urteile.get(id) ?? ohneKette(id));
     const p = pruefeVideoFreigabe(
       werteCounselAus(a.beleg.review_notes),
       a.beleg.body,

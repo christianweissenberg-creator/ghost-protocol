@@ -257,7 +257,7 @@ test("MP-6 „freigeben“ mit medium_id: alles erfüllt → 200, Beleg mit medi
   assert.ok(patch.query.includes(`updated_at=eq.${gelesen}`), patch.query);
 });
 
-test("MP-7 „freigeben“ mit medium_id: Export-Datei verändert, fremdes Objekt, unlesbare medium_id oder unbekanntes Medium → 409; Lesefehler → 502; ohne medium_id kein Medien-Zugriff", async () => {
+test("MP-7 „freigeben“ mit medium_id: Export-Datei verändert, fremdes Objekt, unlesbare medium_id, unbekanntes Medium oder kein Export → 409; Lesefehler → 502; ohne medium_id (auch null) kein Medien-Zugriff", async () => {
   video();
   await pruefe(3, eingabe());
   caption();
@@ -270,18 +270,27 @@ test("MP-7 „freigeben“ mit medium_id: Export-Datei verändert, fremdes Objek
   for (const [metadata, muster] of [
     [{ objekt_slug: "villa-x" }, /gehört nicht zum Objekt dieser Zeile/],
     [{ medium_id: "3" }, /metadata\.medium_id/],
-    [{ medium_id: null }, /metadata\.medium_id/],
     [{ medium_id: 77 }, /Medium 77 nicht gefunden/],
+    [{ medium_id: 2 }, /^Medium ist kein Export$/],
   ]) {
     zuruecksetzen();
     video();
     await pruefe(3, eingabe());
     caption(metadata);
+    const vorher = welt.studio.log.length;
     const r = await freigeben(50);
     assert.equal(r.status, 409, String(muster));
     assert.match(r.body.fehler, muster);
     assert.equal(zeile(50).status, "zur_freigabe");
+    // Nachbesserung caption9-2: kein Export → gesperrt, bevor eine Datei gelesen wird (kein Nachhashen des Originals).
+    if (metadata.medium_id === 2) assert.ok(!welt.studio.log.slice(vorher).some((l) => l.op === "download"), "nichts nachgehasht");
   }
+  // Nachbesserung caption9-2: medium_id null heißt „ohne Video“ wie ein fehlender Schlüssel (der Stapel sieht beides
+  // gleich) — Freigeben ohne Medien-Zugriff.
+  zuruecksetzen();
+  legeAn({ id: 52, title: "Text", status: "zur_freigabe", body: CAPTION, review_notes: "URTEIL: FREIGABE-EMPFEHLUNG", metadata: { steps: [{ agent: "researcher", output: "r" }, { agent: "scribe", output: CAPTION }], medium_id: null } });
+  assert.equal((await freigeben(52)).status, 200);
+  assert.ok(!welt.log.some((l) => String(l.tabelle).startsWith("studio_")) && welt.studio.log.length === 0);
   zuruecksetzen();
   video();
   caption();
@@ -454,13 +463,154 @@ test("MP-17 Schritt 9: Die Änderungsprobe des Stapels erkennt ein neues Prüfpr
   const eins = await dreiStellen();
   assert.equal(eins.abfrage, "voll");
   assert.equal(eins.eintrag.freigabe_sperre, "Rechte laut Prüfprotokoll nicht geklärt");
-  assert.equal((await dreiStellen()).abfrage, "unveraendert");
+  // Aus dem Zwischenstand: dieselbe Sperre und dasselbe Medium wie beim vollen Lesen (Nachbesserung caption9-5).
+  const zwei = await dreiStellen();
+  assert.equal(zwei.abfrage, "unveraendert");
+  assert.equal(zwei.eintrag.freigabe_sperre, "Rechte laut Prüfprotokoll nicht geklärt");
+  assert.deepEqual(zwei.eintrag.medium, eins.eintrag.medium);
   assert.equal((await pruefe(3, eingabe())).body.urteil, "bestanden");
   const drei = await dreiStellen();
   assert.equal(drei.abfrage, "voll", "neues Protokoll → volle Abfrage");
   assert.equal(drei.eintrag.freigabe_sperre, null);
   assert.equal(drei.eintrag.medium.pruefung_id, 2);
   assert.equal((await freigeben(50)).status, 200, "der Server gibt jetzt frei");
+});
+
+/** Eine Anfrage an den Stapel: Eintrag der Zeile id, Abfrage-Art und ganze Antwort. */
+async function stapelEintrag(id = "50") {
+  const res = await freigabenRoute.GET();
+  const s = await res.json();
+  return { eintrag: [...s.wartend, ...s.haengend].find((e) => e.id === id) ?? null, abfrage: res.headers.get("x-freigaben-abfrage"), s };
+}
+
+/** Caption-Metadaten wie caption(), mit eigener id und medium_id. */
+const captionMeta = (medium_id) => ({ objekt_slug: SLUG, steps: [{ agent: "researcher", output: "r" }, { agent: "scribe", output: CAPTION }], medium_id });
+
+test("MP-19 Stapel fail-closed (Nachbesserung mutanten-2, caption9-2): fremdes Objekt, unlesbare id, unbekanntes Medium, kein Export, über 25 Videos — derselbe Grund wie beim Freigeben; null heißt ohne Video an allen Stellen", async () => {
+  for (const [metadata, grund] of [
+    [{ objekt_slug: "villa-x" }, "Medium 3 gehört nicht zum Objekt dieser Zeile"],
+    [{ medium_id: "3" }, "Medium der Zeile nicht lesbar (metadata.medium_id)"],
+    [{ medium_id: 77 }, "Medium 77 nicht gefunden"],
+    [{ medium_id: 2 }, "Medium ist kein Export"],
+  ]) {
+    zuruecksetzen();
+    freigabenCache.setzeFreigabenZurueck();
+    video();
+    await pruefe(3, eingabe());
+    caption(metadata);
+    const { eintrag } = await stapelEintrag();
+    assert.equal(eintrag.freigabe_sperre, grund, JSON.stringify(metadata));
+    assert.equal(eintrag.medium.freigebbar, false);
+    assert.deepEqual(eintrag.medium.gruende, [grund]);
+    const server = await freigeben(50);
+    assert.deepEqual([server.status, server.body.fehler], [409, grund], "derselbe Grund beim Freigeben");
+  }
+  // null wie ein fehlender Schlüssel: kein Video — Stapel, Karte und Freigeben gleich.
+  zuruecksetzen();
+  freigabenCache.setzeFreigabenZurueck();
+  video();
+  caption({ medium_id: null });
+  const ohne = await dreiStellen();
+  assert.equal(ohne.eintrag.medium, null);
+  assert.equal(ohne.eintrag.freigabe_sperre, null);
+  assert.equal(ohne.karte.freigabe_sperre, null);
+  assert.equal((await freigeben(50)).status, 200);
+  // Über 25 Videos: das mit der höchsten id wird nicht gelesen — „nicht ermittelt“ und gesperrt, nie frei.
+  zuruecksetzen();
+  freigabenCache.setzeFreigabenZurueck();
+  for (let i = 0; i < 26; i += 1) {
+    legeAn({ id: 200 + i, title: `Caption ${i}`, status: "zur_freigabe", body: CAPTION, review_notes: "URTEIL: FREIGABE-EMPFEHLUNG", metadata: captionMeta(101 + i) });
+  }
+  const { s } = await stapelEintrag();
+  assert.equal(s.wartend.find((e) => e.id === "225").freigabe_sperre, "Urteil der Medien-Regel nicht ermittelt");
+  assert.deepEqual(s.wartend.find((e) => e.id === "225").medium.gruende, ["Urteil der Medien-Regel nicht ermittelt"]);
+  assert.equal(s.wartend.find((e) => e.id === "200").freigabe_sperre, "Medium 101 nicht gefunden");
+  assert.equal(welt.log.filter((l) => l.tabelle === "studio_medium").length, 25, "höchstens 25 Videos je Anfrage gelesen");
+});
+
+test("MP-20 Studio-Karte fail-closed (Nachbesserung mutanten-3, caption9-2): Medienteil nicht lesbar → nicht ermittelt; fremdes Objekt, unbekannt, kein Export — Karte, Stapel und Freigeben nennen denselben Grund; Nachlesen gescheitert → nicht ermittelt", async () => {
+  const karte = async () => (await (await studioRoute.GET(new NextRequest(`http://harness.local/api/studio/${SLUG}`, { headers: { cookie: "gp-auth=test" } }), { params: Promise.resolve({ objekt: SLUG }) })).json()).assets.wert.find((a) => a.id === 50);
+  video();
+  await pruefe(3, eingabe());
+  caption();
+  welt.stoerung = (a) => (a.art === "supabase" && a.tabelle === "studio_medium" ? { status: 500, body: { message: "weg" } } : null);
+  try {
+    assert.equal((await karte()).freigabe_sperre, "Urteil der Medien-Regel nicht ermittelt");
+  } finally {
+    welt.stoerung = null;
+  }
+  for (const [id, grund] of [
+    [4, "Medium 4 gehört nicht zum Objekt dieser Zeile"],
+    [77, "Medium 77 nicht gefunden"],
+    [2, "Medium ist kein Export"],
+  ]) {
+    zuruecksetzen();
+    freigabenCache.setzeFreigabenZurueck();
+    video();
+    // Export eines anderen Objekts (id 4), direkt in der Attrappe.
+    welt.tabellen.studio_medium.push({ ...welt.tabellen.studio_medium[2], id: 4, objekt_slug: "villa-x", sha256: "d".repeat(64), speicher_pfad: `villa-x/${"d".repeat(64)}.mp4` });
+    await pruefe(3, eingabe());
+    caption({ medium_id: id });
+    const { eintrag, karte: k } = await dreiStellen();
+    const server = await freigeben(50);
+    assert.deepEqual([k.freigabe_sperre, eintrag.freigabe_sperre, server.body.fehler], [grund, grund, grund], `Medium ${id}`);
+  }
+  // Nachlesen der fremden id scheitert: nicht ermittelt (gesperrt), nie frei.
+  zuruecksetzen();
+  video();
+  caption({ medium_id: 77 });
+  welt.stoerung = (a) => (a.art === "supabase" && a.tabelle === "studio_medium" && String(a.params.get("id")).startsWith("in.") ? { status: 500, body: { message: "weg" } } : null);
+  try {
+    assert.equal((await karte()).freigabe_sperre, "Urteil der Medien-Regel nicht ermittelt");
+  } finally {
+    welt.stoerung = null;
+  }
+});
+
+test("MP-21 Stapel-Zwischenstand (Nachbesserung caption9-1): ein einmaliger Lesefehler eines Videos wird nicht gemerkt — die nächste Anfrage liest voll und nennt den richtigen Grund; die Medienkennung ist beantwortet, bevor die erste Medien-Zeile gelesen wird", async () => {
+  freigabenCache.setzeFreigabenZurueck();
+  video();
+  await pruefe(3, eingabe({ rechte_status: "offen", rechte_nachweis: null }));
+  caption();
+  let einmal = true;
+  welt.stoerung = (a) => {
+    if (!einmal || a.art !== "supabase" || a.tabelle !== "studio_medium") return null;
+    einmal = false;
+    return { status: 500, body: { message: "Verbindung abgebrochen (einmalig)" } };
+  };
+  try {
+    const eins = await stapelEintrag();
+    assert.equal(eins.abfrage, "voll");
+    assert.match(eins.eintrag.freigabe_sperre, /^Medium 3 nicht lesbar: Verbindung abgebrochen \(einmalig\)/);
+  } finally {
+    welt.stoerung = null;
+  }
+  const zwei = await stapelEintrag();
+  assert.equal(zwei.abfrage, "voll", "der Lesefehler stand nicht im Zwischenstand");
+  assert.equal(zwei.eintrag.freigabe_sperre, "Rechte laut Prüfprotokoll nicht geklärt");
+  const drei = await stapelEintrag();
+  assert.equal(drei.abfrage, "unveraendert", "jetzt gemerkt");
+  assert.equal(drei.eintrag.freigabe_sperre, "Rechte laut Prüfprotokoll nicht geklärt");
+  // Reihenfolge: erst die Kennung (beantwortet), dann die Medien-Zeilen — die Kennung ist nie jünger als die Daten.
+  freigabenCache.setzeFreigabenZurueck();
+  const reihe = [];
+  welt.vorAntwort = async (a) => {
+    if (a.art !== "supabase") return;
+    if (a.tabelle === "studio_pruefung" && a.params.get("limit") === "1") {
+      reihe.push("kennung:start");
+      await new Promise((r) => setTimeout(r, 25));
+      reihe.push("kennung:ende");
+    } else if (a.tabelle === "studio_medium") {
+      reihe.push("medium");
+    }
+  };
+  try {
+    assert.equal((await stapelEintrag()).abfrage, "voll");
+  } finally {
+    welt.vorAntwort = null;
+  }
+  const ende = reihe.indexOf("kennung:ende");
+  assert.ok(ende >= 0 && ende < reihe.indexOf("medium"), reihe.join(" → "));
 });
 
 // ═══ Prüfansicht ═══

@@ -7,6 +7,7 @@
 // studio_pruefung, das Anker-Manifest des Objekts und der festgelegte Wortlaut des KI-Hinweises.
 
 import "server-only";
+import { MEDIUM_ID_UNLESBAR, MEDIUM_KEIN_EXPORT, mediumIdAus } from "../freigabe-regeln";
 import { pruefeMedienFreigabe } from "../medien-freigabe";
 import type { MedienFreigabePruefung } from "../medien-freigabe";
 import { ABFRAGE_TIMEOUT_MS, bereinigeFehler } from "../status-server";
@@ -34,8 +35,11 @@ export const PROTOKOLLE_JE_MEDIUM = 100;
 
 export type ProtokollLesung = { art: "ok"; pruefungen: StudioPruefung[] } | { art: "fehler"; grund: string };
 
-/** Prüfprotokolle eines Mediums, jüngstes zuerst (höchstens PROTOKOLLE_JE_MEDIUM). */
-export async function leseProtokolle(client: ServiceClient, id: number): Promise<ProtokollLesung> {
+/**
+ * Prüfprotokolle eines Mediums, jüngstes zuerst (höchstens PROTOKOLLE_JE_MEDIUM). signal: gemeinsames Zeitlimit des
+ * Aufrufers (Stapel, Nachbesserung caption9-6); ohne eines ABFRAGE_TIMEOUT_MS für diese Abfrage.
+ */
+export async function leseProtokolle(client: ServiceClient, id: number, signal?: AbortSignal): Promise<ProtokollLesung> {
   try {
     const p = await client
       .from("studio_pruefung")
@@ -44,7 +48,7 @@ export async function leseProtokolle(client: ServiceClient, id: number): Promise
       .order("geprueft_am", { ascending: false })
       .order("id", { ascending: false })
       .limit(PROTOKOLLE_JE_MEDIUM)
-      .abortSignal(AbortSignal.timeout(ABFRAGE_TIMEOUT_MS));
+      .abortSignal(signal ?? AbortSignal.timeout(ABFRAGE_TIMEOUT_MS));
     if (p.error) return { art: "fehler", grund: bereinigeFehler(p.error) };
     return { art: "ok", pruefungen: jungeZuerst((Array.isArray(p.data) ? (p.data as unknown[]) : []).map(leseProtokollZeile)) };
   } catch (e) {
@@ -52,8 +56,8 @@ export async function leseProtokolle(client: ServiceClient, id: number): Promise
   }
 }
 
-async function zeileNachId(client: ServiceClient, id: number): Promise<StudioMedium | null> {
-  const r = await client.from("studio_medium").select(MEDIUM_SPALTEN).eq("id", id).abortSignal(AbortSignal.timeout(ABFRAGE_TIMEOUT_MS)).maybeSingle();
+async function zeileNachId(client: ServiceClient, id: number, signal?: AbortSignal): Promise<StudioMedium | null> {
+  const r = await client.from("studio_medium").select(MEDIUM_SPALTEN).eq("id", id).abortSignal(signal ?? AbortSignal.timeout(ABFRAGE_TIMEOUT_MS)).maybeSingle();
   if (r.error) throw new Error(bereinigeFehler(r.error));
   return r.data === null ? null : leseMediumZeile(r.data);
 }
@@ -61,14 +65,15 @@ async function zeileNachId(client: ServiceClient, id: number): Promise<StudioMed
 /**
  * Kette eines Mediums lesen: das Medium (für das Freigeben der Export), sein Original und dessen Startbild.
  * slug: nur Medien dieses Objekts (sonst "fehlt"); null = ohne Objektfilter. Die Prüfprotokolle liest leseProtokolle.
+ * signal: gemeinsames Zeitlimit aller drei Abfragen (Stapel); ohne eines je Abfrage ABFRAGE_TIMEOUT_MS.
  */
-export async function leseKette(client: ServiceClient, id: number, slug: string | null): Promise<KettenLesung> {
+export async function leseKette(client: ServiceClient, id: number, slug: string | null, signal?: AbortSignal): Promise<KettenLesung> {
   try {
-    const ex = await zeileNachId(client, id);
+    const ex = await zeileNachId(client, id, signal);
     if (ex === null || (slug !== null && ex.objekt_slug !== slug)) return { art: "fehlt" };
-    const og = ex.abgeleitet_von === null ? null : await zeileNachId(client, ex.abgeleitet_von);
+    const og = ex.abgeleitet_von === null ? null : await zeileNachId(client, ex.abgeleitet_von, signal);
     const original = og !== null && og.fassung === "original" && og.objekt_slug === ex.objekt_slug ? og : null;
-    const sb = original === null || original.startbild_id === null ? null : await zeileNachId(client, original.startbild_id);
+    const sb = original === null || original.startbild_id === null ? null : await zeileNachId(client, original.startbild_id, signal);
     const startbild = sb !== null && sb.fassung === "startbild" && sb.objekt_slug === ex.objekt_slug ? sb : null;
     return { art: "ok", export: ex, original, startbild };
   } catch (e) {
@@ -99,12 +104,13 @@ export type MedienFreigabeLage =
  * Zeile), Export-Datei nachhashen, dann erst die Prüfprotokolle lesen und die Medien-Regel anwenden. Nur "frei" erlaubt
  * den Übergang; der Beleg nennt medium_id, den nachgemessenen SHA-256 und das maßgebliche Prüfprotokoll.
  * Die Protokolle kommen nach dem Nachhashen (bis zu DATEI_TIMEOUT_MS), damit ein in dieser Zeit gespeichertes Protokoll
- * zählt (Review-Befund 3, 10.11.2026; vorher davor gelesen).
+ * zählt (Review-Befund 3, 10.11.2026; vorher davor gelesen). Ein Medium, das kein Export ist, sperrt vor dem Nachhashen
+ * (Nachbesserung caption9-2: sonst hasht der Server etwa ein 15-MB-Original, ehe die Regel es abweist).
  */
 export async function mediumZurFreigabe(client: ServiceClient, metadata: Record<string, unknown>): Promise<MedienFreigabeLage> {
-  const roh = metadata.medium_id;
-  const id = typeof roh === "number" && Number.isSafeInteger(roh) && roh > 0 ? roh : null;
-  if (id === null) return { art: "gesperrt", grund: "Medium der Zeile nicht lesbar (metadata.medium_id)", gruende: ["Medium der Zeile nicht lesbar (metadata.medium_id)"] };
+  const m = mediumIdAus(metadata.medium_id);
+  const id = m.video ? m.id : null;
+  if (id === null) return { art: "gesperrt", grund: MEDIUM_ID_UNLESBAR, gruende: [MEDIUM_ID_UNLESBAR] };
   const slug = typeof metadata.objekt_slug === "string" ? metadata.objekt_slug : null;
   const k = await leseKette(client, id, null);
   if (k.art === "fehler") return { art: "lesefehler", grund: k.grund };
@@ -113,6 +119,7 @@ export async function mediumZurFreigabe(client: ServiceClient, metadata: Record<
     const grund = `Medium ${id} gehört nicht zum Objekt dieser Zeile`;
     return { art: "gesperrt", grund, gruende: [grund] };
   }
+  if (k.export.fassung !== "export") return { art: "gesperrt", grund: MEDIUM_KEIN_EXPORT, gruende: [MEDIUM_KEIN_EXPORT] };
   const datei = await dateiNachpruefen(client, k.export);
   if (datei.art === "fehler") return { art: "lesefehler", grund: datei.grund };
   if (datei.art === "abweichend") return { art: "gesperrt", grund: datei.grund, gruende: [datei.grund] };

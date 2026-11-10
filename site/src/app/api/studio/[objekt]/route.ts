@@ -14,6 +14,7 @@ import {
   assetsAusLesung,
   assetsFehler,
   creditsAusMedien,
+  fremdeMedienIds,
   kopfAusExport,
   kostenAusAssets,
   mitMedienUrteil,
@@ -21,6 +22,7 @@ import {
   medienFehler,
   teilFehler,
 } from "@/lib/studio/lesen";
+import type { FremdeMedien } from "@/lib/studio/lesen";
 import type {
   ObjektKopf,
   StudioAbweisungsArt,
@@ -46,6 +48,8 @@ import type {
 // - kosten_usd: Schätzung aus metadata.steps[].cost, mit der Zahl der Läufe ohne Kostenangabe.
 // - medien: Zeilen aus studio_medium, je Video die Kette Export → Original → Startbild; seit Schritt 8 mit den
 //   Prüfprotokollen (studio_pruefung) und dem Urteil der Medien-Regel (lib/medien-freigabe.ts) mit allen Gründen.
+//   Zeigt eine Caption auf ein Medium außerhalb dieses Objekts, liest die Route dessen id, Objekt und Fassung nach
+//   (Nachbesserung caption9-2), damit die Karte dieselben Gründe nennt wie Freigeben und Stapel; sonst keine Abfrage.
 // - kosten_credits: Higgsfield-Credits der Originale mit Deckel (E18) und Rest — getrennt von USD.
 // - messung: Messplan aus studio_messplan; fehlt die Tabelle, „nicht angelegt“, ohne Zeile „noch kein Eintrag“.
 // Fehler: 400 bei falscher Form der Kennung, 404 außerhalb der Allow-List (beide ohne jede
@@ -160,6 +164,28 @@ async function ladeMedien(slug: StudioObjekt, lage: ClientLage): Promise<StudioM
   }
 }
 
+/**
+ * Medien außerhalb dieses Objekts, auf die eine Caption zeigt (Nachbesserung caption9-2): nur id, Objekt und Fassung.
+ * Im Normalfall keine Abfrage (jede Caption zeigt auf einen Export dieses Objekts). Scheitert sie, gilt das Urteil
+ * dieser Karten als nicht ermittelt (gesperrt).
+ */
+async function ladeFremdeMedien(slug: StudioObjekt, lage: ClientLage, assets: StudioAssetsTeil, medien: StudioMedienTeil): Promise<FremdeMedien> {
+  const ids = fremdeMedienIds(assets, medien);
+  if (ids.length === 0 || lage.art === "fehler") return { art: "nicht_gelesen" };
+  try {
+    const r = await lage.client.from("studio_medium").select("id, objekt_slug, fassung").in("id", ids).abortSignal(AbortSignal.timeout(ABFRAGE_TIMEOUT_MS));
+    if (r.error || !Array.isArray(r.data)) return { art: "nicht_gelesen" };
+    const zeilen = new Map<number, { objekt_slug: unknown; fassung: unknown } | null>(ids.map((id) => [id, null]));
+    for (const z of r.data as unknown[]) {
+      const o = typeof z === "object" && z !== null ? (z as Record<string, unknown>) : null;
+      if (o !== null && typeof o.id === "number" && zeilen.has(o.id)) zeilen.set(o.id, { objekt_slug: o.objekt_slug, fassung: o.fassung });
+    }
+    return { art: "gelesen", slug, zeilen };
+  } catch {
+    return { art: "nicht_gelesen" };
+  }
+}
+
 async function ladeMessung(slug: StudioObjekt, lage: ClientLage): Promise<StudioMesswert<MessplanStand>> {
   if (lage.art === "fehler") return teilFehler<MessplanStand>(QUELLE_MESSPLAN, new Date().toISOString(), lage.fehlerArt, lage.grund);
   return leseMessplan(lage.client, slug);
@@ -182,11 +208,12 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
       ladeMedien(slug, lage),
       ladeMessung(slug, lage),
     ]);
+    const fremde = await ladeFremdeMedien(slug, lage, assets, medien);
     const antwort: StudioAntwort = {
       objekt_slug: slug,
       erzeugt_am: new Date().toISOString(),
       objekt: objektTeil,
-      assets: mitMedienUrteil(assets, medien),
+      assets: mitMedienUrteil(assets, medien, fremde),
       kosten_usd: kostenAusAssets(assets),
       kosten_credits: creditsAusMedien(medien),
       messung,

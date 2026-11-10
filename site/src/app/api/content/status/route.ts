@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { createServiceClient } from "@/lib/supabase";
 import { werteCounselAus } from "@/lib/counsel-urteil";
-import { geprueftenTextAusSchritten, pruefeFreigabe, pruefeVideoFreigabe } from "@/lib/freigabe-regeln";
+import { geprueftenTextAusSchritten, mediumIdAus, pruefeFreigabe, pruefeVideoFreigabe } from "@/lib/freigabe-regeln";
 import type { FreigabePruefung } from "@/lib/freigabe-regeln";
 import { bereinigeFehler, pruefeAnfrageHerkunft } from "@/lib/status-server";
 import { mediumZurFreigabe } from "@/lib/studio/medien-urteil";
@@ -55,6 +55,8 @@ import { KI_PFLICHTZEILE_CAPTION } from "@/lib/studio/ki-hinweis";
 // Seit Schritt 9 (10.11.2026) prüft eine Funktion Caption und Medium zusammen (pruefeVideoFreigabe in
 // lib/freigabe-regeln.ts): Caption-Regel, Pflichtzeile zum KI-Hinweis als eigene Zeile (KI_PFLICHTZEILE_CAPTION) und
 // Medien-Regel — dieselbe Funktion wie im Stapel, auf der Studio-Karte und in der Beleg-Kette.
+// Nachbesserung caption9-2: Ob eine Zeile die Caption zu einem Video ist, entscheidet mediumIdAus an allen vier Stellen
+// gleich (gesetzt = Video; fehlend und null = ohne Video, wie der Stapel es sehen kann).
 
 type Aktion = "freigeben" | "ablehnen" | "gepostet" | "metriken";
 
@@ -207,7 +209,7 @@ export async function POST(request: NextRequest) {
         const counsel = werteCounselAus(reviewNotes);
         let pruefung: FreigabePruefung;
         let medienBeleg: { medium_id: number; medium_sha256: string; pruefung_id: number } | null = null;
-        if (alteMetadata.medium_id === undefined) {
+        if (!mediumIdAus(alteMetadata.medium_id).video) {
           pruefung = pruefeFreigabe(counsel, body, geprueft);
           if (!pruefung.freigebbar || body === null) {
             return fehler(409, pruefung.grund ?? "Freigabetext nicht lesbar");

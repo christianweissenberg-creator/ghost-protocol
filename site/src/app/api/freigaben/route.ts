@@ -1,7 +1,15 @@
 import { NextResponse } from "next/server";
 import { createServiceClient } from "@/lib/supabase";
 import { werteCounselAus } from "@/lib/counsel-urteil";
-import { geprueftenTextAusSchritten, maskiereGeschuetzteNamen, pruefeFreigabe, pruefeVideoFreigabe } from "@/lib/freigabe-regeln";
+import {
+  MEDIUM_ID_UNLESBAR,
+  MEDIUM_KEIN_EXPORT,
+  geprueftenTextAusSchritten,
+  maskiereGeschuetzteNamen,
+  mediumIdAus,
+  pruefeFreigabe,
+  pruefeVideoFreigabe,
+} from "@/lib/freigabe-regeln";
 import type { MedienSperre } from "@/lib/freigabe-regeln";
 import { pruefeMedienFreigabe } from "@/lib/medien-freigabe";
 import type { FreigabeEintrag, FreigabeMedium, FreigabenAntwort } from "@/lib/status-types";
@@ -32,6 +40,7 @@ import {
   gueltigerFreigabenStand,
   istZaehlung,
   merkeFreigaben,
+  setzeFreigabenZurueck,
 } from "@/lib/freigaben-cache";
 import type { FreigabenAbfrageArt, FreigabenMedien } from "@/lib/freigaben-cache";
 
@@ -77,8 +86,10 @@ import type { FreigabenAbfrageArt, FreigabenMedien } from "@/lib/freigaben-cache
 // die Route mit 502 und leeren Listen, nie aus dem Zwischenstand. Scheitert die volle Abfrage, 502 wie
 // bisher; der Zwischenstand bleibt, wie er war.
 // Zeitlimit: Probe-Paar und volles Paar bekommen je ein eigenes Abbruchsignal mit ABFRAGE_TIMEOUT_MS
-// (8 s), die volle Abfrage also genau wie vor der Änderungsprobe. Braucht eine Anfrage beide Paare,
-// wartet sie bis zu 16 s auf Supabase.
+// (8 s), die volle Abfrage also genau wie vor der Änderungsprobe. Mit Videos (Schritt 9) liest die Probe die
+// Medienkennung unter ihrem Signal mit; die volle Abfrage liest danach Medienkennung und alle Videos unter einem
+// dritten, gemeinsamen Signal (Nachbesserung caption9-6; vorher je Abfrage 8 s, bis zu vier nacheinander je Video).
+// Braucht eine Anfrage alles, wartet sie bis zu 24 s auf Supabase, ohne Videos bis zu 16 s.
 //
 // Objekt-Studio Schritt 9 (10.11.2026): Eine Zeile mit metadata.medium_id ist die Caption zu einem Video. Ihr
 // Sperrgrund kommt aus pruefeVideoFreigabe (lib/freigabe-regeln.ts) — Caption-Regel, Pflichtzeile und Medien-Regel,
@@ -86,6 +97,10 @@ import type { FreigabenAbfrageArt, FreigabenMedien } from "@/lib/freigaben-cache
 // Die Route liest dazu je Video Kette und Prüfprotokolle (lib/studio/medien-urteil.ts), hasht die Datei aber nicht
 // nach; das tut erst „freigeben“. Ein neues Prüfprotokoll erkennt die Änderungsprobe (Medienteil der Kennung,
 // lib/freigaben-cache.ts).
+// Nachbesserung caption9-1: Die volle Abfrage bildet die Medienkennung VOR den Medien-Lesungen, der Reihe nach — die
+// Kennung ist so nie jünger als die gelesenen Daten (kommt dazwischen ein Protokoll, ändert die nächste Probe die
+// Kennung, und die Route liest neu). Scheitert die Lesung eines Videos, nennt die Antwort den Grund, gemerkt wird der
+// Stand aber nicht: Die nächste Anfrage liest voll, statt den Lesefehler bis zu 30 min aus dem Zwischenstand zu wiederholen.
 //
 // Segment-Config wie /api/status (geprüft in node_modules/next/dist/docs/01-app/):
 // nie statisch, jeder Abruf liest neu. Die Datei exportiert nur GET und die Segment-Config;
@@ -112,17 +127,17 @@ type MedienLesung =
   | { art: "fehlt" }
   | { art: "fehler"; grund: string };
 
-async function leseMedium(client: ReturnType<typeof createServiceClient>, id: number): Promise<MedienLesung> {
-  const k = await leseKette(client, id, null);
+async function leseMedium(client: ReturnType<typeof createServiceClient>, id: number, signal: AbortSignal): Promise<MedienLesung> {
+  const k = await leseKette(client, id, null, signal);
   if (k.art !== "ok") return k;
-  const p = await leseProtokolle(client, id);
+  const p = await leseProtokolle(client, id, signal);
   if (p.art === "fehler") return p;
   return { ...k, pruefungen: p.pruefungen };
 }
 
-/** Kette und Protokolle aller Videos der Listen (höchstens FREIGABEN_MEDIEN_HOECHSTENS), je id. */
-async function leseMedien(client: ReturnType<typeof createServiceClient>, ids: number[]): Promise<Map<number, MedienLesung>> {
-  const lesungen = await Promise.all(ids.map(async (id) => [id, await leseMedium(client, id)] as const));
+/** Kette und Protokolle aller Videos der Listen (höchstens FREIGABEN_MEDIEN_HOECHSTENS), je id, unter einem Signal. */
+async function leseMedien(client: ReturnType<typeof createServiceClient>, ids: number[], signal: AbortSignal): Promise<Map<number, MedienLesung>> {
+  const lesungen = await Promise.all(ids.map(async (id) => [id, await leseMedium(client, id, signal)] as const));
   return new Map(lesungen);
 }
 
@@ -140,12 +155,14 @@ async function medienKennung(client: ReturnType<typeof createServiceClient>, ids
   return JSON.stringify([ids, r.count, hoechste]);
 }
 
-/** Video eines Eintrags und das Urteil der Medien-Regel (ohne Nachhashen); sperre null = nicht ermittelt. */
-function medienUrteil(roh: unknown, slug: string | null, medien: ReadonlyMap<number, MedienLesung>): { medium: FreigabeMedium; sperre: MedienSperre | null } {
-  const id = typeof roh === "number" && Number.isSafeInteger(roh) && roh > 0 ? roh : null;
+/**
+ * Video eines Eintrags und das Urteil der Medien-Regel (ohne Nachhashen); sperre null = nicht ermittelt. id null = gesetzt,
+ * aber unlesbar. Gründe und Reihenfolge wie beim Freigeben (mediumZurFreigabe): nicht gefunden, fremdes Objekt, kein Export.
+ */
+function medienUrteil(id: number | null, slug: string | null, medien: ReadonlyMap<number, MedienLesung>): { medium: FreigabeMedium; sperre: MedienSperre | null } {
   const leer = { id, art: null, fassung: null, sha256: null, pruefung_id: null };
   const gesperrt = (grund: string) => ({ medium: { ...leer, freigebbar: false, gruende: [grund] }, sperre: { freigebbar: false, gruende: [grund] } });
-  if (id === null) return gesperrt("Medium der Zeile nicht lesbar (metadata.medium_id)");
+  if (id === null) return gesperrt(MEDIUM_ID_UNLESBAR);
   const l = medien.get(id);
   if (l === undefined) return { medium: { ...leer, freigebbar: false, gruende: ["Urteil der Medien-Regel nicht ermittelt"] }, sperre: null };
   if (l.art === "fehlt") return gesperrt(`Medium ${id} nicht gefunden`);
@@ -154,6 +171,9 @@ function medienUrteil(roh: unknown, slug: string | null, medien: ReadonlyMap<num
   if (slug === null || l.export.objekt_slug !== slug) {
     const grund = `Medium ${id} gehört nicht zum Objekt dieser Zeile`;
     return { medium: { ...basis, pruefung_id: null, freigebbar: false, gruende: [grund] }, sperre: { freigebbar: false, gruende: [grund] } };
+  }
+  if (l.export.fassung !== "export") {
+    return { medium: { ...basis, pruefung_id: null, freigebbar: false, gruende: [MEDIUM_KEIN_EXPORT] }, sperre: { freigebbar: false, gruende: [MEDIUM_KEIN_EXPORT] } };
   }
   const r = pruefeMedienFreigabe({ export: l.export, original: l.original, startbild: l.startbild }, l.pruefungen, medienVorgaben(l.export.objekt_slug));
   return { medium: { ...basis, pruefung_id: r.pruefung_id, freigebbar: r.freigebbar, gruende: r.gruende }, sperre: { freigebbar: r.freigebbar, gruende: r.gruende } };
@@ -191,8 +211,8 @@ function zuEintrag(z: unknown, jetztMs: number, medien: ReadonlyMap<number, Medi
   const counsel = werteCounselAus(reviewNotes);
   const objektSlug = textOderNull(z.objekt_slug);
   // Schritt 9: Caption zu einem Video — eine Prüfung für Caption und Medium (wie beim Freigeben, ohne Nachhashen).
-  const mediumRoh = z.medium_id;
-  const video = mediumRoh === undefined || mediumRoh === null ? null : medienUrteil(mediumRoh, objektSlug, medien);
+  const m = mediumIdAus(z.medium_id);
+  const video = m.video ? medienUrteil(m.id, objektSlug, medien) : null;
   const pruefung =
     video === null
       ? pruefeFreigabe(counsel, textOderNull(z.body), geprueft)
@@ -368,15 +388,25 @@ export async function GET() {
     const [wartendGesamt, haengendGesamt] = zaehlungenAus(wartend, haengend);
     // Schritt 9: Videos der Captions lesen (Kette und Protokolle) und den Medienteil der Kennung bilden.
     const ids = freigabenMedienIds(Array.isArray(wartend.data) ? wartend.data : [], Array.isArray(haengend.data) ? haengend.data : []);
-    // Ohne Videos keine weitere Abfrage und kein weiteres Signal (wie vor Schritt 9).
-    const [medien, kennungMedien]: [ReadonlyMap<number, MedienLesung>, string] =
-      ids.length === 0 ? [KEINE_MEDIEN, ""] : await Promise.all([leseMedien(client, ids), medienKennung(client, ids, AbortSignal.timeout(ABFRAGE_TIMEOUT_MS))]);
+    // Ohne Videos keine weitere Abfrage und kein weiteres Signal (wie vor Schritt 9). Mit Videos (Nachbesserung
+    // caption9-1): erst die Kennung, dann die Daten, der Reihe nach, unter einem gemeinsamen Zeitlimit (caption9-6).
+    let medien: ReadonlyMap<number, MedienLesung> = KEINE_MEDIEN;
+    let kennungMedien = "";
+    if (ids.length > 0) {
+      const medienSignal = AbortSignal.timeout(ABFRAGE_TIMEOUT_MS);
+      kennungMedien = await medienKennung(client, ids, medienSignal);
+      medien = await leseMedien(client, ids, medienSignal);
+    }
     const antwort = stapelAntwort(wartend.data, wartendGesamt, haengend.data, haengendGesamt, jetzt.getTime(), medien);
     // Beide Listen sind gelesen (stapelAntwort wirft sonst): Zwischenstand ersetzen, Kennung aus genau
-    // diesen Zeilen und Zählungen und dem Medienteil.
+    // diesen Zeilen und Zählungen und dem Medienteil. Ein Video mit Lesefehler wird nicht gemerkt (caption9-1).
     if (Array.isArray(wartend.data) && Array.isArray(haengend.data)) {
-      const medienStand: FreigabenMedien = { kennung: kennungMedien, daten: medien };
-      merkeFreigaben({ zeilen: wartend.data, gesamt: wartendGesamt }, { zeilen: haengend.data, gesamt: haengendGesamt }, vollAm, medienStand);
+      if ([...medien.values()].some((l) => l.art === "fehler")) {
+        setzeFreigabenZurueck();
+      } else {
+        const medienStand: FreigabenMedien = { kennung: kennungMedien, daten: medien };
+        merkeFreigaben({ zeilen: wartend.data, gesamt: wartendGesamt }, { zeilen: haengend.data, gesamt: haengendGesamt }, vollAm, medienStand);
+      }
     }
     return stapel200(antwort, "voll");
   } catch (e) {

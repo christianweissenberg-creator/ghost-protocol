@@ -144,7 +144,10 @@ export function merkeFreigaben(wartend: FreigabenListe, haengend: FreigabenListe
   stand = kennung === null ? null : { kennung, wartend, haengend, medien, vollAm };
 }
 
-/** Zwischenstand verwerfen (Tests: jeder Test beginnt ohne). */
+/**
+ * Zwischenstand verwerfen: Die nächste Anfrage liest voll. Die Route tut das nach dem Lesefehler eines Videos
+ * (Nachbesserung caption9-1); die Tests, damit jeder ohne Zwischenstand beginnt.
+ */
 export function setzeFreigabenZurueck(): void {
   stand = null;
 }

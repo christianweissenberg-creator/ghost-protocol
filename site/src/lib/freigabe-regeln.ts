@@ -232,6 +232,24 @@ export function mitPflichtzeile(text: string, pflichtzeile: string): string {
   return rumpf === "" ? pflichtzeile.trim() : `${rumpf}\n\n${pflichtzeile.trim()}`;
 }
 
+/**
+ * Caption zu einem Video? An allen vier Stellen dieselbe Regel (Freigeben, Stapel, Studio-Karte, Beleg-Kette;
+ * Nachbesserung caption9-2): metadata.medium_id gesetzt heißt Video — fehlend und null heißen „ohne Video“. Der Stapel
+ * liest metadata->medium_id und sieht für einen fehlenden Schlüssel und null dasselbe (PostgREST-JSON-Pfad); vorher
+ * behandelte nur der Server null als Video. Eine null schreibt keine Pipeline (sie lässt den Schlüssel weg), nur ein
+ * Schreiben an ihr vorbei — das den Schlüssel ebenso entfernen könnte. id null = gesetzt, aber unlesbar (gesperrt).
+ */
+export function mediumIdAus(roh: unknown): { video: false } | { video: true; id: number | null } {
+  if (roh === undefined || roh === null) return { video: false };
+  return { video: true, id: typeof roh === "number" && Number.isSafeInteger(roh) && roh > 0 ? roh : null };
+}
+
+/** Sperrgrund, wenn medium_id gesetzt, aber unlesbar ist (Freigeben, Stapel, Studio-Karte). */
+export const MEDIUM_ID_UNLESBAR = "Medium der Zeile nicht lesbar (metadata.medium_id)";
+
+/** Sperrgrund, wenn medium_id auf kein Export zeigt (Freigeben, Stapel, Studio-Karte; vor jedem Nachhashen). */
+export const MEDIUM_KEIN_EXPORT = "Medium ist kein Export";
+
 /** Sperrgrund, wenn die Pflichtzeile fehlt. */
 export function pflichtzeileFehlt(pflichtzeile: string): string {
   return `Pflichtzeile zum KI-Hinweis fehlt im Freigabetext („${pflichtzeile.trim()}“ als eigene Zeile)`;
