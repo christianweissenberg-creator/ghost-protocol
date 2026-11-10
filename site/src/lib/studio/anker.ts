@@ -96,7 +96,8 @@ export const ANKER_MANIFESTE: Readonly<Record<StudioObjekt, AnkerManifest>> = Ob
         herkunft: { text: EXPOSE, expose_seite: 18 },
         personen: { stand: "ja", text: "ca. 8" },
         als_anker: true,
-        hinweis: "Vorlage der Probe vom 05.11.2026 (dieselbe Datei, SHA-256 gleich); der Steinadel-Export führt sie als urls.cover.",
+        hinweis:
+          "Vorlage der Probe vom 05.11.2026 (dieselbe Datei, SHA-256 gleich). Soll: urls.cover im Steinadel-Export zeigt auf diese Datei; den Ist-Stand zeigt die Cover-Zeile.",
       }),
       eintrag({
         id: "terrasse-pergola",
@@ -323,6 +324,27 @@ export type CoverVergleich =
    * Pfad wie der Cover-Anker; zugang, abfrage, fragment: davon stand etwas in der Adresse.
    */
   | { art: "adresse"; adresse: string; pfad_gleich: boolean; zugang: boolean; abfrage: boolean; fragment: boolean };
+
+/**
+ * Welche Teile einer Web-Adresse vom Soll abweichen, als Satzteile ("anderes Protokoll", "anderer Host",
+ * "anderer Port", "anderer Pfad"); leer, wenn alle gleich sind oder eine Adresse nicht lesbar ist.
+ */
+export function abweichendeTeile(adresse: string, soll: string): string[] {
+  let a: URL;
+  let s: URL;
+  try {
+    a = new URL(adresse);
+    s = new URL(soll);
+  } catch {
+    return [];
+  }
+  return [
+    a.protocol !== s.protocol ? "anderes Protokoll" : null,
+    a.hostname !== s.hostname ? "anderer Host" : null,
+    a.port !== s.port ? "anderer Port" : null,
+    a.pathname !== s.pathname ? "anderer Pfad" : null,
+  ].filter((t): t is string => t !== null);
+}
 
 /**
  * Was steht in urls.cover, gemessen an der Datei des Cover-Ankers? Eine relative Angabe gilt wie im

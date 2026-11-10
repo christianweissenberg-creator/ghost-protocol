@@ -4,11 +4,12 @@
 // steht hier, nicht nur auf der Seite, damit das Panel auch in einer Server-Komponente eingebettet laufen kann.
 //
 // Zeigt das Anker-Manifest (lib/studio/anker.ts) je Bild mit Art, Maßen, Exposé-Seite, Personen und
-// Herkunft, dazu den Hash-Status aus GET /api/studio/[objekt]/anker — „unverändert“, „geändert“ oder
+// Herkunft, dazu den Hash-Status aus /api/studio/[objekt]/anker — „unverändert“, „geändert“ oder
 // „nicht erreichbar“, jeweils mit Messzeitpunkt — und den Abgleich von urls.cover im Steinadel-Export.
-// Geprüft wird einmal beim Aufbau des Panels und auf Klick „Alle prüfen“. Es gibt keinen Takt, also auch
-// nichts, das im verborgenen Tab pausieren müsste. Die Prüfung lädt auf dem Server nur die Dateien des
-// Manifests und kostet keinen bezahlten Aufruf.
+// Beim Aufbau liest das Panel per GET das letzte Ergebnis des Servers (Zwischenspeicher bis 15 min, das Alter
+// steht dabei); „Alle prüfen“ verlangt per POST eine frische Prüfung (höchstens eine je 60 s, sonst das letzte
+// Ergebnis mit Hinweis). Es gibt keinen Takt, also auch nichts, das im verborgenen Tab pausieren müsste. Die
+// Prüfung lädt auf dem Server nur die Dateien des Manifests und kostet keinen bezahlten Aufruf.
 // Maße und Größe stammen aus der Messung des Manifests, Status und Zeitpunkte aus der Prüfung; ohne
 // Prüfergebnis steht „wird geprüft …“ bzw. „nicht geprüft“ da, nie eine Zahl als Platzhalter. Texte des
 // Servers erscheinen maskiert. Zeiten in Europe/Berlin mit Zonenangabe, wie im übrigen Studio.
@@ -20,25 +21,27 @@ import {
   HASH_STATUS_TEXT,
   ankerManifest,
   artText,
-  dateiName,
   dateiPfad,
   kurzHash,
   personenText,
 } from "@/lib/studio/anker";
 import type { AnkerEintrag, AnkerManifest } from "@/lib/studio/anker";
-import type { AnkerAntwort, AnkerHashErgebnis, CoverErgebnis } from "@/lib/studio/typen";
+import type { AnkerAntwort, AnkerHashErgebnis, AnkerStand, CoverErgebnis } from "@/lib/studio/typen";
 import { berlinDatumZeit } from "@/lib/types";
 import { FARBE_BERNSTEIN, FARBE_GRUEN, FARBE_ROT, istObjekt, maskiert } from "@/components/studio/beleg-hilfen";
+
+/** Prüfergebnis der Route; stand (Zwischenspeicher) fehlt bei einer Antwort, die ihn nicht kennt. */
+export type AnkerDaten = AnkerAntwort & { stand?: unknown };
 
 /** Stand der Prüfung: läuft, abgewiesen (HTTP-Fehler oder Netz) oder Ergebnis. */
 export type AnkerLesung =
   | { art: "laedt" }
   | { art: "abgewiesen"; httpStatus: number | null; text: string }
-  | { art: "daten"; antwort: AnkerAntwort };
+  | { art: "daten"; antwort: AnkerDaten };
 
 const LAEDT: AnkerLesung = { art: "laedt" };
 
-/** Antwort von GET /api/studio/[objekt]/anker einordnen; der Fehlertext der Route steht sichtbar da. */
+/** Antwort von /api/studio/[objekt]/anker (GET oder POST) einordnen; der Fehlertext der Route steht sichtbar da. */
 export function leseAnkerAntwort(httpStatus: number, daten: unknown): AnkerLesung {
   const obj = istObjekt(daten) ? daten : null;
   if (httpStatus >= 200 && httpStatus < 300) {
@@ -49,7 +52,7 @@ export function leseAnkerAntwort(httpStatus: number, daten: unknown): AnkerLesun
       istObjekt(obj.export_cover) &&
       typeof obj.export_cover.status === "string";
     return lesbar
-      ? { art: "daten", antwort: obj as unknown as AnkerAntwort }
+      ? { art: "daten", antwort: obj as unknown as AnkerDaten }
       : { art: "abgewiesen", httpStatus, text: "Antwort ohne lesbares Prüfergebnis" };
   }
   if (httpStatus === 401) return { art: "abgewiesen", httpStatus, text: "Nicht angemeldet (HTTP 401) — bitte neu anmelden." };
@@ -67,6 +70,30 @@ function zeitBerlin(iso: unknown, ersatz: string): string {
 
 function zahl(n: number): string {
   return n.toLocaleString("de-DE");
+}
+
+/** stand der Antwort, wenn vollständig lesbar; sonst null (dann ohne Alter und Grenzen angezeigt). */
+export function leseStand(wert: unknown): AnkerStand | null {
+  if (!istObjekt(wert)) return null;
+  const { frisch, gedrosselt, alter_s, gueltig_bis, naechste_frische_ab } = wert;
+  if (typeof frisch !== "boolean" || typeof gedrosselt !== "boolean") return null;
+  if (typeof alter_s !== "number" || !Number.isFinite(alter_s) || alter_s < 0) return null;
+  if (typeof gueltig_bis !== "string" || typeof naechste_frische_ab !== "string") return null;
+  return { frisch, gedrosselt, alter_s, gueltig_bis, naechste_frische_ab };
+}
+
+/** Alter für die Anzeige: „weniger als 1 min“, „1 min“, „7 min“ … */
+function alterText(sekunden: number): string {
+  return sekunden < 60 ? "weniger als 1 min" : `${Math.floor(sekunden / 60)} min`;
+}
+
+/** Wann geprüft wurde und woher das Ergebnis kommt — frisch oder aus dem Zwischenspeicher, mit Alter. */
+export function pruefStandText(antwort: AnkerDaten): string {
+  const zeit = zeitBerlin(antwort.erzeugt_am, "ohne Zeitpunkt");
+  const stand = leseStand(antwort.stand);
+  if (stand === null) return `geprüft ${zeit}`;
+  if (stand.frisch) return `frisch geprüft ${zeit}`;
+  return `geprüft ${zeit}, vor ${alterText(stand.alter_s)} · aus dem Zwischenspeicher, gültig bis ${zeitBerlin(stand.gueltig_bis, "ohne Zeitpunkt")}`;
 }
 
 function istHashStatus(s: unknown): s is keyof typeof HASH_STATUS_TEXT {
@@ -192,9 +219,11 @@ function HashStatus({ e, r, lesung }: { e: AnkerEintrag; r: AnkerHashErgebnis | 
     `Bytes live: ${typeof r.bytes_live === "number" ? zahl(r.bytes_live) : "nicht gelesen"}`,
     `HTTP: ${typeof r.http_status === "number" ? r.http_status : "keine Antwort"}`,
   ].join("\n");
+  // Prüft der Server gegen einen anderen Soll-Hash, ist auch „unverändert“ nicht grün (Gegenprüfung PR #8).
+  const anderesSoll = sollServer !== e.sha256;
   return (
     <span title={titel} data-hash={r.status}>
-      <span className="font-semibold" style={{ color: STATUS_FARBE[r.status] }}>
+      <span className="font-semibold" style={{ color: anderesSoll ? FARBE_BERNSTEIN : STATUS_FARBE[r.status] }} data-hash-farbe={anderesSoll ? "abweichend" : r.status}>
         {HASH_STATUS_TEXT[r.status]}
       </span>
       {/* wrap-anywhere statt break-all: Wörter wie „statt“ bleiben ganz, ein langer Hash bricht nur, wenn er nicht passt. */}
@@ -205,7 +234,7 @@ function HashStatus({ e, r, lesung }: { e: AnkerEintrag; r: AnkerHashErgebnis | 
           {maskiert(r.hinweis)}
         </span>
       )}
-      {sollServer !== e.sha256 && (
+      {anderesSoll && (
         <span className="block text-[11px] break-words" style={{ color: FARBE_BERNSTEIN }} data-manifest-abweichung>
           Der Server prüft gegen einen anderen Manifest-Stand als diese Seite — bitte die Seite neu laden.
         </span>
@@ -268,7 +297,12 @@ function AnkerKarte({ e, r, lesung, manifest }: { e: AnkerEintrag; r: AnkerHashE
 
 function CoverZeile({ lesung, manifest }: { lesung: AnkerLesung; manifest: AnkerManifest }) {
   const ziel = manifest.eintraege.find((e) => e.id === manifest.cover_anker);
-  const soll = `${ziel ? dateiName(ziel.url) : "?"} (Anker ${manifest.cover_anker})`;
+  // Soll als volle Adresse (Gegenprüfung PR #8: der Dateiname allein verbarg Abweichungen in Host oder Protokoll).
+  const soll = (
+    <span className="wrap-anywhere" data-cover-soll>
+      {ziel ? ziel.url : "nicht im Manifest"} (Anker {manifest.cover_anker})
+    </span>
+  );
   if (lesung.art !== "daten") {
     return (
       <p className="text-[11px] mt-1 break-words" style={{ color: "var(--gp-ink-3)" }} data-export-cover={lesung.art === "laedt" ? "laedt" : "nicht_geprueft"}>
@@ -297,8 +331,9 @@ export function AnkerAnsicht({ manifest, lesung, pruefen }: { manifest: AnkerMan
   const jeId = new Map<string, AnkerHashErgebnis>(lesung.art === "daten" ? lesung.antwort.anker.map((a) => [a.id, a]) : []);
   const summe = lesung.art === "daten" ? zusammenfassung(manifest, lesung.antwort) : null;
   const abweichung = lesung.art === "daten" ? standAbweichung(manifest, lesung.antwort) : null;
+  const stand = lesung.art === "daten" ? leseStand(lesung.antwort.stand) : null;
   return (
-    <section className="card-ghost p-5 mb-6 min-w-0" data-anker-panel data-pruefung={lesung.art}>
+    <section className="card-ghost p-5 mb-6 min-w-0" data-anker-panel data-pruefung={lesung.art} aria-busy={laeuft}>
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <h2 className="text-[10px] text-text-muted uppercase tracking-widest">Anker-Material · {manifest.eintraege.length}</h2>
@@ -306,11 +341,15 @@ export function AnkerAnsicht({ manifest, lesung, pruefen }: { manifest: AnkerMan
             {bestandText(manifest)}
           </p>
         </div>
+        {/* aria-disabled statt disabled (Gegenprüfung PR #8): Ein gesperrter Knopf verlöre den Tastaturfokus; der
+            Klick während einer Prüfung wird hier ignoriert. */}
         <button
           type="button"
-          onClick={pruefen}
-          disabled={laeuft}
-          className="shrink-0 min-h-11 px-4 py-2 rounded-lg text-xs font-medium bg-surface-elevated text-foreground hover:opacity-80 transition-opacity disabled:opacity-40"
+          onClick={() => {
+            if (!laeuft) pruefen();
+          }}
+          aria-disabled={laeuft}
+          className="shrink-0 min-h-11 px-4 py-2 rounded-lg text-xs font-medium bg-surface-elevated text-foreground hover:opacity-80 transition-opacity aria-disabled:opacity-40 aria-disabled:cursor-not-allowed"
           data-alle-pruefen
         >
           Alle prüfen
@@ -318,8 +357,9 @@ export function AnkerAnsicht({ manifest, lesung, pruefen }: { manifest: AnkerMan
       </div>
       <p className="text-[10px] text-text-muted mt-2 break-words">
         „Alle prüfen“ lädt die {manifest.eintraege.length} Dateien des Manifests neu von steinadel.de, vergleicht ihren SHA-256 mit dem
-        Manifest und prüft urls.cover im Export — ohne bezahlte Aufrufe. Läuft gerade schon eine Prüfung (etwa aus einem zweiten Tab),
-        gilt deren Ergebnis. Manifest-Werte gemessen {zeitBerlin(manifest.gemessen_am, "ohne Zeitpunkt")} an den ausgelieferten Dateien.
+        Manifest und prüft urls.cover im Export — ohne bezahlte Aufrufe, höchstens einmal je 60 s. Beim Laden der Seite steht das letzte
+        Ergebnis des Servers, wenn es jünger als 15 min ist; läuft gerade eine Prüfung, gilt deren Ergebnis. Manifest-Werte gemessen{" "}
+        {zeitBerlin(manifest.gemessen_am, "ohne Zeitpunkt")} an den ausgelieferten Dateien.
       </p>
       <div className="mt-3 space-y-1" aria-live="polite">
         {lesung.art === "laedt" && (
@@ -333,8 +373,14 @@ export function AnkerAnsicht({ manifest, lesung, pruefen }: { manifest: AnkerMan
           </p>
         )}
         {lesung.art === "daten" && summe !== null && (
-          <p className="text-[11px] break-words" style={{ color: summe.farbe }} data-anker-stand="daten">
-            {summe.text} · Prüfung beendet {zeitBerlin(lesung.antwort.erzeugt_am, "ohne Zeitpunkt")}
+          <p className="text-[11px] break-words" style={{ color: summe.farbe }} data-anker-stand="daten" data-frisch={stand === null ? "unbekannt" : String(stand.frisch)}>
+            {summe.text} · {pruefStandText(lesung.antwort)}
+          </p>
+        )}
+        {stand !== null && stand.gedrosselt && (
+          <p className="text-[11px] break-words" style={{ color: FARBE_BERNSTEIN }} data-anker-pause>
+            Mindestpause: Frisch geprüft wird wieder ab {zeitBerlin(stand.naechste_frische_ab, "ohne Zeitpunkt")}; angezeigt ist das letzte
+            Ergebnis.
           </p>
         )}
         {abweichung !== null && (
@@ -354,9 +400,11 @@ export function AnkerAnsicht({ manifest, lesung, pruefen }: { manifest: AnkerMan
 }
 
 /**
- * Anker-Panel mit Prüfung: einmal beim Aufbau, danach je Klick auf „Alle prüfen“. Das Ergebnis gehört zu
- * Kennung und Lauf, für die es abgefragt wurde; bis die Antwort zum aktuellen Lauf da ist, steht „wird
- * geprüft …“ (wie die Studio-Seite beim Slug-Wechsel). Abbau oder neuer Lauf brechen die alte Abfrage ab.
+ * Anker-Panel mit Prüfung: beim Aufbau GET (letztes Ergebnis des Servers oder eine erste Prüfung), danach je
+ * Klick auf „Alle prüfen“ ein POST (frische Prüfung; JSON-Kopf, damit die Herkunftsprüfung der Route greift).
+ * Das Ergebnis gehört zu Kennung und Lauf, für die es abgefragt wurde; bis die Antwort zum aktuellen Lauf da
+ * ist, steht „wird geprüft …“ (wie die Studio-Seite beim Slug-Wechsel). Abbau oder neuer Lauf brechen die alte
+ * Abfrage ab.
  */
 export function AnkerPanel({ slug }: { slug: string }) {
   const manifest = ankerManifest(slug);
@@ -370,7 +418,17 @@ export function AnkerPanel({ slug }: { slug: string }) {
     async function pruefen() {
       let lesung: AnkerLesung;
       try {
-        const res = await fetch(`/api/studio/${encodeURIComponent(slug)}/anker`, { cache: "no-store", signal: steuerung.signal });
+        const adresse = `/api/studio/${encodeURIComponent(slug)}/anker`;
+        const res =
+          lauf === 0
+            ? await fetch(adresse, { cache: "no-store", signal: steuerung.signal })
+            : await fetch(adresse, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: "{}",
+                cache: "no-store",
+                signal: steuerung.signal,
+              });
         // Ohne lesbares JSON (etwa HTML eines Reverse-Proxys) zählt nur der Status.
         const daten: unknown = await res.json().catch(() => null);
         lesung = leseAnkerAntwort(res.status, daten);

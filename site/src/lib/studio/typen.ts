@@ -182,7 +182,26 @@ export interface AnkerAntwort {
   export_cover: CoverErgebnis;
 }
 
-/** Abweisung der ganzen Anfrage: 400 eingabe, 403 herkunft (nur die Anker-Route), 404 nicht_im_studio, 500 programmfehler. */
+/** Wie alt das ausgelieferte Ergebnis ist und wann wieder geprüft wird (lib/studio/anker-speicher.ts). */
+export interface AnkerStand {
+  /** true: für diese Anfrage geprüft oder einer laufenden Prüfung angeschlossen; false: aus dem Zwischenspeicher. */
+  frisch: boolean;
+  /** Nur nach „Alle prüfen“: wegen der Mindestpause nicht neu geprüft, ausgeliefert ist das letzte Ergebnis. */
+  gedrosselt: boolean;
+  /** Alter des Ergebnisses beim Ausliefern, in ganzen Sekunden. */
+  alter_s: number;
+  /** Bis dahin zeigt der Seitenaufbau dieses Ergebnis, ohne neu zu prüfen (ISO). */
+  gueltig_bis: string;
+  /** Ab dann prüft „Alle prüfen“ wieder frisch (ISO). */
+  naechste_frische_ab: string;
+}
+
+/** Antwort von GET und POST /api/studio/[objekt]/anker: das Prüfergebnis und sein Stand. */
+export interface AnkerRoutenAntwort extends AnkerAntwort {
+  stand: AnkerStand;
+}
+
+/** Abweisung der ganzen Anfrage: 400 eingabe, 403/415 herkunft (nur die Anker-Route), 404 nicht_im_studio, 500 programmfehler. */
 export type StudioAbweisungsArt = "eingabe" | "herkunft" | "nicht_im_studio" | "programmfehler";
 
 export interface StudioFehlerAntwort {

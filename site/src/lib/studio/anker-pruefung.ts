@@ -12,7 +12,8 @@
 //   ohne Kodierung (Accept-Encoding: identity); eine komprimierte Antwort wird nicht gelesen — sonst zählte das
 //   Limit nur entpackte Bytes, und ein Strom, der zu nichts entpackt, liefe bis zum Zeitlimit (Prüfung 10.11.2026).
 // - Nichts wird abgelegt: Der Hash entsteht beim Lesen, die Bytes werden verworfen.
-// - Kein Takt: Geprüft wird nur auf Anfrage (Aufbau des Anker-Panels, „Alle prüfen“).
+// - Kein Takt: Geprüft wird nur auf Anfrage, und auch dann höchstens einmal je 15 min beim Seitenaufbau
+//   bzw. einmal je 60 s mit „Alle prüfen“ (Zwischenspeicher in lib/studio/anker-speicher.ts).
 // - Die Adresse aus urls.cover wird nur verglichen, nie abgerufen.
 // Jedes Ergebnis trägt seinen Zeitpunkt. Ein Fehler bei einer Datei betrifft nur ihren Status.
 
@@ -21,7 +22,7 @@ import { createHash } from "node:crypto";
 import { domainToUnicode } from "node:url";
 import { maskiereGeschuetzteNamen } from "../freigabe-regeln";
 import { bereinigeFehler, istObjekt, istZeitueberschreitung } from "../status-server";
-import { dateiName, istManifestUrl, vergleicheCover } from "./anker";
+import { abweichendeTeile, istManifestUrl, vergleicheCover } from "./anker";
 import type { AnkerEintrag, AnkerManifest, AnkerHashStatus } from "./anker";
 import { leseExport } from "./export-abruf";
 import type { StudioObjekt } from "./objekte";
@@ -244,7 +245,6 @@ export function coverAusExport(daten: unknown, slug: string, manifest: AnkerMani
     return { ...basis, status: "geaendert", ist: null, hinweis: `urls.cover ist länger als ${zahl(COVER_ROH_MAX)} Zeichen — weder verglichen noch angezeigt` };
   }
   const v = vergleicheCover(coverRoh, anker.url);
-  const ziel = dateiName(anker.url);
   if (v.art === "fehlt") {
     return { ...basis, status: "geaendert", ist: null, hinweis: `Der Export nennt kein Cover (${urls === null ? "urls fehlt" : "urls.cover leer"})` };
   }
@@ -254,7 +254,13 @@ export function coverAusExport(daten: unknown, slug: string, manifest: AnkerMani
   const anzeige = ist === null ? "; Adresse mit ungültiger Kodierung, nicht angezeigt" : "";
   // Unverändert nur bei gleichem Ursprung und Pfad, ohne Zugangsdaten und ohne Abfrage (Prüfung 10.11.2026:
   // dass steinadel.de eine Abfrage ignoriert, ist nicht belegt — der Hash gilt nur der Manifest-Adresse).
-  if (!v.pfad_gleich) return { ...basis, status: "geaendert", ist, hinweis: `urls.cover zeigt nicht mehr auf ${ziel}${anzeige}` };
+  // Der Grund nennt den abweichenden Teil und das Soll als volle Adresse (Gegenprüfung PR #8: nur der
+  // Dateiname ließ eine Abweichung in Host oder Protokoll wie einen Fehlalarm aussehen).
+  if (!v.pfad_gleich) {
+    // Ursprung oder Pfad weichen ab, also nennt abweichendeTeile mindestens einen Teil.
+    const teile = abweichendeTeile(v.adresse, anker.url).join(", ");
+    return { ...basis, status: "geaendert", ist, hinweis: `urls.cover weicht vom Soll ab (${teile}); Soll: ${anker.url}${anzeige}` };
+  }
   if (v.zugang) {
     return { ...basis, status: "geaendert", ist, hinweis: "urls.cover enthält Zugangsdaten (Name oder Passwort in der Adresse); angezeigt ohne sie" };
   }

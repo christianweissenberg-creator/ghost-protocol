@@ -7,7 +7,7 @@
 // Test-Bytes, deren SHA-256 der Test selbst rechnet. Die Hashes und Maße des echten Manifests prüft der Test
 // gegen die Messung vom 10.11.2026 (Werte unten), nicht gegen einen Abruf.
 // Die Umgebungswerte sind Test-Werte dieses Prozesses, keine echten Schlüssel.
-import { test, beforeEach } from "node:test";
+import { test, beforeEach, mock } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
@@ -50,6 +50,7 @@ const types = await import("../src/lib/types.ts");
 const objekte = await import("../src/lib/studio/objekte.ts");
 const anker = await import("../src/lib/studio/anker.ts");
 const pruefung = await import("../src/lib/studio/anker-pruefung.ts");
+const speicher = await import("../src/lib/studio/anker-speicher.ts");
 const studioRoute = await import(pathToFileURL(path.join(SITE, "src/app/api/studio/[objekt]/route.ts")).href);
 const ankerRoute = await import(pathToFileURL(path.join(SITE, "src/app/api/studio/[objekt]/anker/route.ts")).href);
 
@@ -106,6 +107,8 @@ globalThis.fetch = async (input, init = {}) => {
 
 beforeEach(() => {
   zuruecksetzen();
+  // Zwischenspeicher der Anker-Route (lib/studio/anker-speicher.ts): jeder Test beginnt ohne Ergebnis.
+  speicher.setzeAnkerSpeicherZurueck();
   steinadel.dateien.clear();
   steinadel.abrufe.length = 0;
   steinadel.aktiv = 0;
@@ -641,19 +644,21 @@ test("AN-C1 Cover unverändert: urls.cover zeigt auf hero-hof-nacht.jpg (absolut
 });
 
 test("AN-C2 Cover geändert: anderer Pfad, Host oder Protokoll; Zugangsdaten; Abfrage; leer, kein Text oder keine Web-Adresse", () => {
-  const ziel = "urls.cover zeigt nicht mehr auf hero-hof-nacht.jpg";
-  for (const [wert, ist] of [
-    ["https://steinadel.de/objekte/rittergut/ki-cover-1.jpg", "https://steinadel.de/objekte/rittergut/ki-cover-1.jpg"],
-    ["https://storage.example/objekt-visuals/rittergut/cover.jpg?v=3", "https://storage.example/objekt-visuals/rittergut/cover.jpg"],
-    ["http://steinadel.de/objekte/rittergut/hero-hof-nacht.jpg", "http://steinadel.de/objekte/rittergut/hero-hof-nacht.jpg"],
-    ["https://www.steinadel.de/objekte/rittergut/hero-hof-nacht.jpg", "https://www.steinadel.de/objekte/rittergut/hero-hof-nacht.jpg"],
-    ["//evil.example/objekte/rittergut/hero-hof-nacht.jpg", "https://evil.example/objekte/rittergut/hero-hof-nacht.jpg"],
-    ["hero-hof-nacht.jpg", "https://steinadel.de/hero-hof-nacht.jpg"],
-    ["https://steinadel.de/objekte/rittergut/hero-hof-nacht.JPG", "https://steinadel.de/objekte/rittergut/hero-hof-nacht.JPG"],
-    ["https://nutzer:pw@steinadel.de/objekte/rittergut/anderes.jpg", "https://steinadel.de/objekte/rittergut/anderes.jpg"],
+  // Gegenprüfung PR #8: Der Grund nennt den abweichenden Teil und das Soll als volle Adresse.
+  for (const [wert, ist, teile] of [
+    ["https://steinadel.de/objekte/rittergut/ki-cover-1.jpg", "https://steinadel.de/objekte/rittergut/ki-cover-1.jpg", "anderer Pfad"],
+    ["https://storage.example/objekt-visuals/rittergut/cover.jpg?v=3", "https://storage.example/objekt-visuals/rittergut/cover.jpg", "anderer Host, anderer Pfad"],
+    ["http://steinadel.de/objekte/rittergut/hero-hof-nacht.jpg", "http://steinadel.de/objekte/rittergut/hero-hof-nacht.jpg", "anderes Protokoll"],
+    ["https://www.steinadel.de/objekte/rittergut/hero-hof-nacht.jpg", "https://www.steinadel.de/objekte/rittergut/hero-hof-nacht.jpg", "anderer Host"],
+    ["https://steinadel.de:8443/objekte/rittergut/hero-hof-nacht.jpg", "https://steinadel.de:8443/objekte/rittergut/hero-hof-nacht.jpg", "anderer Port"],
+    ["//evil.example/objekte/rittergut/hero-hof-nacht.jpg", "https://evil.example/objekte/rittergut/hero-hof-nacht.jpg", "anderer Host"],
+    ["hero-hof-nacht.jpg", "https://steinadel.de/hero-hof-nacht.jpg", "anderer Pfad"],
+    ["https://steinadel.de/objekte/anderes-objekt/hero-hof-nacht.jpg", "https://steinadel.de/objekte/anderes-objekt/hero-hof-nacht.jpg", "anderer Pfad"],
+    ["https://steinadel.de/objekte/rittergut/hero-hof-nacht.JPG", "https://steinadel.de/objekte/rittergut/hero-hof-nacht.JPG", "anderer Pfad"],
+    ["https://nutzer:pw@steinadel.de/objekte/rittergut/anderes.jpg", "https://steinadel.de/objekte/rittergut/anderes.jpg", "anderer Pfad"],
   ]) {
     const r = cover(wert);
-    assert.deepEqual([r.status, r.ist, r.hinweis], ["geaendert", ist, ziel], wert);
+    assert.deepEqual([r.status, r.ist, r.hinweis], ["geaendert", ist, `urls.cover weicht vom Soll ab (${teile}); Soll: ${COVER_URL}`], wert);
   }
   // Gleicher Pfad mit Zugangsdaten: eigener Grund; angezeigt wird die Adresse ohne sie.
   for (const wert of ["https://nutzer:pw@steinadel.de/objekte/rittergut/hero-hof-nacht.jpg", "https://nutzer@steinadel.de/objekte/rittergut/hero-hof-nacht.jpg?v=2"]) {
@@ -720,7 +725,7 @@ test("AN-C4 Cover-Anzeige: geschützter Name maskiert — auch prozentkodiert od
   // Steuerzeichen fallen weg; eine ungültige Kodierung wird nicht angezeigt (darin könnte sich der Name verbergen).
   assert.equal(cover("https://steinadel.de/objekte/a%0Ab%09c.jpg").ist, "https://steinadel.de/objekte/abc.jpg");
   const kaputt = cover("https://steinadel.de/objekte/%E2%80/x.jpg");
-  assert.deepEqual([kaputt.status, kaputt.ist, kaputt.hinweis], ["geaendert", null, "urls.cover zeigt nicht mehr auf hero-hof-nacht.jpg; Adresse mit ungültiger Kodierung, nicht angezeigt"]);
+  assert.deepEqual([kaputt.status, kaputt.ist, kaputt.hinweis], ["geaendert", null, `urls.cover weicht vom Soll ab (anderer Pfad); Soll: ${COVER_URL}; Adresse mit ungültiger Kodierung, nicht angezeigt`]);
   // Gültige Kodierung neben einer ungültigen: auch dann nicht angezeigt.
   assert.equal(cover(`https://steinadel.de/objekte/${encodeURIComponent(`${vorne} ${hinten}`)}%E2/x.jpg`).ist, null);
   // Port bleibt in der Anzeige.
@@ -731,7 +736,7 @@ test("AN-C4 Cover-Anzeige: geschützter Name maskiert — auch prozentkodiert od
   assert.deepEqual([riesig.status, riesig.ist, riesig.hinweis], ["geaendert", null, "urls.cover ist länger als 2.000 Zeichen — weder verglichen noch angezeigt"]);
   const grenze = `https://steinadel.de/${"c".repeat(pruefung.COVER_ROH_MAX - 25)}.jpg`;
   assert.equal(grenze.length, pruefung.COVER_ROH_MAX);
-  assert.equal(cover(grenze).hinweis, "urls.cover zeigt nicht mehr auf hero-hof-nacht.jpg", "genau an der Grenze verglichen");
+  assert.equal(cover(grenze).hinweis, `urls.cover weicht vom Soll ab (anderer Pfad); Soll: ${COVER_URL}`, "genau an der Grenze verglichen");
   const lang = cover(`https://steinadel.de/${"a".repeat(400)}.jpg`);
   assert.equal(lang.ist.length, pruefung.COVER_ANZEIGE_MAX);
   assert.ok(lang.ist.endsWith("…"));
@@ -766,6 +771,10 @@ test("AN-C5 vergleicheCover: relative Angaben ab der Wurzel von steinadel.de, di
   assert.deepEqual(anker.vergleicheCover("https://n@steinadel.de/objekte/rittergut/hero-hof-nacht.jpg?v=1#x", COVER_URL), { ...gleich, zugang: true, abfrage: true, fragment: true });
   assert.deepEqual(anker.vergleicheCover("https://:pw@steinadel.de/x.jpg", COVER_URL), { ...gleich, adresse: "https://steinadel.de/x.jpg", pfad_gleich: false, zugang: true });
   assert.deepEqual(anker.vergleicheCover(COVER_URL, "kein url"), { art: "unlesbar" });
+  assert.deepEqual(anker.abweichendeTeile("http://www.steinadel.de:81/x.jpg", COVER_URL), ["anderes Protokoll", "anderer Host", "anderer Port", "anderer Pfad"]);
+  assert.deepEqual(anker.abweichendeTeile(COVER_URL, COVER_URL), []);
+  assert.deepEqual(anker.abweichendeTeile("kein url", COVER_URL), []);
+  assert.deepEqual(anker.abweichendeTeile(COVER_URL, "kein url"), []);
   assert.equal(steinadel.abrufe.length, 0);
 });
 
@@ -815,7 +824,9 @@ test("AN-R2 200: je Manifest-Datei ein Ergebnis in Manifest-Reihenfolge, Cover a
   assert.equal(r.status, 200);
   assert.equal(r.kopf.get("cache-control"), "no-store");
   const b = r.body;
-  assert.deepEqual(Object.keys(b), ["objekt_slug", "erzeugt_am", "manifest_gemessen_am", "anker", "export_cover"]);
+  assert.deepEqual(Object.keys(b), ["objekt_slug", "erzeugt_am", "manifest_gemessen_am", "anker", "export_cover", "stand"]);
+  // Erster Aufbau ohne gespeichertes Ergebnis: einmal geprüft.
+  assert.deepEqual([b.stand.frisch, b.stand.gedrosselt, b.stand.alter_s], [true, false, 0]);
   assert.equal(b.objekt_slug, SLUG);
   assert.equal(b.manifest_gemessen_am, "2026-11-10T07:59:15Z");
   assert.deepEqual(b.anker.map((a) => a.id), MANIFEST.eintraege.map((e) => e.id));
@@ -845,7 +856,7 @@ test("AN-R3 Kein SSRF: Abfrageparameter und Kennung lenken keinen Abruf um; nur 
   for (const verboten of ["searchParams", "nextUrl", "request.json", "request.text", "request.url"]) assert.ok(!quelle.includes(verboten), verboten);
 });
 
-test("AN-R4 Gleichzeitige Anfragen teilen eine laufende Prüfung; danach startet jede Anfrage neu", async () => {
+test("AN-R4 Gleichzeitige Anfragen teilen eine laufende Prüfung; danach liefert der Seitenaufbau den Zwischenspeicher", async () => {
   welt.objekteAntwort = exportMit();
   steinadel.verzoegerungMs = 5;
   const [a, b] = await Promise.all([holeAnker(), holeAnker()]);
@@ -853,11 +864,13 @@ test("AN-R4 Gleichzeitige Anfragen teilen eine laufende Prüfung; danach startet
   assert.deepEqual(a.body, b.body, "dasselbe Ergebnis");
   assert.equal(steinadel.abrufe.length, MANIFEST.eintraege.length, "jede Datei nur einmal");
   assert.equal(welt.objektAbrufe, 1, "Export nur einmal");
+  assert.equal(a.body.stand.frisch, true);
   const c = await holeAnker();
   assert.equal(c.status, 200);
-  assert.equal(steinadel.abrufe.length, 2 * MANIFEST.eintraege.length, "neue Prüfung nach dem Ende der alten");
-  assert.equal(welt.objektAbrufe, 2);
-  assert.notEqual(c.body.erzeugt_am, undefined);
+  assert.equal(steinadel.abrufe.length, MANIFEST.eintraege.length, "kein neuer Abruf: Zwischenspeicher");
+  assert.equal(welt.objektAbrufe, 1);
+  assert.equal(c.body.erzeugt_am, a.body.erzeugt_am);
+  assert.deepEqual([c.body.stand.frisch, c.body.stand.gedrosselt], [false, false]);
 });
 
 test("AN-R5 Programmfehler: 500 mit bereinigtem Grund; eine gescheiterte Prüfung blockiert die nächste nicht", async () => {
@@ -927,6 +940,7 @@ test("AN-R6 Cover über die Route: Export-Fehler mit derselben Ursache und demse
     welt.objekteAntwort = antwort;
     const kopf = (await holeStudio()).objekt;
     zuruecksetzen();
+    speicher.setzeAnkerSpeicherZurueck();
     welt.objekteAntwort = antwort;
     const c = (await holeAnker()).body.export_cover;
     assert.equal(c.status, "nicht_lesbar", JSON.stringify(antwort));
@@ -939,6 +953,7 @@ test("AN-R6 Cover über die Route: Export-Fehler mit derselben Ursache und demse
   }
   // HTML statt JSON (Proxy) mit 200.
   zuruecksetzen();
+  speicher.setzeAnkerSpeicherZurueck();
   const vorher = globalThis.fetch;
   globalThis.fetch = async (input, init) => {
     const url = String(typeof input === "string" ? input : input.url);
@@ -953,6 +968,7 @@ test("AN-R6 Cover über die Route: Export-Fehler mit derselben Ursache und demse
   }
   // Cover zeigt woanders hin.
   zuruecksetzen();
+  speicher.setzeAnkerSpeicherZurueck();
   welt.objekteAntwort = exportMit({ ...RITTERGUT, urls: { cover: "https://steinadel.de/objekte/rittergut/ki-cover.jpg" } });
   const g = (await holeAnker()).body.export_cover;
   assert.deepEqual([g.status, g.ist], ["geaendert", "https://steinadel.de/objekte/rittergut/ki-cover.jpg"]);
@@ -984,11 +1000,11 @@ test("AN-R7 Export-Abruf der Anker-Route: Sitzung weitergereicht, ohne Cache, 20
   }
 });
 
-test("AN-R8 Route und Module: nur GET, force-dynamic, nodejs; Prüfung und Export-Abruf nur auf dem Server", () => {
+test("AN-R8 Route und Module: GET und POST, force-dynamic, nodejs; Prüfung, Speicher und Export-Abruf nur auf dem Server", () => {
   assert.equal(ankerRoute.dynamic, "force-dynamic");
   assert.equal(ankerRoute.runtime, "nodejs");
-  assert.deepEqual(Object.keys(ankerRoute).filter((k) => /^[A-Z]+$/.test(k)), ["GET"]);
-  for (const datei of ["src/lib/studio/anker-pruefung.ts", "src/lib/studio/export-abruf.ts"]) {
+  assert.deepEqual(Object.keys(ankerRoute).filter((k) => /^[A-Z]+$/.test(k)).sort(), ["GET", "POST"]);
+  for (const datei of ["src/lib/studio/anker-pruefung.ts", "src/lib/studio/export-abruf.ts", "src/lib/studio/anker-speicher.ts"]) {
     const sf = ts.createSourceFile(datei, readFileSync(path.join(SITE, datei), "utf8"), ts.ScriptTarget.Latest, true);
     assert.ok(sf.statements.some((s) => ts.isImportDeclaration(s) && !s.importClause && s.moduleSpecifier.text === "server-only"), datei);
   }
@@ -1045,6 +1061,7 @@ function antwortFuer(status = "unveraendert", ueber = {}, cover = {}) {
       hinweis: null,
       ...cover,
     },
+    stand: { frisch: true, gedrosselt: false, alter_s: 0, gueltig_bis: "2026-11-10T09:15:05.000Z", naechste_frische_ab: "2026-11-10T09:01:05.000Z" },
   };
 }
 
@@ -1063,7 +1080,7 @@ test("AN-P1 Abnahme: je Bild Art, Maße, Exposé-Seite, Personen, Herkunft und H
   assert.equal((html.match(/<article[^>]*data-anker=/g) ?? []).length, 11);
   assert.ok(t.includes("Anker-Material · 11"), t.slice(0, 500));
   assert.ok(t.includes("11 Bilder im Manifest · 10 als Anker zulässig, alle Visualisierungen (Renderings), keine Fotos · 1 ohne Ankerfunktion"));
-  assert.ok(t.includes(`Hash-Status: 11 unverändert · Prüfung beendet ${berlin("2026-11-10T09:00:05.000Z")}`));
+  assert.ok(t.includes(`Hash-Status: 11 unverändert · frisch geprüft ${berlin("2026-11-10T09:00:05.000Z")}`), t.slice(0, 800));
   const gemessen = berlin("2026-11-10T09:00:01.000Z");
   assert.equal(gemessen, "10.11.2026 10:00:01 (Europe/Berlin)");
   const hof = sichtbar(karte(html, "hof-nacht"));
@@ -1076,7 +1093,7 @@ test("AN-P1 Abnahme: je Bild Art, Maße, Exposé-Seite, Personen, Herkunft und H
     "Als Anker ja",
     "Herkunft Visualisierung aus dem Objekt-Exposé",
     `Hash-Status unverändert · 4ea1631f9799b83c… · gemessen ${gemessen}`,
-    "Vorlage der Probe vom 05.11.2026",
+    "Vorlage der Probe vom 05.11.2026 (dieselbe Datei, SHA-256 gleich). Soll: urls.cover im Steinadel-Export zeigt auf diese Datei; den Ist-Stand zeigt die Cover-Zeile.",
   ]) {
     assert.ok(hof.includes(teil), `${teil}\n${hof}`);
   }
@@ -1098,8 +1115,8 @@ test("AN-P1 Abnahme: je Bild Art, Maße, Exposé-Seite, Personen, Herkunft und H
     // Volle Hashes im title.
     assert.ok(ent(k).includes(`SHA-256 laut Manifest: ${e.sha256}`), e.id);
   }
-  assert.ok(t.includes(`Export-Cover (urls.cover): unverändert · zeigt auf ${COVER_URL} · Soll: hero-hof-nacht.jpg (Anker hof-nacht) · geprüft ${berlin("2026-11-10T09:00:02.000Z")}`), t.slice(0, 1200));
-  assert.match(html, /<button type="button" class="[^"]*" data-alle-pruefen="true">Alle prüfen<\/button>/, "Knopf aktiv");
+  assert.ok(t.includes(`Export-Cover (urls.cover): unverändert · zeigt auf ${COVER_URL} · Soll: ${COVER_URL} (Anker hof-nacht) · geprüft ${berlin("2026-11-10T09:00:02.000Z")}`), t.slice(0, 1200));
+  assert.match(html, /<button type="button" aria-disabled="false" class="[^"]*" data-alle-pruefen="true">Alle prüfen<\/button>/, "Knopf aktiv");
   assert.equal((html.match(/<button/g) ?? []).length, 1);
 });
 
@@ -1109,8 +1126,11 @@ test("AN-P2 Während der Prüfung: 'wird geprüft …', Knopf gesperrt, kein Sta
   assert.equal((html.match(/data-hash="laedt"/g) ?? []).length, 11);
   assert.equal((html.match(/data-hash-status="laedt"/g) ?? []).length, 11);
   assert.ok(t.includes("Prüfung läuft …"));
-  assert.ok(t.includes("Export-Cover (urls.cover): wird geprüft … · Soll: hero-hof-nacht.jpg (Anker hof-nacht)"));
-  assert.match(html, /<button type="button"[^>]*disabled=""[^>]*>Alle prüfen<\/button>/);
+  assert.ok(t.includes(`Export-Cover (urls.cover): wird geprüft … · Soll: ${COVER_URL} (Anker hof-nacht)`));
+  // Gegenprüfung PR #8: aria-disabled statt disabled (der Fokus bleibt), aria-busy an der Sektion.
+  assert.match(html, /<button type="button"[^>]*aria-disabled="true"[^>]*>Alle prüfen<\/button>/);
+  assert.doesNotMatch(html, /\sdisabled=""/);
+  assert.match(html, /^<section [^>]*aria-busy="true"/);
   for (const s of ["unverändert", "geändert", "nicht erreichbar", "gemessen 10.11.2026 10"]) assert.ok(!t.includes(s), s);
   assert.ok(t.includes(`Manifest-Werte gemessen ${berlin(MANIFEST.gemessen_am)} an den ausgelieferten Dateien`));
 });
@@ -1122,7 +1142,8 @@ test("AN-P3 Prüfung nicht lesbar: Grund sichtbar, Karten 'nicht geprüft', Knop
   assert.match(html, /role="alert"/);
   assert.equal((html.match(/data-hash="nicht_geprueft"/g) ?? []).length, 11);
   assert.ok(t.includes("Export-Cover (urls.cover): nicht geprüft"));
-  assert.doesNotMatch(html, /disabled=""/);
+  assert.match(html, /<button type="button"[^>]*aria-disabled="false"[^>]*>Alle prüfen<\/button>/);
+  assert.match(html, /^<section [^>]*aria-busy="false"/);
 });
 
 test("AN-P4 Gemischte Ergebnisse: geändert mit Live-Hash, nicht erreichbar mit Soll und Grund, fehlendes und unbekanntes Ergebnis", () => {
@@ -1160,13 +1181,15 @@ test("AN-P4 Gemischte Ergebnisse: geändert mit Live-Hash, nicht erreichbar mit 
 });
 
 test("AN-P5 Cover-Zeile: geändert und nicht lesbar mit Grund; unbekannter Status bernsteinfarben", () => {
-  const g = sichtbar(panelHtml({ art: "daten", antwort: antwortFuer("unveraendert", {}, { status: "geaendert", ist: "https://steinadel.de/objekte/rittergut/ki.jpg", hinweis: "urls.cover zeigt nicht mehr auf hero-hof-nacht.jpg" }) }));
-  assert.ok(g.includes("Export-Cover (urls.cover): geändert · zeigt auf https://steinadel.de/objekte/rittergut/ki.jpg · Soll: hero-hof-nacht.jpg (Anker hof-nacht)"), g.slice(0, 1200));
-  assert.ok(g.includes("urls.cover zeigt nicht mehr auf hero-hof-nacht.jpg"));
+  const grund = `urls.cover weicht vom Soll ab (anderer Pfad); Soll: ${COVER_URL}`;
+  const g = sichtbar(panelHtml({ art: "daten", antwort: antwortFuer("unveraendert", {}, { status: "geaendert", ist: "https://steinadel.de/objekte/rittergut/ki.jpg", hinweis: grund }) }));
+  assert.ok(g.includes(`Export-Cover (urls.cover): geändert · zeigt auf https://steinadel.de/objekte/rittergut/ki.jpg · Soll: ${COVER_URL} (Anker hof-nacht)`), g.slice(0, 1200));
+  assert.ok(g.includes(grund));
   const n = sichtbar(panelHtml({ art: "daten", antwort: antwortFuer("unveraendert", {}, { status: "nicht_lesbar", ist: null, hinweis: "Steinadel-Export nicht erreichbar", fehler_art: "nicht_erreichbar" }) }));
-  assert.ok(n.includes("Export-Cover (urls.cover): nicht lesbar · Soll: hero-hof-nacht.jpg (Anker hof-nacht) · geprüft"), n.slice(0, 1200));
+  assert.ok(n.includes(`Export-Cover (urls.cover): nicht lesbar · Soll: ${COVER_URL} (Anker hof-nacht) · geprüft`), n.slice(0, 1200));
   assert.ok(n.includes("Steinadel-Export nicht erreichbar"));
-  assert.ok(!n.includes("zeigt auf"));
+  const coverZeile = (html) => sichtbar(/<p[^>]*data-export-cover=[^>]*>.*?<\/p>/s.exec(html)?.[0] ?? "");
+  assert.ok(!coverZeile(panelHtml({ art: "daten", antwort: antwortFuer("unveraendert", {}, { status: "nicht_lesbar", ist: null, hinweis: "x" }) })).includes("zeigt auf"));
   const u = panelHtml({ art: "daten", antwort: antwortFuer("unveraendert", {}, { status: "seltsam" }) });
   assert.ok(sichtbar(u).includes("Export-Cover (urls.cover): unbekannter Status"));
   assert.match(u, /data-export-cover="unbekannt"/);
@@ -1204,6 +1227,9 @@ test("AN-P6b Abweichender Manifest-Stand (alter Tab nach Deploy): fremde Ergebni
   assert.doesNotMatch(ent(html2), ENTHAELT_NAMEN, "ein Hash-Feld mit Text erscheint nie roh");
   assert.ok(!ent(html2).includes("kein-hex-"));
   assert.ok(sichtbar(karte(html2, "gutshaus")).includes(`Hash-Status unverändert · ${MANIFEST.eintraege[4].sha256.slice(0, 16)}…`));
+  // Gegenprüfung PR #8 (Befund 4): Auch die Karte ist dann nicht grün.
+  assert.match(karte(html2, "gutshaus"), /<span class="font-semibold" style="color:var\(--gp-amber\)" data-hash-farbe="abweichend">unverändert<\/span>/);
+  assert.match(karte(html2, "jagdhaus"), /<span class="font-semibold" style="color:var\(--gp-emerald\)" data-hash-farbe="unveraendert">unverändert<\/span>/);
   // Nur die Cover-Adresse anders.
   assert.equal(PANEL.standAbweichung(MANIFEST, antwortFuer("unveraendert", {}, { soll: "https://steinadel.de/objekte/x.jpg" })), "anderer Cover-Anker");
   // Nur die id des Cover-Ankers anders (Adresse gleich).
@@ -1234,10 +1260,11 @@ test("AN-P7 leseAnkerAntwort: nur lesbare Prüfergebnisse sind Daten; Fehlertext
   assert.doesNotMatch(masken.text, ENTHAELT_NAMEN);
 });
 
-test("AN-P8 Panel prüft einmal beim Aufbau und je Klick 'Alle prüfen'; späte Antworten alter Läufe zählen nicht; Abbau bricht ab", async () => {
+test("AN-P8 Panel: Aufbau per GET, „Alle prüfen“ per POST mit JSON; Klicks während einer Prüfung zählen nicht; Abbau bricht ab", async () => {
   const abrufe = [];
   const vorher = globalThis.fetch;
   globalThis.fetch = (url, init) => new Promise((fertig) => abrufe.push({ url, init, fertig }));
+  const knopf = (baum) => finde(baum, (k) => k.type === "button")[0];
   try {
     const lz = hookLaufzeit();
     const P = ladeAnkerPanel(lz.attrappen, { anker, types, hilfen: HILFEN });
@@ -1245,51 +1272,53 @@ test("AN-P8 Panel prüft einmal beim Aufbau und je Klick 'Alle prüfen'; späte 
     let baum = lz.rendere();
     await lz.ruhe();
     assert.equal(abrufe.length, 1, "ein Abruf beim Aufbau");
-    assert.equal(abrufe[0].url, "/api/studio/rittergut-seifersdorf/anker");
-    assert.equal(abrufe[0].init.cache, "no-store");
+    assert.deepEqual([abrufe[0].url, abrufe[0].init.method, abrufe[0].init.cache], ["/api/studio/rittergut-seifersdorf/anker", undefined, "no-store"]);
     let html = alsMarkup(baum);
-    assert.match(html, /disabled=""[^>]*>Alle prüfen/, "gesperrt, solange geprüft wird");
+    assert.match(html, /aria-disabled="true"[^>]*>Alle prüfen/, "gesperrt, solange geprüft wird");
+    // Klick während der ersten Prüfung: ignoriert (aria-disabled statt disabled, der Fokus bleibt).
+    knopf(baum).props.onClick();
+    baum = await lz.ruhe();
+    assert.equal(abrufe.length, 1, "kein zweiter Abruf");
     abrufe[0].fertig({ status: 200, json: async () => antwortFuer() });
     baum = await lz.ruhe();
     html = alsMarkup(baum);
     assert.ok(sichtbar(html).includes("Hash-Status: 11 unverändert"), sichtbar(html).slice(0, 600));
-    assert.doesNotMatch(html, /disabled=""/);
-    // Klick: neuer Lauf, "wird geprüft" bis zur neuen Antwort.
-    finde(baum, (k) => k.type === "button")[0].props.onClick();
+    assert.match(html, /aria-disabled="false"[^>]*>Alle prüfen/);
+    // Klick: POST mit JSON-Kopf (Herkunftsprüfung der Route), "wird geprüft" bis zur neuen Antwort.
+    knopf(baum).props.onClick();
     baum = await lz.ruhe();
     assert.equal(abrufe.length, 2);
-    assert.equal(abrufe[1].url, "/api/studio/rittergut-seifersdorf/anker");
-    html = alsMarkup(baum);
-    assert.equal((html.match(/data-hash="laedt"/g) ?? []).length, 11);
-    // Noch ein Klick, bevor Lauf 2 antwortet: Lauf 2 wird abgebrochen, seine späte Antwort zählt nicht.
-    finde(baum, (k) => k.type === "button")[0].props.onClick();
+    const post = abrufe[1].init;
+    assert.deepEqual(
+      [abrufe[1].url, post.method, new Headers(post.headers).get("content-type"), post.body, post.cache],
+      ["/api/studio/rittergut-seifersdorf/anker", "POST", "application/json", "{}", "no-store"],
+    );
+    assert.equal((alsMarkup(baum).match(/data-hash="laedt"/g) ?? []).length, 11);
+    knopf(baum).props.onClick();
     baum = await lz.ruhe();
-    assert.equal(abrufe.length, 3);
-    assert.equal(abrufe[1].init.signal.aborted, true);
-    abrufe[1].fertig({ status: 200, json: async () => antwortFuer("geaendert") });
-    baum = await lz.ruhe();
-    assert.equal((alsMarkup(baum).match(/data-hash="laedt"/g) ?? []).length, 11, "späte Antwort von Lauf 2 verworfen");
-    abrufe[2].fertig({ status: 500, json: async () => ({ fehler: "Boom" }) });
+    assert.equal(abrufe.length, 2, "Klick während der Prüfung ignoriert");
+    abrufe[1].fertig({ status: 500, json: async () => ({ fehler: "Boom" }) });
     baum = await lz.ruhe();
     assert.ok(sichtbar(alsMarkup(baum)).includes("Hash-Prüfung nicht lesbar: Boom (HTTP 500)"));
     // Netzfehler und JSON ohne Inhalt.
-    finde(baum, (k) => k.type === "button")[0].props.onClick();
+    knopf(baum).props.onClick();
     await lz.ruhe();
-    abrufe[3].fertig(Promise.reject(new TypeError(`Failed to fetch ${NAME}`)));
+    abrufe[2].fertig(Promise.reject(new TypeError(`Failed to fetch ${NAME}`)));
     baum = await lz.ruhe();
     assert.ok(sichtbar(alsMarkup(baum)).includes(`Hash-Prüfung nicht lesbar: Netzfehler: Failed to fetch ${regeln.NAMENS_ERSATZ}`));
-    finde(baum, (k) => k.type === "button")[0].props.onClick();
+    knopf(baum).props.onClick();
     await lz.ruhe();
-    abrufe[4].fertig({ status: 200, json: async () => { throw new SyntaxError("kein JSON"); } });
+    abrufe[3].fertig({ status: 200, json: async () => { throw new SyntaxError("kein JSON"); } });
     baum = await lz.ruhe();
     assert.ok(sichtbar(alsMarkup(baum)).includes("Hash-Prüfung nicht lesbar: Antwort ohne lesbares Prüfergebnis"));
     // Abbau: laufende Abfrage abgebrochen.
-    finde(baum, (k) => k.type === "button")[0].props.onClick();
+    knopf(baum).props.onClick();
     await lz.ruhe();
-    assert.equal(abrufe.length, 6);
+    assert.equal(abrufe.length, 5);
     lz.abbauen();
-    assert.equal(abrufe[5].init.signal.aborted, true);
+    assert.equal(abrufe[4].init.signal.aborted, true);
     assert.ok(abrufe.every((a) => a.url === "/api/studio/rittergut-seifersdorf/anker"));
+    assert.ok(abrufe.slice(1).every((a) => a.init.method === "POST"), "nur der Aufbau liest per GET");
   } finally {
     globalThis.fetch = vorher;
   }
@@ -1403,7 +1432,7 @@ test("AN-P10 Panel responsiv (Klassen): Karten einspaltig bis lg, Felder nach Ka
   assert.ok(html.includes("3000\u00a0×\u00a02018\u00a0px · 667.131\u00a0B"));
   assert.doesNotMatch(html, /(?:^|[\s"])(?:min-)?w-\[\d+px\]/);
   // Tippfläche mindestens 44 px hoch.
-  assert.match(html, /<button type="button" class="shrink-0 min-h-11 /);
+  assert.match(html, /<button type="button" aria-disabled="false" class="shrink-0 min-h-11 /);
   // Art-Abzeichen ohne CSS-Großschreibung: Der Seitentext (innerText) trägt den Wortlaut der Abnahme.
   const abzeichen = [...html.matchAll(/<span class="([^"]*)"[^>]*data-anker-art="true">([^<]*)<\/span>/g)];
   assert.equal(abzeichen.length, 11);
@@ -1414,4 +1443,195 @@ test("AN-P10 Panel responsiv (Klassen): Karten einspaltig bis lg, Felder nach Ka
   assert.ok(!t.includes("Bauträger"));
   assert.deepEqual(t.match(/Fotos?/g), ["Fotos"]);
   assert.ok(t.includes("keine Fotos"));
+});
+
+// ═══ Z: Zwischenspeicher (Gegenprüfung PR #8, 10.11.2026) ═══
+// Uhr per mock.timers (nur Date); Abrufe und Zeitlimits laufen mit der echten Uhr.
+
+const T0 = Date.parse("2026-11-10T09:00:00.000Z");
+
+test("AN-Z1 Zwischenspeicher: Anzeigen liefert das Ergebnis bis 15 min, danach prüft es neu; Alter und Grenzen stehen dabei", async () => {
+  mock.timers.enable({ apis: ["Date"], now: T0 });
+  try {
+    assert.deepEqual([speicher.ANKER_GUELTIG_MS, speicher.ANKER_PAUSE_MS], [15 * 60_000, 60_000]);
+    let n = 0;
+    const pruefen = async () => ({ ...antwortFuer(), erzeugt_am: new Date().toISOString(), lauf: ++n });
+    const a = await speicher.ankerErgebnis(SLUG, "anzeigen", pruefen);
+    assert.equal(n, 1, "ohne Ergebnis prüft der erste Aufbau");
+    assert.deepEqual(a.stand, { frisch: true, gedrosselt: false, alter_s: 0, gueltig_bis: "2026-11-10T09:15:00.000Z", naechste_frische_ab: "2026-11-10T09:01:00.000Z" });
+    mock.timers.tick(7 * 60_000 + 30_000);
+    const b = await speicher.ankerErgebnis(SLUG, "anzeigen", pruefen);
+    assert.deepEqual([n, b.lauf, b.stand.frisch, b.stand.gedrosselt, b.stand.alter_s], [1, 1, false, false, 450]);
+    assert.equal(b.erzeugt_am, a.erzeugt_am, "dasselbe Ergebnis mit seinem Zeitpunkt");
+    mock.timers.tick(7 * 60_000 + 29_999);
+    assert.equal((await speicher.ankerErgebnis(SLUG, "anzeigen", pruefen)).stand.frisch, false, "14:59,999 nach dem Ende noch gültig");
+    mock.timers.tick(1);
+    const c = await speicher.ankerErgebnis(SLUG, "anzeigen", pruefen);
+    assert.deepEqual([n, c.lauf, c.stand.frisch, c.stand.alter_s], [2, 2, true, 0], "nach 15 min neu geprüft");
+  } finally {
+    mock.timers.reset();
+  }
+});
+
+test("AN-Z2 Zwischenspeicher: „Alle prüfen“ prüft frisch, frühestens 60 s nach dem Ende der letzten Prüfung; davor gedrosselt", async () => {
+  mock.timers.enable({ apis: ["Date"], now: T0 });
+  try {
+    let n = 0;
+    const pruefen = async () => ({ ...antwortFuer(), lauf: ++n });
+    const a = await speicher.ankerErgebnis(SLUG, "frisch", pruefen);
+    assert.deepEqual([n, a.stand.frisch, a.stand.gedrosselt], [1, true, false], "ohne Ergebnis sofort");
+    mock.timers.tick(59_999);
+    const b = await speicher.ankerErgebnis(SLUG, "frisch", pruefen);
+    assert.deepEqual([n, b.lauf, b.stand.frisch, b.stand.gedrosselt, b.stand.alter_s, b.stand.naechste_frische_ab], [1, 1, false, true, 59, "2026-11-10T09:01:00.000Z"]);
+    mock.timers.tick(1);
+    const c = await speicher.ankerErgebnis(SLUG, "frisch", pruefen);
+    assert.deepEqual([n, c.lauf, c.stand.frisch, c.stand.gedrosselt], [2, 2, true, false], "genau 60 s danach wieder frisch");
+    // Die Pause zählt ab dem Ende der letzten Prüfung, auch einer aus dem Seitenaufbau.
+    const d = await speicher.ankerErgebnis(SLUG, "anzeigen", pruefen);
+    assert.deepEqual([n, d.lauf, d.stand.frisch], [2, 2, false]);
+    assert.equal((await speicher.ankerErgebnis(SLUG, "frisch", pruefen)).stand.gedrosselt, true);
+  } finally {
+    mock.timers.reset();
+  }
+});
+
+test("AN-Z3 Zwischenspeicher: Anfragen schließen sich einer laufenden Prüfung an; eine gescheiterte Prüfung wird nicht gespeichert", async () => {
+  let n = 0;
+  let freigeben;
+  const langsam = () => {
+    n += 1;
+    return new Promise((fertig) => {
+      freigeben = fertig;
+    });
+  };
+  const p1 = speicher.ankerErgebnis(SLUG, "anzeigen", langsam);
+  const p2 = speicher.ankerErgebnis(SLUG, "frisch", langsam);
+  const p3 = speicher.ankerErgebnis(SLUG, "anzeigen", langsam);
+  await new Promise((fertig) => setImmediate(fertig));
+  assert.equal(n, 1, "eine Prüfung für alle drei");
+  freigeben({ ...antwortFuer(), lauf: 1 });
+  const ergebnisse = await Promise.all([p1, p2, p3]);
+  assert.deepEqual(ergebnisse.map((e) => [e.lauf, e.stand.frisch, e.stand.gedrosselt]), [[1, true, false], [1, true, false], [1, true, false]]);
+  // Scheitern ohne gespeichertes Ergebnis: Fehler weiter, die nächste Anfrage prüft neu.
+  speicher.setzeAnkerSpeicherZurueck();
+  await assert.rejects(speicher.ankerErgebnis(SLUG, "anzeigen", async () => { throw new Error("kaputt"); }), /kaputt/);
+  let m = 0;
+  const c = await speicher.ankerErgebnis(SLUG, "anzeigen", async () => ({ ...antwortFuer(), lauf: ++m }));
+  assert.deepEqual([m, c.lauf, c.stand.frisch], [1, 1, true]);
+  // Scheitern mit gespeichertem Ergebnis: der alte Stand bleibt.
+  mock.timers.enable({ apis: ["Date"], now: Date.now() });
+  try {
+    mock.timers.tick(61_000);
+    await assert.rejects(speicher.ankerErgebnis(SLUG, "frisch", async () => { throw new Error("wieder kaputt"); }), /wieder kaputt/);
+    const d = await speicher.ankerErgebnis(SLUG, "anzeigen", async () => ({ ...antwortFuer(), lauf: 99 }));
+    assert.deepEqual([d.lauf, d.stand.frisch, d.stand.alter_s], [1, false, 61]);
+  } finally {
+    mock.timers.reset();
+  }
+});
+
+test("AN-Z4 Zwischenspeicher: Läuft eine frische Prüfung, wartet auch die Anzeige auf sie; eine zurückgestellte Uhr ergibt kein negatives Alter", async () => {
+  mock.timers.enable({ apis: ["Date"], now: T0 });
+  try {
+    await speicher.ankerErgebnis(SLUG, "anzeigen", async () => ({ ...antwortFuer(), lauf: 1 }));
+    mock.timers.tick(5 * 60_000);
+    let freigeben;
+    const frisch = speicher.ankerErgebnis(SLUG, "frisch", () => new Promise((fertig) => { freigeben = fertig; }));
+    const anzeige = speicher.ankerErgebnis(SLUG, "anzeigen", async () => ({ ...antwortFuer(), lauf: 99 }));
+    await new Promise((fertig) => setImmediate(fertig));
+    freigeben({ ...antwortFuer(), lauf: 2 });
+    const [a, b] = await Promise.all([frisch, anzeige]);
+    assert.deepEqual([a.lauf, a.stand.frisch, b.lauf, b.stand.frisch], [2, true, 2, true], "die Anzeige bekommt das frische Ergebnis");
+    // Uhr 5 s zurück (etwa eine Zeitkorrektur): Alter 0, nie negativ.
+    mock.timers.setTime(Date.now() - 5_000);
+    assert.equal((await speicher.ankerErgebnis(SLUG, "anzeigen", async () => ({ ...antwortFuer(), lauf: 3 }))).stand.alter_s, 0);
+  } finally {
+    mock.timers.reset();
+  }
+});
+
+test("AN-R12 GET: ohne Ergebnis prüft der erste Aufbau; danach Zwischenspeicher bis 15 min (kein Abruf), dann neue Prüfung", async () => {
+  welt.objekteAntwort = exportMit();
+  mock.timers.enable({ apis: ["Date"], now: T0 });
+  try {
+    const a = await holeAnker();
+    assert.deepEqual([a.status, a.body.stand.frisch, steinadel.abrufe.length, welt.objektAbrufe], [200, true, 11, 1]);
+    mock.timers.tick(14 * 60_000);
+    const b = await holeAnker();
+    assert.deepEqual([b.status, b.body.stand.frisch, b.body.stand.alter_s, steinadel.abrufe.length, welt.objektAbrufe], [200, false, 840, 11, 1]);
+    assert.equal(b.body.erzeugt_am, a.body.erzeugt_am);
+    mock.timers.tick(60_000);
+    const c = await holeAnker();
+    assert.deepEqual([c.body.stand.frisch, steinadel.abrufe.length, welt.objektAbrufe], [true, 22, 2]);
+  } finally {
+    mock.timers.reset();
+  }
+});
+
+test("AN-R11 POST („Alle prüfen“): nur von dieser Seite und mit JSON; frische Prüfung, danach Mindestpause 60 s; GET danach aus dem Speicher", async () => {
+  welt.objekteAntwort = exportMit();
+  const post = async (kopf = {}) => {
+    const req = new NextRequest(`http://harness.local/api/studio/${SLUG}/anker`, {
+      method: "POST",
+      headers: { cookie: "gp-auth=test", "content-type": "application/json", ...kopf },
+      body: "{}",
+    });
+    const res = await ankerRoute.POST(req, { params: Promise.resolve({ objekt: SLUG }) });
+    return { status: res.status, body: await res.json(), kopf: res.headers };
+  };
+  // Herkunft wie bei den übrigen POST-Routen: fremde Seite 403 (auch "none"), ohne JSON 415 — ohne jeden Abruf.
+  for (const [kopf, status] of [
+    [{ "sec-fetch-site": "cross-site" }, 403],
+    [{ "sec-fetch-site": "same-site" }, 403],
+    [{ "sec-fetch-site": "none" }, 403],
+    [{ "content-type": "text/plain" }, 415],
+    [{ "content-type": "application/x-www-form-urlencoded" }, 415],
+  ]) {
+    const r = await post(kopf);
+    assert.equal(r.status, status, JSON.stringify(kopf));
+    assert.equal(r.body.fehler_art, "herkunft");
+    assert.equal(r.kopf.get("cache-control"), "no-store");
+  }
+  assert.equal(steinadel.abrufe.length + welt.objektAbrufe, 0, "kein Abruf");
+  const falsch = await ankerRoute.POST(new NextRequest(`http://harness.local/api/studio/villa-x/anker`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" }), { params: Promise.resolve({ objekt: "villa-x" }) });
+  assert.equal(falsch.status, 404);
+  mock.timers.enable({ apis: ["Date"], now: T0 });
+  try {
+    const a = await post({ "sec-fetch-site": "same-origin" });
+    assert.deepEqual([a.status, a.body.stand.frisch, a.body.stand.gedrosselt, steinadel.abrufe.length], [200, true, false, 11]);
+    mock.timers.tick(30_000);
+    const b = await post();
+    assert.deepEqual([b.status, b.body.stand.frisch, b.body.stand.gedrosselt, b.body.stand.alter_s, steinadel.abrufe.length], [200, false, true, 30, 11]);
+    const g = await holeAnker();
+    assert.deepEqual([g.body.stand.frisch, g.body.stand.gedrosselt, steinadel.abrufe.length], [false, false, 11]);
+    mock.timers.tick(30_000);
+    const c = await post();
+    assert.deepEqual([c.body.stand.frisch, c.body.stand.gedrosselt, steinadel.abrufe.length, welt.objektAbrufe], [true, false, 22, 2]);
+  } finally {
+    mock.timers.reset();
+  }
+});
+
+test("AN-P11 Stand im Panel: frisch, aus dem Zwischenspeicher mit Alter, gedrosselt mit Hinweis; ohne lesbaren Stand nur der Zeitpunkt", () => {
+  const zeit = berlin("2026-11-10T09:00:05.000Z");
+  const mitStand = (stand) => ({ ...antwortFuer(), stand });
+  const gespeichert = { frisch: false, gedrosselt: false, alter_s: 450, gueltig_bis: "2026-11-10T09:15:05.000Z", naechste_frische_ab: "2026-11-10T09:01:05.000Z" };
+  const html1 = panelHtml({ art: "daten", antwort: mitStand(gespeichert) });
+  assert.ok(sichtbar(html1).includes(`Hash-Status: 11 unverändert · geprüft ${zeit}, vor 7 min · aus dem Zwischenspeicher, gültig bis ${berlin("2026-11-10T09:15:05.000Z")}`), sichtbar(html1).slice(0, 900));
+  assert.match(html1, /data-frisch="false"/);
+  assert.doesNotMatch(html1, /data-anker-pause/);
+  const html2 = panelHtml({ art: "daten", antwort: mitStand({ ...gespeichert, gedrosselt: true, alter_s: 59 }) });
+  const t2 = sichtbar(html2);
+  assert.ok(t2.includes(`geprüft ${zeit}, vor weniger als 1 min`), t2.slice(0, 900));
+  assert.ok(t2.includes(`Mindestpause: Frisch geprüft wird wieder ab ${berlin("2026-11-10T09:01:05.000Z")}; angezeigt ist das letzte Ergebnis.`), t2.slice(0, 1200));
+  assert.ok(sichtbar(panelHtml({ art: "daten", antwort: mitStand({ ...gespeichert, alter_s: 60 }) })).includes(`geprüft ${zeit}, vor 1 min ·`));
+  const html3 = panelHtml({ art: "daten", antwort: mitStand(undefined) });
+  assert.ok(sichtbar(html3).includes(`Hash-Status: 11 unverändert · geprüft ${zeit}`));
+  assert.match(html3, /data-frisch="unbekannt"/);
+  assert.match(panelHtml({ art: "daten", antwort: antwortFuer() }), /data-frisch="true"/);
+  // leseStand: nur vollständige Stände.
+  assert.deepEqual(PANEL.leseStand(gespeichert), gespeichert);
+  for (const kaputt of [null, "x", {}, { ...gespeichert, frisch: "ja" }, { ...gespeichert, gedrosselt: 1 }, { ...gespeichert, alter_s: -1 }, { ...gespeichert, alter_s: Number.NaN }, { ...gespeichert, alter_s: "5" }, { ...gespeichert, gueltig_bis: 5 }, { ...gespeichert, naechste_frische_ab: null }]) {
+    assert.equal(PANEL.leseStand(kaputt), null, JSON.stringify(kaputt));
+  }
 });
