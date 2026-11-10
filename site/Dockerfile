@@ -24,10 +24,12 @@ RUN addgroup --system --gid 1001 nodejs && \
 COPY --from=builder /app/public ./public
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
-# Rauchtest (Objekt-Studio Schritt 7): Der Startbild-Abgleich braucht sharp im Laufzeit-Image (musl-Binary aus
-# dem Lock). Lädt es hier nicht, scheitert der Build sichtbar — nicht erst die erste Anfrage. Beide Wege (require
-# und import), die Versionen stehen im Build-Log.
-RUN node -e "require('sharp'); import('sharp').then((m) => console.log('sharp', m.default.versions.sharp, 'libvips', m.default.versions.vips))"
+# Rauchtest (Objekt-Studio Schritt 7, berichtigt in der Nachbesserung infra-1): Der Startbild-Abgleich braucht sharp
+# mit dem nativen musl-Binary aus dem Lock (@img/sharp-linuxmusl-*). sharp 0.35 lädt ein fehlendes oder nicht
+# ladbares natives Binary NICHT mit einem Fehler, sondern weicht ohne Warnung auf WebAssembly (@img/sharp-wasm32)
+# aus — dann trägt sharp.versions den Eintrag „emscripten“. Der Test verlangt deshalb das native Binary, auf beiden
+# Wegen (require und import), und lässt den Build sonst scheitern. Versionen und „nativ“ stehen im Build-Log.
+RUN node -e "const n = (v, weg) => { if ('emscripten' in v) throw new Error('sharp (' + weg + ') laeuft als WebAssembly, nicht nativ'); }; n(require('sharp').versions, 'require'); import('sharp').then((m) => { n(m.default.versions, 'import'); console.log('sharp', m.default.versions.sharp, 'libvips', m.default.versions.vips, 'nativ'); })"
 USER nextjs
 EXPOSE 3000
 ENV PORT=3000

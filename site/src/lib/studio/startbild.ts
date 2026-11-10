@@ -6,7 +6,8 @@
 // - Toleranz 2 Tonwerte (Setzung, vor dem ersten neuen Lauf festzuschreiben): Verschiedene
 //   JPEG-Decoder liefern nicht garantiert dieselben Pixel. Ein mit sharp aus dem Anker erzeugter PNG-Ausschnitt
 //   ergibt lokal 0 (sharp 0.35.5, libvips 8.18.7, darwin-arm64, synthetische Bilder); im Container misst es
-//   POST …/medien/abgleich, die Antwort nennt die Versionen von sharp und libvips. Liegt der Messwert dort
+//   POST …/medien/abgleich, die Antwort nennt die Versionen von sharp und libvips und ob sharp nativ läuft
+//   (versionen.nativ; sonst WebAssembly). Liegt der Messwert dort
 //   über 2, wird die Toleranz nicht erhöht (vorab festgelegt), sondern der Zuschnitt auf den Server verlegt.
 // - Ein nicht bestandener Abgleich weist das Einspielen nicht ab: Er wird mit Messwert gespeichert, und die
 //   Medien-Regel sperrt (Bedingung 8).
@@ -27,9 +28,21 @@ export const MAX_PIXEL = 40_000_000;
 
 type SharpFabrik = SharpConstructor;
 
+/**
+ * Versionen für Antwort und Abnahme. nativ = false heißt: sharp ist auf WebAssembly (@img/sharp-wasm32)
+ * ausgewichen — sharp 0.35 tut das ohne Warnung, wenn das native Binary fehlt oder nicht lädt (Nachbesserung
+ * infra-1). Erkennbar daran, dass sharp.versions dann den Eintrag „emscripten“ trägt.
+ */
+export type SharpVersionen = { sharp: string; vips: string; nativ: boolean };
+
 export interface SharpModul {
   sharp: SharpFabrik;
-  versionen: { sharp: string; vips: string };
+  versionen: SharpVersionen;
+}
+
+/** true, wenn sharp das native Binary geladen hat (kein „emscripten“ in sharp.versions). */
+export function sharpNativ(versions: object): boolean {
+  return !("emscripten" in versions);
 }
 
 let modul: Promise<SharpModul> | null = null;
@@ -42,7 +55,7 @@ export function ladeSharp(): Promise<SharpModul> {
         const sharp: SharpFabrik = m.default;
         sharp.cache(false);
         sharp.concurrency(1);
-        return { sharp, versionen: { sharp: sharp.versions.sharp, vips: sharp.versions.vips } };
+        return { sharp, versionen: { sharp: sharp.versions.sharp, vips: sharp.versions.vips, nativ: sharpNativ(sharp.versions) } };
       })
       .catch((e: unknown) => {
         modul = null;

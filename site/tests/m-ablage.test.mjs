@@ -710,6 +710,7 @@ test("M-G1 abgleich: legt keine Zeile an, löscht das Bild danach und nennt Abgl
   assert.equal(r.body.abgleich.abweichung_max, 0);
   assert.match(r.body.abgleich.versionen.sharp, /^\d+\.\d+/);
   assert.match(r.body.abgleich.versionen.vips, /^\d+\.\d+/);
+  assert.equal(r.body.abgleich.versionen.nativ, true, "nativ (Nachbesserung infra-1)");
   assert.ok(r.body.speicher.rss_vorher_b > 0 && r.body.speicher.max_rss_kib > 0);
   assert.equal(r.body.datei.geloescht, true);
   assert.deepEqual(objektPfade(), [], "das Bild ist gelöscht");

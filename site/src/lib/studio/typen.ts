@@ -294,7 +294,8 @@ export interface AbgleichErgebnis {
   startbild: { breite: number; hoehe: number };
   ausschnitt: Ausschnitt;
   anker: { id: string; sha256: string; breite: number; hoehe: number };
-  versionen: { sharp: string; vips: string };
+  /** nativ: false, wenn sharp auf WebAssembly ausgewichen ist (siehe lib/studio/startbild.ts, sharpNativ). */
+  versionen: { sharp: string; vips: string; nativ: boolean };
 }
 
 // ── GET /api/studio/[objekt]/anker (Schritt 6, 10.11.2026) ──────────────────────────────────────

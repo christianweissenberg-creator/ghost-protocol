@@ -219,6 +219,12 @@ export function abgleichText(a: Pick<AbgleichErgebnis, "urteil" | "abweichung_ma
   return `${urteil} — größte Abweichung ${a.abweichung_max} (Toleranz ${a.toleranz})`;
 }
 
+/** Versionen des Abgleichs; „WebAssembly“, wenn sharp nicht nativ läuft (Nachbesserung infra-1). */
+export function versionenText(v: Partial<AbgleichErgebnis["versionen"]> | null | undefined): string {
+  const art = v?.nativ === true ? "nativ" : v?.nativ === false ? "WebAssembly, nicht nativ" : "Laufart unbekannt";
+  return `sharp ${v?.sharp ?? "?"}, libvips ${v?.vips ?? "?"} (${art})`;
+}
+
 function speicherText(s: SpeicherMessung | null): string | null {
   if (s === null) return null;
   return `Speicher des Servers: RSS ${bytesText(s.rss_vorher_b)} → ${bytesText(s.rss_nachher_b)} · Spitze des Prozesses (maxRSS) ${bytesText(s.max_rss_kib * 1024)}`;
@@ -558,8 +564,7 @@ function Einspielen({ slug, holen, eingespielt }: { slug: string; holen: Holen; 
               </span>
             </p>
             <p className="text-[10px] text-text-muted break-words">
-              vorschau_sha256 {kurzHash(stand.vorschau.vorschau_sha256)} · sharp {stand.vorschau.abgleich.versionen?.sharp ?? "?"}, libvips{" "}
-              {stand.vorschau.abgleich.versionen?.vips ?? "?"}
+              vorschau_sha256 {kurzHash(stand.vorschau.vorschau_sha256)} · {versionenText(stand.vorschau.abgleich.versionen)}
               {speicherText(stand.vorschau.speicher) ? ` · ${speicherText(stand.vorschau.speicher)}` : ""}
             </p>
             <Vorschautabelle v={stand.vorschau} />
@@ -670,7 +675,7 @@ function Abgleich({ slug, manifest, holen }: { slug: string; manifest: AnkerMani
             <p style={{ color: stand.abgleich.urteil === "bestanden" ? FARBE_GRUEN : FARBE_ROT }}>{abgleichText(stand.abgleich)}</p>
             <p className="text-[10px] text-text-muted">
               {stand.abgleich.mittel !== null ? `Mittel ${zahl(stand.abgleich.mittel)} · Anteil über der Toleranz ${zahl((stand.abgleich.anteil_ueber_toleranz ?? 0) * 100, 2)} % · ` : ""}
-              sharp {stand.abgleich.versionen.sharp}, libvips {stand.abgleich.versionen.vips}
+              {versionenText(stand.abgleich.versionen)}
               {speicherText(stand.speicher) ? ` · ${speicherText(stand.speicher)}` : ""}
             </p>
           </div>

@@ -55,6 +55,11 @@ test("M-S1 PNG-Ausschnitt aus dem Anker → größte Abweichung 0, bestanden; Ve
   assert.deepEqual(e.versionen, versionen);
   assert.match(e.versionen.sharp, /^\d+\.\d+\.\d+/);
   assert.match(e.versionen.vips, /^\d+\.\d+\.\d+/);
+  // Nachbesserung infra-1: nativ oder WebAssembly — hier (lokal) nativ; „emscripten“ in sharp.versions heißt WebAssembly.
+  assert.equal(e.versionen.nativ, true);
+  assert.equal(startbild.sharpNativ(sharp.versions), true);
+  assert.equal(startbild.sharpNativ({ vips: "8.18.7", emscripten: "6.0.10", sharp: "0.35.5" }), false);
+  assert.equal(startbild.sharpNativ({ vips: "8.18.7", sharp: "0.35.5" }), true);
 });
 
 test("M-S2 JPEG neu kodiert → über der Toleranz, nicht bestanden, mit Messwerten", async () => {
