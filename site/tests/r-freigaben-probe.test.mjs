@@ -77,12 +77,13 @@ beforeEach(async () => {
 // ═══ Hilfen ═══
 
 /** Abfragen, wie die Attrappe sie protokolliert (decodeURIComponent der Query); G steht für die Grenze. */
-const SPALTEN_VOLL = "id,title,platform,status,created_at,updated_at,body,review_notes,metadata->>objekt_slug,metadata->steps";
+// Seit Objekt-Studio Schritt 9 lesen volle Abfrage und Probe metadata->medium_id mit (Caption zu einem Video).
+const SPALTEN_VOLL = "id,title,platform,status,created_at,updated_at,body,review_notes,metadata->>objekt_slug,metadata->steps,metadata->medium_id";
 const FILTER_WARTEND = "status=eq.zur_freigabe&order=created_at.asc,id.asc&limit=100";
 const FILTER_HAENGEND = 'status=in.(entwurf,counsel_geprueft)&or=(updated_at.lt."G",and(updated_at.is.null,created_at.lt."G"))&order=created_at.asc,id.asc&limit=50';
 const ARTEN = new Map([
-  [`select=id,updated_at&${FILTER_WARTEND}`, "probe/wartend"],
-  [`select=id,updated_at&${FILTER_HAENGEND}`, "probe/haengend"],
+  [`select=id,updated_at,metadata->medium_id&${FILTER_WARTEND}`, "probe/wartend"],
+  [`select=id,updated_at,metadata->medium_id&${FILTER_HAENGEND}`, "probe/haengend"],
   [`select=${SPALTEN_VOLL}&${FILTER_WARTEND}`, "voll/wartend"],
   [`select=${SPALTEN_VOLL}&${FILTER_HAENGEND}`, "voll/haengend"],
 ]);
@@ -107,7 +108,7 @@ const PROBE = ["probe/haengend", "probe/wartend"];
 const VOLL = ["voll/haengend", "voll/wartend"];
 const PROBE_UND_VOLL = [...PROBE, ...VOLL];
 
-const istProbe = (url) => url.searchParams.get("select") === "id,updated_at";
+const istProbe = (url) => url.searchParams.get("select") === "id,updated_at,metadata->medium_id";
 const istVoll = (url) => url.searchParams.get("select") === SPALTEN_VOLL;
 const istWartend = (url) => url.searchParams.get("status") === "eq.zur_freigabe";
 const istHaengend = (url) => url.searchParams.has("or");
@@ -349,8 +350,8 @@ test("FS-P1 Form: Probe-Abfragen wie die vollen — Filter (Grenze je Anfrage ne
   }
   // Rohform der URL, wie supabase-js sie sendet. Die vollen Abfragen sind die an a62a4bd (vor der
   // Änderungsprobe) mit derselben Attrappe gemessenen, nur mit der Grenze dieser Anfrage.
-  const SEL_VOLL = "id%2Ctitle%2Cplatform%2Cstatus%2Ccreated_at%2Cupdated_at%2Cbody%2Creview_notes%2Cmetadata-%3E%3Eobjekt_slug%2Cmetadata-%3Esteps";
-  const SEL_PROBE = "id%2Cupdated_at";
+  const SEL_VOLL = "id%2Ctitle%2Cplatform%2Cstatus%2Ccreated_at%2Cupdated_at%2Cbody%2Creview_notes%2Cmetadata-%3E%3Eobjekt_slug%2Cmetadata-%3Esteps%2Cmetadata-%3Emedium_id";
+  const SEL_PROBE = "id%2Cupdated_at%2Cmetadata-%3Emedium_id";
   const wartendRoh = (sel) => `?select=${sel}&status=eq.zur_freigabe&order=created_at.asc%2Cid.asc&limit=100`;
   const haengendRoh = (sel, jetzt) => {
     const g = encodeURIComponent(iso(jetzt - 2 * STUNDE));
@@ -989,9 +990,9 @@ test("FS-P13 Leerer Stapel: Auch ein leerer Zwischenstand gilt — die nächste 
   assert.deepEqual([anfragen(), fuenfte.kopf.get("x-freigaben-abfrage")], [PROBE, "unveraendert"], "wieder leer, nichts geändert: nur die Probe");
 });
 
-test("FS-P14 Kennung und Zwischenstand (lib/freigaben-cache.ts): je Liste Zählung, Reihenfolge, ids und updated_at; andere Spalten nicht; unlesbare Zeilen oder Zählungen → keine Kennung; gültig ab vollAm bis unter 30 min", async () => {
+test("FS-P14 Kennung und Zwischenstand (lib/freigaben-cache.ts): je Liste Zählung, Reihenfolge, ids und updated_at; andere Spalten nicht; unlesbare Zeilen oder Zählungen → keine Kennung; gültig ab vollAm bis unter 30 min, mit dem Lesefehler eines Videos bis unter 90 s (Nachtrag d1-regression-2, d2-stapel-3)", async () => {
   const C = await zwischenstand();
-  assert.equal(C.FREIGABEN_PROBE_SPALTEN, "id,updated_at");
+  assert.equal(C.FREIGABEN_PROBE_SPALTEN, "id,updated_at,metadata->medium_id");
   assert.equal(C.FREIGABEN_ABFRAGE_HEADER, "x-freigaben-abfrage");
   const a = { id: 1, updated_at: "2026-11-09T08:00:00.000001+00:00", title: "A" };
   const b = { id: 2, updated_at: null, title: "B" };
@@ -1021,7 +1022,7 @@ test("FS-P14 Kennung und Zwischenstand (lib/freigaben-cache.ts): je Liste Zählu
   const h = L([], 0);
   C.merkeFreigaben(w, h, 1_000);
   const s = C.gueltigerFreigabenStand(1_000);
-  assert.deepEqual(s, { kennung: K(w, h), wartend: w, haengend: h, vollAm: 1_000 });
+  assert.deepEqual(s, { kennung: K(w, h), wartend: w, haengend: h, medien: { kennung: "", daten: null }, vollAm: 1_000, gueltigMs: C.FREIGABEN_VOLL_SPAETESTENS_MS });
   assert.equal(s.wartend, w, "die rohen Zeilen, nicht kopiert oder abgeleitet");
   assert.equal(C.gueltigerFreigabenStand(1_000 + C.FREIGABEN_VOLL_SPAETESTENS_MS - 1), s, "knapp unter 30 min");
   assert.equal(C.gueltigerFreigabenStand(1_000 + C.FREIGABEN_VOLL_SPAETESTENS_MS), null, "30 min");
@@ -1035,6 +1036,11 @@ test("FS-P14 Kennung und Zwischenstand (lib/freigaben-cache.ts): je Liste Zählu
   C.merkeFreigaben(w, h, 5_000);
   C.setzeFreigabenZurueck();
   assert.equal(C.gueltigerFreigabenStand(5_000), null, "zurückgesetzt");
+  // Mit dem Lesefehler eines Videos: Höchstalter 90 s statt 30 min (Nachtrag d2-stapel-3).
+  assert.equal(C.FREIGABEN_FEHLERSTAND_MS, 90_000);
+  C.merkeFreigaben(w, h, 6_000, { kennung: "", daten: null }, C.FREIGABEN_FEHLERSTAND_MS);
+  assert.equal(C.gueltigerFreigabenStand(6_000 + C.FREIGABEN_FEHLERSTAND_MS - 1).gueltigMs, C.FREIGABEN_FEHLERSTAND_MS, "knapp unter 90 s");
+  assert.equal(C.gueltigerFreigabenStand(6_000 + C.FREIGABEN_FEHLERSTAND_MS), null, "90 s");
 });
 
 // ═══ Mutationsprüfung (09.11.2026) ═══

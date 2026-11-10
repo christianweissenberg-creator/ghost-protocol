@@ -16,19 +16,72 @@ export const KETTE = "@/components/studio/BelegKette";
 export const KNOPF = "@/components/studio/FreigabeKnopf";
 
 export const ANKER_PANEL = "@/components/studio/AnkerPanel";
+export const MEDIEN_PANEL = "@/components/studio/MedienPanel";
+export const PRUEF_ANSICHT = "@/components/studio/PruefAnsicht";
+export const TEXT_ERZEUGEN = "@/components/studio/TextErzeugen";
 
 /**
  * Lädt beleg-hilfen.ts, BelegKette.tsx und FreigabeKnopf.tsx mit den Attrappen der Seite, seit Schritt 6
- * (10.11.2026) auch AnkerPanel.tsx — StudioAnsicht importiert es. lib/studio/anker.ts und lib/types.ts
- * haben keine Laufzeit-Importe und werden hier selbst geladen.
+ * (10.11.2026) auch AnkerPanel.tsx und seit Schritt 7 (10.11.2026) MedienPanel.tsx — StudioAnsicht importiert
+ * beide. lib/studio/anker.ts und lib/types.ts haben keine Laufzeit-Importe und werden hier selbst geladen.
  */
 export function ladeStudioBausteine(attrappen) {
   const hilfen = ladeTsx("components/studio/beleg-hilfen.ts", attrappen);
   const mitHilfen = { ...attrappen, [HILFEN]: hilfen };
   const kette = ladeTsx("components/studio/BelegKette.tsx", mitHilfen);
   const knopf = ladeTsx("components/studio/FreigabeKnopf.tsx", mitHilfen);
-  const panel = ladeAnkerPanel(attrappen, { anker: ladeTsx("lib/studio/anker.ts", {}), types: ladeTsx("lib/types.ts", {}), hilfen });
-  return { hilfen, kette, knopf, panel, module: { [HILFEN]: hilfen, [KETTE]: kette, [KNOPF]: knopf, [ANKER_PANEL]: panel } };
+  const anker = ladeTsx("lib/studio/anker.ts", {});
+  const types = ladeTsx("lib/types.ts", {});
+  const panel = ladeAnkerPanel(attrappen, { anker, types, hilfen });
+  const pruef = ladePruefAnsicht(attrappen, { hilfen });
+  const medien = ladeMedienPanel(attrappen, { anker, types, hilfen, pruef });
+  return {
+    hilfen,
+    kette,
+    knopf,
+    panel,
+    medien,
+    pruef,
+    module: { [HILFEN]: hilfen, [KETTE]: kette, [KNOPF]: knopf, [ANKER_PANEL]: panel, [MEDIEN_PANEL]: medien },
+  };
+}
+
+/**
+ * Lädt components/studio/PruefAnsicht.tsx (Objekt-Studio Schritt 8, 10.11.2026) mit den Attrappen der Seite (React),
+ * lib/studio/ki-hinweis.ts (ohne Imports) und den Beleg-Hilfen. Kopie für Mutationstests:
+ * Z_TSX_COMPONENTS_STUDIO_PRUEFANSICHT.
+ */
+export function ladePruefAnsicht(attrappen, { hilfen }) {
+  return ladeTsx("components/studio/PruefAnsicht.tsx", {
+    ...attrappen,
+    "@/lib/studio/ki-hinweis": ladeTsx("lib/studio/ki-hinweis.ts", {}),
+    [HILFEN]: hilfen,
+  });
+}
+
+/**
+ * Lädt components/studio/MedienPanel.tsx (Objekt-Studio Schritt 7, 10.11.2026) mit den Attrappen der Seite (React)
+ * und den echten Modulen anker, types, hilfen und (seit Schritt 8) der Prüfansicht. Kopie für Mutationstests:
+ * Z_TSX_COMPONENTS_STUDIO_MEDIENPANEL.
+ */
+export function ladeMedienPanel(attrappen, { anker, types, hilfen, pruef, text }) {
+  return ladeTsx("components/studio/MedienPanel.tsx", {
+    ...attrappen,
+    "@/lib/studio/anker": anker,
+    "@/lib/types": types,
+    [HILFEN]: hilfen,
+    [PRUEF_ANSICHT]: pruef ?? ladePruefAnsicht(attrappen, { hilfen }),
+    [TEXT_ERZEUGEN]: text ?? ladeTextErzeugen(attrappen, { hilfen, types }),
+  });
+}
+
+/**
+ * Lädt components/studio/TextErzeugen.tsx (Nachbesserung Paket C, Auftrag C) mit den Attrappen der Seite (React), den
+ * Beleg-Hilfen und lib/types.ts (Zeit in Europe/Berlin; ohne Angabe frisch geladen, es hat nur Typ-Importe). Kopie für
+ * Mutationstests: Z_TSX_COMPONENTS_STUDIO_TEXTERZEUGEN.
+ */
+export function ladeTextErzeugen(attrappen, { hilfen, types }) {
+  return ladeTsx("components/studio/TextErzeugen.tsx", { ...attrappen, [HILFEN]: hilfen, "@/lib/types": types ?? ladeTsx("lib/types.ts", {}) });
 }
 
 /**

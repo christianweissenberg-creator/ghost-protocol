@@ -583,7 +583,7 @@ test("T-L1 /api/status (Prüfbefunde D1, betrieb-1): je Plan-Job die zuletzt ein
   // Der Plan ist aus: Ein Nachweis nach aus_seit ist der Stolperdraht; die Probe löst ihn nicht aus.
   assert.deepEqual(s.crons.wert.jobs.map((j) => j.lage), ["laeuft_obwohl_aus", "aus", "aus"]);
   assert.equal(s.crons.status, "fehler");
-  assert.equal(s.crons.wert.nachweis_seit, null, "NACHWEIS_SEIT ist nicht festgehalten (Prüfbefund B1)");
+  assert.equal(s.crons.wert.nachweis_seit, "2026-11-07", "NACHWEIS_SEIT: Tabelle und Schreiber seit 07.11.2026 (Schritt 10)");
   assert.equal(typeof s.crons.gemessen_am, "string");
 });
 
@@ -694,12 +694,17 @@ test("T-A1 Anzeige (Erzeuger → Leser): 'Crons · laut Plan aus seit 30.07.2026
     assert.ok(z.title.includes(`${job}: laut Plan aus seit 30.07.2026 — Crons abgeschaltet (Betreiber-Entscheid)`), z.title);
     assert.ok(z.title.includes(`Fundstelle: GG/decisions_log.md Abschnitt 30.07.2026; scripts/setup-vps-crons.sh:${nr}`), z.title);
   }
-  // Prüfbefund B1: kein Beobachtungsfenster, solange NACHWEIS_SEIT nicht festgehalten ist.
+  // Schritt 10 (10.11.2026): NACHWEIS_SEIT ist festgehalten — der Tooltip nennt das Beobachtungsfenster ab 07.11.2026.
+  assert.ok(z.title.includes("Letzter Lauf: Nachweis-Tabelle seit 07.11.2026: kein Lauf · VPS-Crontab selbst nicht gemessen"), z.title);
+  assert.match(z.title, /07\.11\.2026/);
+  assert.doesNotMatch(z.title, /Schreiber seit|ist nicht festgehalten/);
+  // Prüfbefund B1, null-Zweig ausdrücklich: ohne festgehaltenen Tag kein Beobachtungsfenster.
+  const ohne = cronsZeile({ erzeugt_am: ZEIT, crons: cronsMesswert(totmann.TOTMANN_PLAN, [], ZEIT, null, null) });
   assert.ok(
-    z.title.includes("Letzter Lauf: keine Zeile in lauf_nachweis · seit wann die Tabelle besteht, ist nicht festgehalten · VPS-Crontab selbst nicht gemessen"),
-    z.title,
+    ohne.title.includes("Letzter Lauf: keine Zeile in lauf_nachweis · seit wann die Tabelle besteht, ist nicht festgehalten · VPS-Crontab selbst nicht gemessen"),
+    ohne.title,
   );
-  assert.doesNotMatch(z.title, /Schreiber seit|Nachweis-Tabelle seit|07\.11\.2026/);
+  assert.doesNotMatch(ohne.title, /Nachweis-Tabelle seit|07\.11\.2026/);
   assert.doesNotMatch(z.html, /kein Lauf seit/, "nie 'kein Lauf seit 30.07.' (§2.4)");
   // Prüfbefund B7: Der Grund steht auch im Hinweis (den liest ein Client von vor dem Totmann).
   assert.ok(z.title.includes("Hinweis: alle 3 Jobs laut Plan aus seit 30.07.2026"), z.title);

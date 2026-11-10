@@ -6,6 +6,7 @@
 import type { ReactNode } from "react";
 import { MIN_FREIGABE_ZEICHEN, enthaeltGeschuetztenNamen } from "@/lib/freigabe-regeln";
 import {
+  FARBE_BERNSTEIN,
   FARBE_GRUEN,
   FARBE_ROT,
   SNAPSHOT_ZEILEN,
@@ -41,6 +42,13 @@ export function BelegZeile({ titel, vermerk, children }: { titel: string; vermer
       </div>
     </div>
   );
+}
+
+/** Schritt 9: Freigabe-Beleg eines Videos (metadata.freigabe mit medium_sha256 und pruefung_id); sonst leer. */
+function medienFreigabe(metadata: BelegEintrag["metadata"]): string {
+  const f = alsObjekt(alsObjekt(metadata)?.freigabe) as Record<string, unknown> | null;
+  if (!f || typeof f.medium_sha256 !== "string") return "";
+  return ` · freigegeben mit SHA-256 ${f.medium_sha256.slice(0, 16)}… nach Prüfprotokoll #${typeof f.pruefung_id === "number" ? f.pruefung_id : "?"}`;
 }
 
 export function BelegKette({
@@ -138,11 +146,27 @@ export function BelegKette({
           titel="Prüfregel"
           vermerk={`Für Freigeben: COUNSEL-Urteil FREIGABE, Text ab ${MIN_FREIGABE_ZEICHEN} Zeichen, kein geschützter Name.`}
         >
-          {lage.pruefung.freigebbar ? (
+          {lage.pruefung.freigebbar && lage.medium ? (
+            // Caption zu einem Video: Der Browser prüft nur den Caption-Teil; die Medien-Regel prüft der Server
+            // (Nachbesserung oberflaeche-3, caption9-3: vorher grünes „erfüllt“ neben der Sperre des Servers).
+            <p style={{ color: FARBE_BERNSTEIN }} data-pruefregel="caption-teil">
+              Caption-Teil erfüllt (Text und Pflichtzeile) — die Medien-Regel prüft der Server beim Freigeben
+            </p>
+          ) : lage.pruefung.freigebbar ? (
             <p style={{ color: FARBE_GRUEN }}>erfüllt</p>
           ) : (
             <p style={{ color: FARBE_ROT }}>nicht erfüllt: {maskiert(lage.pruefung.grund ?? "ohne Grund")}</p>
           )}
+        </BelegZeile>
+      )}
+
+      {/* Schritt 9: nur bei einer Caption zu einem Video — Zeilen ohne Video bleiben unverändert. */}
+      {lage.medium && (
+        <BelegZeile titel="Video" vermerk="Die Medien-Regel prüft der Server beim Freigeben; Urteil im Stapel und im Studio.">
+          <p data-beleg-medium>
+            {lage.medium.id === null ? "Medium der Zeile nicht lesbar (metadata.medium_id)" : `Medium #${lage.medium.id}`}
+            {medienFreigabe(item.metadata)}
+          </p>
         </BelegZeile>
       )}
 

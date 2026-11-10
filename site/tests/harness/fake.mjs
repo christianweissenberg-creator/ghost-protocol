@@ -10,6 +10,10 @@
 //   aus scripts/setup_supabase_v2.sql:339-342.
 // - /api/agents/activate (bezahlter Aufruf, gezählt), /api/objekte (Export-Proxy),
 //   /api/content/pipeline (für auto-produce: echtes Modul im Prozess oder Skript).
+// - Seit Objekt-Studio Schritt 7 (10.11.2026): Storage (Bucket „studio“) und die Tabellen studio_medium,
+//   studio_pruefung und studio_messplan mit Rechten, CHECKs, UNIQUE und Fremdschlüsseln (tests/harness/studio-ablage.mjs).
+
+import { neueStudioWelt, storageAntwort, studioTabelle } from "./studio-ablage.mjs";
 
 export const SUPABASE_HOST = "supabase.test";
 export const SITE_HOST = "harness.local";
@@ -37,6 +41,7 @@ function neueWelt() {
     activateAntworten: [], // Antworten der echten activate-Route { status, body }
     claude: null, // (anfrage) => { status, body } für api.anthropic.com; null = jeder Aufruf wirft
     claudeAufrufe: 0,
+    studio: neueStudioWelt(), // Bucket „studio“ und Zähler der studio-Tabellen (tests/harness/studio-ablage.mjs)
   };
 }
 
@@ -78,7 +83,8 @@ const ZEITSPALTEN = new Set(["created_at", "updated_at", "published_at", "begonn
 
 // ── PostgREST-Filter ─────────────────────────────────────────────────────────
 function jsonPfad(zeile, ausdruck) {
-  const m = ausdruck.match(/^([a-z_]+)((?:->>?[a-z_0-9]+)*)$/);
+  // Spaltennamen mit Ziffern (sha256, anker_sha256) seit Objekt-Studio Schritt 7.
+  const m = ausdruck.match(/^([a-z_][a-z_0-9]*)((?:->>?[a-z_0-9]+)*)$/);
   if (!m) throw new Error("Pfad? " + ausdruck);
   let wert = zeile[m[1]];
   const teile = [...m[2].matchAll(/(->>?)([a-z_0-9]+)/g)];
@@ -274,7 +280,8 @@ export function zeile(id) {
   return welt.content.find((z) => z.id === id) ?? null;
 }
 
-async function supabaseAntwort(url, methode, kopf, body, signal) {
+async function supabaseAntwort(url, methode, kopf, body, signal, rohKoerper) {
+  if (url.pathname.startsWith("/storage/v1/")) return storageAntwort(welt, url, methode, kopf, rohKoerper, signal);
   const tabelle = url.pathname.replace("/rest/v1/", "");
   // kopf und signal (Objekt-Studio Schritt 3): Header der Anfrage, etwa apikey — damit eine Störung nur
   // einen bestimmten Schlüssel treffen kann —, und das Abbruchsignal der Abfrage (Zeitlimit prüfbar;
@@ -286,6 +293,7 @@ async function supabaseAntwort(url, methode, kopf, body, signal) {
     const s = welt.stoerung(anfrage);
     if (s) return json(s.status, s.body);
   }
+  if (tabelle.startsWith("studio_")) return studioTabelle(welt, tabelle, url, methode, kopf, body, { filtere, sortiere, antwortZeilen, zeitstempel });
   const istContent = tabelle === "content";
   const zeilen = istContent ? welt.content : (welt.tabellen[tabelle] ??= []);
   const select = url.searchParams.get("select");
@@ -392,9 +400,10 @@ export function installiere() {
     const methode = String(init.method ?? (typeof input === "object" ? input.method : undefined) ?? "GET").toUpperCase();
     const kopf = new Headers(init.headers ?? {});
     const roh = typeof init.body === "string" ? init.body : undefined;
-    const body = roh === undefined || roh === "" ? undefined : JSON.parse(roh);
+    const istStorage = url.hostname === SUPABASE_HOST && url.pathname.startsWith("/storage/v1/");
+    const body = istStorage || roh === undefined || roh === "" ? undefined : JSON.parse(roh);
 
-    if (url.hostname === SUPABASE_HOST) return supabaseAntwort(url, methode, kopf, body, init.signal);
+    if (url.hostname === SUPABASE_HOST) return supabaseAntwort(url, methode, kopf, body, init.signal, istStorage ? init.body : roh);
     if (url.hostname === "api.anthropic.com") {
       // Bezahlter Aufruf in echt — hier nur die Attrappe; ohne sie wirft der Aufruf.
       welt.claudeAufrufe += 1;

@@ -10,9 +10,13 @@
 // (09.11.2026) prüfen R5-W2 und R5-W6 zusätzlich, dass der Zwischenspeicher der Listen-Route
 // (lib/content-liste-cache.ts) nur auf dem Server liegt: kein Client-Modul erreicht ihn. R5-W7 prüft
 // dasselbe für den Zwischenstand des Freigabe-Stapels (lib/freigaben-cache.ts, GET /api/freigaben).
+// Seit Objekt-Studio Schritt 7 (10.11.2026, R5-W8): Kein Client-Modul liest eine Tabelle studio_* oder greift auf den
+// Storage zu (.storage, "storage/v1"); das Medien-Panel lädt nur per PUT auf die signierte URL hoch, die der Server
+// ausstellt.
 // Geprüft wird mit dem TypeScript-Parser aus node_modules; im Zweifel ist es ein Befund:
 // - .from(<Tabelle>) auf allem außer Array, Buffer und typisierten Arrays: Tabelle "content" ist ein
-//   Befund; eine Tabelle, die sich nicht statisch bestimmen lässt, ebenso. Der Methodenname darf über
+//   Befund, ebenso jede Tabelle studio_* (from_studio); eine Tabelle, die sich nicht statisch bestimmen lässt, ebenso.
+// - .storage (auch über einen Index): Storage-Zugriff im Browser ist ein Befund (storage_zugriff). Der Methodenname darf über
 //   einen Index kommen (x["from"], x[KONSTANTE]); ein Index, der sich nicht bestimmen lässt, ist ein
 //   Befund (methode_unbestimmt), ebenso .from ohne direkten Aufruf — call, apply, bind, als Wert
 //   weitergereicht oder destrukturiert (from_indirekt).
@@ -24,7 +28,7 @@
 //   oder mit nicht statisch bestimmbarem Filter ist ein Befund; ein nicht statisch bestimmbares Ereignis
 //   an jedem Empfänger ebenso.
 // - .rpc(…): Was die Funktion liest, sieht der Wächter nicht — jeder Aufruf ist ein Befund.
-// - Zeichenketten und Template-Teile mit "rest/v1", "realtime/v1" oder "graphql/v1" (Aufruf am
+// - Zeichenketten und Template-Teile mit "rest/v1", "realtime/v1", "graphql/v1" oder "storage/v1" (Aufruf am
 //   Supabase-Client vorbei) — auch ohne Tabellennamen, denn Pfade lassen sich zusammensetzen.
 // - Ein lokaler Import, der sich nicht auflösen lässt, oder ein import() ohne festen Pfad: Dann ist der
 //   Graph unvollständig.
@@ -66,7 +70,7 @@ const EINGEBAUT = new Set([
   "ReadableStream",
 ]);
 /** Pfade der Supabase-Dienste, die Tabellen lesen oder Änderungen melden (REST, Realtime, GraphQL). */
-const SUPABASE_PFAD = /(?:rest|realtime|graphql)\/v1/i;
+const SUPABASE_PFAD = /(?:rest|realtime|graphql|storage)\/v1/i;
 /** Werte von REALTIME_LISTEN_TYPES (@supabase/realtime-js, RealtimeChannel) nach dem Namen des Mitglieds. */
 const REALTIME_ARTEN = new Map([
   ["POSTGRES_CHANGES", "postgres_changes"],
@@ -297,6 +301,7 @@ function pruefeDatei(sf, rel, befunde, tabellen) {
         if (typeof tabelle === "string") {
           tabellen.push({ datei: rel, zeile: zeile(k), art: "from", tabelle });
           if (tabelle === "content") melde(k, "from_content");
+          if (/^studio_/i.test(tabelle)) melde(k, "from_studio");
         } else if (e !== null) {
           melde(k, "tabelle_unbestimmt");
         }
@@ -322,6 +327,10 @@ function pruefeDatei(sf, rel, befunde, tabellen) {
           melde(k, "realtime_unbestimmt");
         }
       }
+    }
+    // .storage (Supabase-Storage) im Browser, auch über einen Index (Objekt-Studio Schritt 7).
+    if ((ts.isPropertyAccessExpression(k) && k.name.text === "storage") || (ts.isElementAccessExpression(k) && zeichenkette(k.argumentExpression) === "storage")) {
+      melde(k, "storage_zugriff");
     }
     // .from ohne direkten Aufruf: call, apply, bind oder als Wert weitergereicht.
     const fromZugriff =
@@ -687,6 +696,32 @@ const GEGENPROBEN = [
     },
     erwartet: [["pages/alt.tsx", "from_content"]],
   },
+  // Objekt-Studio Schritt 7 (10.11.2026): studio-Tabellen und Storage im Browser.
+  {
+    name: "Tabelle studio_medium im Browser",
+    aenderungen: { "lib/hooks.ts": { anhaengen: '\nexport const q = () => supabase.from("studio_medium").select("id");\n' } },
+    erwartet: [["lib/hooks.ts", "from_studio"]],
+  },
+  {
+    name: "Tabelle studio_pruefung als Konstante im Medien-Panel",
+    aenderungen: { "components/studio/MedienPanel.tsx": { anhaengen: '\nimport { supabase } from "@/lib/supabase";\nconst PRUEF = "studio_pruefung";\nexport const q = () => supabase.from(PRUEF).select("*");\n' } },
+    erwartet: [["components/studio/MedienPanel.tsx", "from_studio"]],
+  },
+  {
+    name: "Storage-Client im Browser",
+    aenderungen: { "lib/hooks.ts": { anhaengen: '\nexport const s = () => supabase.storage.from("studio").list("eingang");\n' } },
+    erwartet: [["lib/hooks.ts", "storage_zugriff"]],
+  },
+  {
+    name: "Storage über einen Index",
+    aenderungen: { "lib/hooks.ts": { anhaengen: `\nexport const s = () => (supabase as unknown as Record<string, ${BELIEBIG}>)["storage"];\n` } },
+    erwartet: [["lib/hooks.ts", "storage_zugriff"]],
+  },
+  {
+    name: "Storage-Pfad am Client vorbei",
+    aenderungen: { "components/studio/MedienPanel.tsx": { anhaengen: "\nexport const r = (u: string) => fetch(`${u}/storage/v1/object/studio/eingang`);\n" } },
+    erwartet: [["components/studio/MedienPanel.tsx", "supabase_pfad"]],
+  },
   // Mutationsprüfung 09.11.2026: Formen, deren Erkennung vorher keine Gegenprobe absicherte (in Klammern
   // die Mutanten des Wächters, die die ganze Suite überlebten).
   {
@@ -758,4 +793,32 @@ test("R5-W4 Gegenkontrolle: Nur-Typ-Importe, Array.from (auch als Wert), andere 
   assert.ok(!e.erreicht.has("lib/neu-lesen.ts"), "Nur-Typ-Import ist keine Laufzeit-Kante");
   assert.ok(!e.wurzeln.includes("pages/api/alt.ts") && !e.erreicht.has("pages/api/alt.ts"), "Server-Route unter pages/api ist kein Browser-Einstieg");
   assert.deepEqual([...new Set(e.tabellen.filter((t) => t.art === "from").map((t) => t.tabelle))].sort(), ["agents", "messages", "metrics"]);
+});
+
+test("R5-W8 Objekt-Studio Schritt 7: Kein Client-Modul liest studio_* oder den Storage; das Medien-Panel lädt nur per PUT auf die signierte URL hoch, die der Server ausstellt", () => {
+  assert.deepEqual(BASIS.befunde, [], zeigen(BASIS.befunde));
+  assert.ok(!BASIS.tabellen.some((t) => /^studio/i.test(t.tabelle)), BASIS.tabellen.map((t) => t.tabelle).join(", "));
+  // Positivkontrolle: Die Studio-Seite erreicht das Medien-Panel, aber weder den Supabase-Client noch ein Server-Modul der Medien.
+  const studio = analysiere(QUELLBAUM, { nurWurzeln: ["app/studio/[objekt]/page.tsx"] });
+  assert.ok(studio.erreicht.has("components/studio/MedienPanel.tsx"), "Medien-Panel im Client-Graphen der Studio-Seite");
+  assert.deepEqual(studio.befunde, [], zeigen(studio.befunde));
+  assert.ok(![...studio.pakete].some((p) => p.startsWith("@supabase/")), [...studio.pakete].join(", "));
+  for (const server of ["lib/studio/medien.ts", "lib/studio/medien-ablage.ts", "lib/studio/medien-ablauf.ts", "lib/studio/startbild.ts", "lib/studio/messplan.ts", "lib/studio/lesen.ts", "lib/supabase.ts"]) {
+    assert.ok(QUELLBAUM.has(server), `${server} fehlt`);
+    assert.ok(!studio.erreicht.has(server), `${server}: ${studio.erreicht.get(server)?.join(" → ")}`);
+  }
+  // Riegel "server-only" an den Server-Modulen mit Storage, sharp und Messplan.
+  for (const datei of ["lib/studio/medien-ablage.ts", "lib/studio/medien-ablauf.ts", "lib/studio/startbild.ts", "lib/studio/messplan.ts"]) {
+    const sf = ts.createSourceFile(datei, QUELLBAUM.get(datei), ts.ScriptTarget.Latest, true);
+    assert.ok(sf.statements.some((s) => ts.isImportDeclaration(s) && !s.importClause && ts.isStringLiteral(s.moduleSpecifier) && s.moduleSpecifier.text === "server-only"), `${datei} ohne import "server-only"`);
+  }
+  // Das einzige PUT des Panels geht an die signierte URL aus der Antwort der Route upload-url. Seit der Nachbesserung
+  // oberflaeche-2 über senden: im Browser per XMLHttpRequest (Upload-Fortschritt), ohne XMLHttpRequest per holen.
+  const panel = QUELLBAUM.get("components/studio/MedienPanel.tsx");
+  assert.equal([...panel.matchAll(/method:\s*"PUT"/g)].length, 1, "PUT über holen genau einmal (sendenPerHolen)");
+  assert.equal([...panel.matchAll(/\.open\(\s*"PUT"\s*,\s*url\s*\)/g)].length, 1, "PUT per XMLHttpRequest genau einmal (sendenPerXhr)");
+  assert.equal([...panel.matchAll(/new XMLHttpRequest\(/g)].length, 1, "ein XMLHttpRequest");
+  assert.equal([...panel.matchAll(/\bsenden\(/g)].length, 1, "senden genau einmal aufgerufen");
+  assert.match(panel, /\bsenden\(ziel\.signedUrl,/);
+  assert.match(panel, /"x-upsert":\s*"false"/);
 });

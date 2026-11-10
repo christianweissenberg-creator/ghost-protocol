@@ -30,14 +30,15 @@ export const NACHWEIS_TABELLE = "lauf_nachweis";
 /**
  * Tag (JJJJ-MM-TT, Europe/Berlin), seit dem lauf_nachweis in Produktion besteht und der Schreiber
  * deployt ist — der spätere von Deploy und Ausführung von scripts/lauf_nachweis.sql (§2.2 Punkt 3:
- * "<Deploy-Datum>"). null, solange das nicht festgehalten ist: Das SQL ist seit 07.11.2026
- * ausgeführt (Migration 20261107094750), der Schreiber aber noch nicht deployt. Nach dem Deploy in
- * einem eigenen Commit setzen.
+ * "<Deploy-Datum>"). Beides geschah am 07.11.2026: das SQL am Vormittag, der Deploy mit dem Schreiber
+ * (Merge 77b2cb2, darin lib/lauf-nachweis.ts und die Aufrufe in /api/cron/briefing und
+ * /api/content/auto-produce) gegen Mittag — in Europe/Berlin derselbe Tag. Gesetzt mit Objekt-Studio
+ * Paket C (Schritt 10, 10.11.2026). null hieße „nicht festgehalten“; dann sagt der Tooltip genau das.
  * Nur für den Tooltip „Nachweis-Tabelle seit …: kein Lauf" (§2.4). Prüfbefund B1: Vorher stand hier
  * der Tag, an dem der Code entstand (07.11.2026), und der Tooltip behauptete ein Beobachtungsfenster,
  * in dem es weder Tabelle noch Schreiber gab. Das Urteil über aktive Jobs hängt an aktiv_seit.
  */
-export const NACHWEIS_SEIT: string | null = null;
+export const NACHWEIS_SEIT: string | null = "2026-11-07";
 
 export const JOB_BRIEFING_MORGEN = "briefing-morgen";
 export const JOB_BRIEFING_ABEND = "briefing-abend";

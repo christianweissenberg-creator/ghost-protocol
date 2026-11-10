@@ -398,25 +398,24 @@ test("S-B7 Kosten: Stand der Datenbank vom 08.11.2026 nachgestellt — 10 Assets
   assert.equal(body.assets.wert.reduce((n, a) => n + a.kosten_usd.wert.stufen_gelaufen, 0), 36);
 });
 
-test("S-B8 Teil 'noch nicht gebaut': Credits (Schritt 7) und Messplan (Schritt 11) ohne Zahl, nie 0", async () => {
+test("S-B8 Seit Schritt 7: Credits ohne Video ohne Summe (nie 0), Messplan ohne Eintrag „noch kein Eintrag (Schritt 11)“", async () => {
   standardWelt();
   const { body } = await hole();
+  // Schritt 7 (10.11.2026): Credits und Messplan kommen aus studio_medium bzw. studio_messplan. Ohne Original keine
+  // Summe und kein Rest — „0 Credits“ wäre ein Platzhalter; der Deckel (E18) steht dabei.
   assert.deepEqual(body.kosten_credits, {
-    wert: null,
-    status: "noch_nicht_gebaut",
-    quelle: "Higgsfield-Credits je Medium",
+    wert: { summe: null, deckel: 100, rest: null, originale: 0, originale_ohne_angabe: 0 },
+    status: "nicht_gemessen",
+    quelle: "Supabase · studio_medium.kosten_credits der Originale (Beleg der erzeugenden Sitzung)",
     gemessen_am: null,
-    hinweis: "noch nicht gebaut (Schritt 7)",
-    schritt: 7,
+    hinweis: "noch kein Video eingespielt · Deckel 100 Credits für Stufe 2 (E18), angezeigt, nicht erzwungen",
   });
-  assert.deepEqual(body.messung, {
-    wert: null,
-    status: "noch_nicht_gebaut",
-    quelle: "Messplan des Studios",
-    gemessen_am: null,
-    hinweis: "noch nicht gebaut (Schritt 11)",
-    schritt: 11,
-  });
+  assert.deepEqual(body.messung.wert, { art: "leer" });
+  assert.equal(body.messung.status, "nicht_gemessen");
+  assert.equal(body.messung.hinweis, "noch kein Eintrag (Schritt 11)");
+  assert.ok(Date.parse(body.messung.gemessen_am) > 0, "Zeitpunkt der Lesung");
+  assert.deepEqual(body.medien.wert, { zeilen: [], ketten: [], einzeln: [], abgeschnitten: false });
+  assert.equal(body.medien.status, "ok");
   // Ohne Läufe: keine Summe (null), kein 0-Platzhalter.
   zuruecksetzen();
   welt.objekteAntwort = exportAntwort();
@@ -553,6 +552,9 @@ test("S-B15 Route: nur GET, dynamic 'force-dynamic', runtime 'nodejs'; lesen.ts 
 
 // ═══ C: Studio-Ansicht und -Seite ═══
 
+/** Knöpfe der Studio-Seite im statischen Markup (ohne Stand-Zeile, ohne Vorschau): siehe S-C7. */
+const ERLAUBTE_KNOEPFE = ["Kopieren", "Alle prüfen", "Hochladen und Prüflauf starten", "Abgleich messen", "Text erzeugen …"];
+
 async function ansicht() {
   const studio = ladeStudioBausteine({ ...ECHT, "@/lib/counsel-urteil": counsel, "@/lib/freigabe-regeln": regeln });
   return ladeTsx("components/studio/StudioAnsicht.tsx", {
@@ -628,22 +630,26 @@ test("S-C3 Abnahme Seite: Kosten als USD-Schätzung mit 'n Läufe ohne Kostenang
   assert.ok(t2.includes("keine Stufen gespeichert (metadata.steps fehlt)"));
 });
 
-test("S-C4 Seite: Video/Medien, Credits und Messplan 'noch nicht gebaut (Schritt N)' — ohne Zahl, kein 0-Platzhalter; Anker seit Schritt 6 gebaut", async () => {
+test("S-C4 Seite: Video/Medien, Credits und Messplan seit Schritt 7 gebaut — ohne Video keine Summe, kein 0-Platzhalter; Anker seit Schritt 6 gebaut", async () => {
   standardWelt();
   const html = await studioHtml((await hole()).body);
   const t = sichtbar(html);
-  for (const [titel, schritt] of [["Video / Medien", 7], ["Higgsfield-Credits", 7], ["Messplan", 11]]) {
-    assert.ok(t.includes(`${titel} noch nicht gebaut (Schritt ${schritt})`), `${titel}: ${t.slice(0, 2500)}`);
-  }
+  // Schritt 7 (10.11.2026): kein „noch nicht gebaut“ mehr für Medien, Credits und Messplan.
+  assert.doesNotMatch(t, /noch nicht gebaut \(Schritt 7\)/);
+  assert.ok(t.includes("Higgsfield-Credits kein Video verbucht Deckel 100 · 0 Original(e)"), t.slice(0, 2500));
+  assert.ok(t.includes("Messplan noch kein Eintrag Einträge kommen mit Schritt 11"), t.slice(0, 2500));
+  assert.ok(t.includes("Video / Medien · 0"), t.slice(0, 4000));
+  assert.ok(t.includes("Noch kein Video eingespielt (gelesen"), t.slice(0, 4000));
   // Schritt 6 (10.11.2026): Das Anker-Panel steht da, ohne Ergebnis im statischen Markup "wird geprüft …".
   assert.ok(!t.includes("Anker-Material noch nicht gebaut"), "Anker nicht mehr als 'noch nicht gebaut'");
   assert.equal((html.match(/data-anker-panel/g) ?? []).length, 1);
   assert.ok(t.includes("Anker-Material · 11"), t.slice(0, 3000));
   assert.equal((html.match(/data-hash="laedt"/g) ?? []).length, 11);
+  // Der Wert der Kachel trägt ohne Video bzw. ohne Eintrag keine Zahl (nur Deckel, Zählung und Bauschritt darunter).
   for (const teil of ["kosten_credits", "messung"]) {
-    const kachel = new RegExp(`data-teil="${teil}"[^>]*>.*?</div></div>`, "s").exec(html)?.[0] ?? "";
-    assert.ok(kachel, teil);
-    assert.doesNotMatch(sichtbar(kachel).replace(/Schritt \d+/g, ""), /\d/, `${teil}: keine Zahl außer dem Bauschritt`);
+    const wert = new RegExp(`data-teil="${teil}"[^>]*>.*?<p[^>]*>[^<]*</p><p[^>]*>([^<]*)</p>`, "s").exec(html)?.[1] ?? "";
+    assert.ok(wert, teil);
+    assert.doesNotMatch(wert, /\d/, `${teil}: ${wert}`);
   }
   // Leeres Objekt: "keine Läufe" statt "$0".
   zuruecksetzen();
@@ -687,21 +693,41 @@ test("S-C6 Seite: Maskierung — kein geschützter Name im Markup, auch nicht au
   assert.ok(html.includes('data-cta-sperre="name"'), "CTA mit Namen gesperrt wie auf /content");
 });
 
-test("S-C7 Seite: keine Knöpfe, die etwas auslösen; Regeln mit Fundstellen, darunter der Bauträger — ohne Namen", async () => {
+test("S-C7 Seite: keine Knöpfe, die ohne Bestätigung etwas auslösen; Regeln mit Fundstellen, darunter der Bauträger — ohne Namen", async () => {
   gemessenerStand();
   const html = await studioHtml((await hole()).body);
   const t = sichtbar(html);
-  // Knöpfe: "Kopieren" des CTA-Links in den Beleg-Ketten (wie /content) und seit Schritt 6 genau ein
-  // "Alle prüfen" im Anker-Panel (prüft die Anker neu, ohne bezahlte Aufrufe) — keiner sonst.
+  // Knöpfe: "Kopieren" des CTA-Links in den Beleg-Ketten (wie /content), seit Schritt 6 genau ein
+  // "Alle prüfen" im Anker-Panel (prüft die Anker neu, ohne bezahlte Aufrufe) und seit Schritt 7 im Medien-Panel
+  // "Hochladen und Prüflauf starten" und "Abgleich messen" (Server-Arbeit ohne bezahlte Aufrufe; eingefügt wird
+  // erst nach Vorschau, Häkchen und "So einspielen") — keiner gibt frei.
+  // Bewusst angepasst (Nachbesserung Paket C, Auftrag C; Spez. Stufe 2 §4.2, §4.3, §4.4 Schritt 5): je Video genau ein
+  // "Text erzeugen …" im Medien-Panel. Er sendet nichts, er zeigt den bezahlten Lauf; gesendet wird erst mit
+  // "Ja, bezahlten Lauf starten" — der steht nie im statischen Markup (unten mit einem Video geprüft).
   const knoepfe = [...html.matchAll(/<button[^>]*>(.*?)<\/button>/g)].map((m) => m[1]);
   assert.equal(knoepfe.filter((k) => k === "Alle prüfen").length, 1, knoepfe.join(" | "));
-  assert.ok(knoepfe.every((k) => k === "Kopieren" || k === "Alle prüfen"), knoepfe.join(" | "));
+  assert.ok(knoepfe.every((k) => ERLAUBTE_KNOEPFE.includes(k)), knoepfe.join(" | "));
   const panel = /<section[^>]*data-anker-panel[^>]*>.*?<\/section>/s.exec(html)?.[0] ?? "";
   assert.match(panel, /<button[^>]*data-alle-pruefen[^>]*>Alle prüfen<\/button>/);
-  for (const verboten of ["Neues Asset", "Text erzeugen", ">Freigeben</button>", "Video einspielen"]) {
+  // Ohne Video kein „Text erzeugen“-Knopf und keine Karte dazu. Der Untertitel nennt den Knopf (Nachtrag d2-text-erzeugen-6),
+  // deshalb sucht der Wächter den Knopf und sein Attribut, nicht jedes Vorkommen des Worts.
+  for (const verboten of ["Neues Asset", "data-text-erzeugen", ">Text erzeugen …</button>", "bezahlten Lauf starten", ">Freigeben</button>", ">So einspielen</button>"]) {
     const i = html.indexOf(verboten);
     assert.ok(i < 0, `${verboten}: ${html.slice(Math.max(0, i - 300), i + 40)}`);
   }
+  assert.ok(!html.includes("erzeugt und postet nichts"), "alter Untertitel");
+  assert.match(html, /Das Studio\s+postet nichts;.*„Text erzeugen“ startet\s+nach Bestätigung einen bezahlten Pipeline-Lauf \(Claude\)/s);
+  // Mit einem Video: genau ein "Text erzeugen …" — im Medien-Panel, bei diesem Video; keine Bestätigung im Markup.
+  zuruecksetzen();
+  gemessenerStand();
+  videoZeilen();
+  const mitVideo = await studioHtml((await hole()).body);
+  const knoepfeMitVideo = [...mitVideo.matchAll(/<button[^>]*>(.*?)<\/button>/g)].map((m) => m[1]);
+  assert.ok(knoepfeMitVideo.every((k) => ERLAUBTE_KNOEPFE.includes(k)), knoepfeMitVideo.join(" | "));
+  assert.equal(knoepfeMitVideo.filter((k) => k === "Text erzeugen …").length, 1, knoepfeMitVideo.join(" | "));
+  const medienPanel = /<section[^>]*data-medien-panel[^>]*>.*?<\/section>/s.exec(mitVideo)?.[0] ?? "";
+  assert.match(medienPanel, /data-text-erzeugen="3"[^>]*>.*?<button[^>]*data-text-erzeugen-knopf[^>]*>Text erzeugen …<\/button>/s);
+  for (const verboten of ["bezahlten Lauf starten", "data-text-erzeugen-bestaetigung", "Neues Asset", ">Freigeben</button>"]) assert.ok(!mitVideo.includes(verboten), verboten);
   const { STUDIO_REGELN } = await regelnStudio();
   assert.ok(STUDIO_REGELN.length >= 8);
   for (const r of STUDIO_REGELN) {
@@ -1157,23 +1183,33 @@ test("S-N13 (SPEZ-5) Higgsfield im Studio: nur der Hinweis auf den aktiven Erzeu
     t.includes("Higgsfield im Studio: aktiver Erzeugungsweg ist die Connector-Sitzung (Higgsfield-Connector in einer Claude-Sitzung). Das Studio ruft Higgsfield nicht auf."),
     t.slice(0, 3000),
   );
-  // Neben "Kopieren" nur "Alle prüfen" im Anker-Panel (Schritt 6) — kein Knopf, der Higgsfield aufruft.
+  // Neben "Kopieren" nur "Alle prüfen" (Schritt 6) und die Medien-Knöpfe (Schritt 7) — kein Knopf, der Higgsfield aufruft.
   const knoepfe = [...html.matchAll(/<button[^>]*>(.*?)<\/button>/g)].map((m) => m[1]);
-  assert.ok(knoepfe.every((k) => k === "Kopieren" || k === "Alle prüfen"), knoepfe.join(" | "));
+  assert.ok(knoepfe.every((k) => ERLAUBTE_KNOEPFE.includes(k)), knoepfe.join(" | "));
+  assert.ok(!knoepfe.some((k) => /higgsfield|generier|erzeug/i.test(k)), knoepfe.join(" | "));
 });
 
-test("S-N14 (SPEZ-6) Regeln: Startbild- und Rechte-Regel 'noch nicht gebaut (Schritt N)'; die Anker-Regel prüft seit Schritt 6 der Server", async () => {
+test("S-N14 (SPEZ-6) Regeln: Anker-Regel (Schritt 6), Startbild-Regel (Schritt 7), Rechte- und Medien-Regel (Schritt 8) prüft der Server", async () => {
   const { STUDIO_REGELN } = await regelnStudio();
   standardWelt();
   const t = sichtbar(await studioHtml((await hole()).body));
-  for (const [muster, schritt] of [[/Startbild/, 7], [/Nutzungsrechte/, 8]]) {
+  // Schritt 7 (10.11.2026): Den Startbild-Abgleich rechnet der Server beim Einspielen.
+  const startbild = STUDIO_REGELN.filter((r) => /^Ein Video startet nur aus einem Ausschnitt/.test(r.regel));
+  assert.equal(startbild.length, 1);
+  assert.match(startbild[0].fundstelle, /site\/src\/lib\/studio\/startbild\.ts/);
+  assert.match(startbild[0].pruefung, /^Code, serverseitig beim Einspielen: .*Toleranz 2/);
+  assert.ok(t.includes(`${startbild[0].regel} Fundstelle: ${startbild[0].fundstelle} · Prüfung: ${startbild[0].pruefung}`));
+  // Schritt 8 (10.11.2026): Rechte- und Medien-Regel prüft der Server beim Freigeben; keine Regel ist mehr „noch nicht gebaut“.
+  for (const muster of [/Nutzungsrechte/, /^Ein Video ist erst freigebbar/]) {
     const treffer = STUDIO_REGELN.filter((r) => muster.test(r.regel));
     assert.equal(treffer.length, 1, String(muster));
     const r = treffer[0];
-    assert.equal(r.pruefung, `noch nicht gebaut (Schritt ${schritt})`, r.regel);
+    assert.match(r.fundstelle, /site\/src\/lib\/medien-freigabe\.ts \(pruefeMedienFreigabe/);
+    assert.match(r.pruefung, /^Code, serverseitig beim Freigeben/);
     assert.doesNotMatch(r.fundstelle, INTERNE_VERWEISE);
-    assert.ok(t.includes(`${r.regel} Fundstelle: ${r.fundstelle} · Prüfung: noch nicht gebaut (Schritt ${schritt})`), r.regel);
+    assert.ok(t.includes(`${r.regel} Fundstelle: ${r.fundstelle} · Prüfung: ${r.pruefung}`), r.regel);
   }
+  assert.ok(STUDIO_REGELN.every((r) => !/noch nicht gebaut/.test(r.pruefung)));
   // Schritt 6 (10.11.2026): Die Anker-Regel nennt ihre Fundstellen im Repo und die Prüfung des Servers.
   const anker = STUDIO_REGELN.filter((r) => /^Anker-Bilder/.test(r.regel));
   assert.equal(anker.length, 1);
@@ -1182,7 +1218,7 @@ test("S-N14 (SPEZ-6) Regeln: Startbild- und Rechte-Regel 'noch nicht gebaut (Sch
   assert.match(anker[0].pruefung, /^Code, serverseitig: SHA-256 jeder Live-Datei gegen das Manifest und urls\.cover im Export/);
   assert.ok(!/noch nicht gebaut/.test(anker[0].pruefung));
   assert.ok(t.includes(`${anker[0].regel} Fundstelle: ${anker[0].fundstelle} · Prüfung: ${anker[0].pruefung}`));
-  for (const datei of ["src/lib/studio/anker.ts", "src/lib/studio/anker-pruefung.ts"]) readFileSync(path.join(SITE, datei));
+  for (const datei of ["src/lib/studio/anker.ts", "src/lib/studio/anker-pruefung.ts", "src/lib/studio/startbild.ts", "src/lib/medien-freigabe.ts", "src/lib/studio/ki-hinweis.ts"]) readFileSync(path.join(SITE, datei));
   // "darunter": Der Bauträger bleibt die letzte Regel.
   assert.equal(STUDIO_REGELN[STUDIO_REGELN.length - 1].regel, "Bauträger öffentlich nicht namentlich nennen.");
 });
@@ -1410,4 +1446,254 @@ test("S-M9 (F10) Abweisung: Ein Fehlertext der Route mit dem geschützten Namen 
   const roh = await lesungHtml({ art: "abgewiesen", httpStatus: 500, text: `Fehler bei ${NAME}` });
   assert.doesNotMatch(ent(roh), ENTHAELT_NAMEN);
   assert.ok(sichtbar(roh).includes(`Studio nicht lesbar Fehler bei ${regeln.NAMENS_ERSATZ}`), sichtbar(roh).slice(0, 800));
+});
+
+// ═══ Schritt 7 (10.11.2026): Medien, Credits, Messplan, Stand-Zeile ═══
+
+/** Drei Medien-Zeilen eines Videos, direkt in der Attrappe (wie nach einem Einspielen; Testwerte). */
+function videoZeilen({ abgleich = "nicht_bestanden", max = 7 } = {}) {
+  const basis = {
+    objekt_slug: SLUG, anker_id: "hof-nacht", anker_sha256: "4".repeat(64), breite: null, hoehe: null, fps: null, dauer_s: null, aigc_kennzeichen: null,
+    schnitt_von_s: null, schnitt_bis_s: null, ausschnitt: null, startbild_abgleich: null, startbild_abweichung_max: null, erzeuger: null, modell: null,
+    job_id: null, parameter: {}, prompt: null, prompt_klauseln: [], ki_hinweis_text: null, kosten_vorschau_credits: null, kosten_credits: null,
+    kosten_usd: null, kosten_quelle: null, startbild_id: null, abgeleitet_von: null, eingespielt_am: "2026-11-10T14:30:00.000000+00:00",
+  };
+  welt.tabellen.studio_medium = [
+    { ...basis, id: 1, art: "bild", fassung: "startbild", sha256: "1".repeat(64), speicher_pfad: `${SLUG}/${"1".repeat(64)}.jpg`, bytes: 850_000, mime: "image/jpeg", breite: 3000, hoehe: 1687, ausschnitt: { x: 0, y: 120, breite: 3000, hoehe: 1687, skalierung: 1 }, startbild_abgleich: abgleich, startbild_abweichung_max: max },
+    { ...basis, id: 2, art: "video", fassung: "original", sha256: "2".repeat(64), speicher_pfad: `${SLUG}/${"2".repeat(64)}.mp4`, bytes: 15_000_000, mime: "video/mp4", startbild_id: 1, erzeuger: "higgsfield-connector", modell: "test-modell", job_id: "test-job", breite: 1920, hoehe: 1080, fps: 24, dauer_s: 4.5, aigc_kennzeichen: true, prompt: "Test-Prompt", prompt_klauseln: [{ id: "licht", text: "Licht ruhig." }], kosten_vorschau_credits: 6.5, kosten_credits: 6.5, kosten_quelle: "Test" },
+    { ...basis, id: 3, art: "video", fassung: "export", sha256: "3".repeat(64), speicher_pfad: `${SLUG}/${"3".repeat(64)}.mp4`, bytes: 650_000, mime: "video/mp4", abgeleitet_von: 2, job_id: "test-job", breite: 1280, hoehe: 720, fps: 24, dauer_s: 2.5, aigc_kennzeichen: false, schnitt_von_s: 0.25, schnitt_bis_s: 2.75, ki_hinweis_text: "Test-Hinweis im Bild" },
+  ];
+}
+
+test("S-P1 (Schritt 7) Kacheln und Medien-Panel mit einem Video: 6,5 Credits, Deckel 100, Rest 93,5 — getrennt von USD; Kette mit Links auf die Datei-Route", async () => {
+  standardWelt();
+  videoZeilen();
+  const html = await studioHtml((await hole()).body);
+  const t = sichtbar(html);
+  assert.ok(t.includes("Higgsfield-Credits 6,5 Credits Deckel 100 · Rest 93,5 · 1 Original(e)"), t.slice(0, 3000));
+  assert.ok(t.includes("Claude-Kosten (USD, geschätzt)"), "USD in eigener Kachel");
+  const panel = /<section[^>]*data-medien-panel[^>]*>.*?<\/section>/s.exec(html)?.[0] ?? "";
+  const p = sichtbar(panel);
+  assert.ok(p.includes("Video / Medien · 1"), p.slice(0, 500));
+  assert.ok(p.includes("Higgsfield-Credits: 6,5 Credits · Deckel 100 · Rest 93,5 · 1 Original(e)"));
+  assert.ok(p.includes("Export #3"));
+  assert.match(panel, /href="\/api\/studio\/rittergut-seifersdorf\/medien\/3\/datei"/);
+  assert.match(panel, /href="\/api\/studio\/rittergut-seifersdorf\/medien\/2\/datei"/);
+  assert.match(panel, /data-startbild-abgleich="nicht_bestanden"/);
+  assert.ok(p.includes("nicht bestanden — größte Abweichung 7"));
+  // Seit Schritt 8: das Urteil der Medien-Regel (Server) mit allen Gründen; ohne Protokoll, mit Testwerten.
+  assert.match(panel, /data-medien-urteil="gesperrt"/);
+  const gruende = [...panel.matchAll(/<li>(.*?)<\/li>/g)].map((m) => ent(m[1]));
+  assert.deepEqual(gruende, [
+    "Prüfprotokoll fehlt",
+    "KI-Hinweis im Bild hat nicht den festgelegten Wortlaut",
+    "Anker-Hash des Exports weicht vom Manifest ab",
+    "Startbild-Abgleich nicht bestanden (größte Abweichung 7)",
+  ]);
+  assert.ok(p.includes("Freigabe (Medien-Regel, Server): gesperrt — 4 Grund/Gründe"));
+  assert.ok(p.includes("Noch kein Prüfprotokoll."));
+  assert.match(panel, /data-pruefbereich="3"/);
+  assert.doesNotMatch(panel, /<video/, "die Prüfansicht wird erst beim Öffnen aufgebaut");
+  assert.ok(p.includes("6,5 Credits (Vorschau 6,5)"));
+  assert.ok(p.includes("„Test-Hinweis im Bild“"));
+  assert.ok(p.includes("0,25–2,75 s im Original (laut Beleg)"));
+  assert.ok(p.includes("1920×1080 · 24 fps · 4,5 s · AIGC-Kennzeichen ja (laut Beleg, ffprobe)"));
+  // Ohne Zeilen: kein Video, keine 0 als Summe.
+  zuruecksetzen();
+  standardWelt();
+  const leer = sichtbar(await studioHtml((await hole()).body));
+  assert.ok(leer.includes("Noch kein Video eingespielt"));
+  assert.ok(leer.includes("Higgsfield-Credits kein Video verbucht"));
+});
+
+/** Seite mit Hook-Laufzeit; StudioAnsicht als Attrappe, die ihre Props mitschreibt. */
+async function studioSeite() {
+  const V = await ansicht();
+  const erfasst = [];
+  const lz = hookLaufzeit();
+  const seite = ladeTsx("app/studio/[objekt]/page.tsx", {
+    ...lz.attrappen,
+    "next/navigation": { useParams: () => ({ objekt: SLUG }) },
+    "@/components/studio/StudioAnsicht": {
+      StudioAnsicht: (props) => {
+        erfasst.push(props);
+        return null;
+      },
+      leseStudioAntwort: V.leseStudioAntwort,
+    },
+    "@/components/studio/beleg-hilfen": { maskiert: regeln.maskiereGeschuetzteNamen },
+  });
+  lz.setzeWurzel(seite.default);
+  return { lz, erfasst };
+}
+
+test("S-P2 Stand-Zeile statt Takt: Ladezeit und „neu laden“; beim Neuladen bleibt der alte Stand sichtbar, ein Fehler steht mit Grund daneben", async () => {
+  standardWelt();
+  const echt = (await hole()).body;
+  const vorher = { fetch: globalThis.fetch, setInterval: globalThis.setInterval };
+  const abrufe = [];
+  let takte = 0;
+  const antworten = [];
+  try {
+    globalThis.setInterval = (...a) => {
+      takte += 1;
+      return vorher.setInterval(...a);
+    };
+    globalThis.fetch = async (url) => {
+      abrufe.push(url);
+      return antworten[abrufe.length - 1]();
+    };
+    antworten[0] = () => ({ status: 200, json: async () => echt });
+    const { lz, erfasst } = await studioSeite();
+    lz.rendere();
+    await lz.ruhe();
+    let letzte = erfasst[erfasst.length - 1];
+    assert.equal(letzte.lesung.art, "daten");
+    assert.deepEqual({ laedt: letzte.stand.laedt, fehler: letzte.stand.fehler }, { laedt: false, fehler: null });
+    const erstGeladen = letzte.stand.geladenAm;
+    assert.ok(Date.parse(erstGeladen) > 0);
+    assert.equal(abrufe.length, 1, "kein Takt: ein Abruf beim Öffnen");
+    // Neu laden, Antwort verzögert und dann 500: der alte Stand bleibt, mit Grund.
+    let oeffnen;
+    const tor = new Promise((f) => (oeffnen = f));
+    antworten[1] = async () => {
+      await tor;
+      return { status: 500, json: async () => ({ fehler: "Supabase nicht erreichbar", fehler_art: "programmfehler" }) };
+    };
+    letzte.neuLaden();
+    await lz.ruhe();
+    letzte = erfasst[erfasst.length - 1];
+    assert.equal(abrufe.length, 2);
+    assert.equal(letzte.lesung.art, "daten", "alter Stand bleibt beim Neuladen");
+    assert.deepEqual({ laedt: letzte.stand.laedt, geladenAm: letzte.stand.geladenAm }, { laedt: true, geladenAm: erstGeladen });
+    oeffnen();
+    await lz.ruhe();
+    letzte = erfasst[erfasst.length - 1];
+    assert.equal(letzte.lesung.art, "daten");
+    assert.equal(letzte.stand.laedt, false);
+    assert.equal(letzte.stand.fehler, "Supabase nicht erreichbar (HTTP 500)");
+    assert.equal(letzte.stand.geladenAm, erstGeladen, "Zeit des angezeigten Stands");
+    // Erneut neu laden, jetzt erfolgreich: neue Ladezeit, kein Fehler.
+    antworten[2] = () => ({ status: 200, json: async () => echt });
+    await new Promise((f) => setTimeout(f, 5));
+    letzte.neuLaden();
+    await lz.ruhe();
+    letzte = erfasst[erfasst.length - 1];
+    assert.equal(letzte.stand.fehler, null);
+    assert.ok(Date.parse(letzte.stand.geladenAm) > Date.parse(erstGeladen));
+    assert.equal(takte, 0, "die Seite startet keinen Takt");
+  } finally {
+    globalThis.fetch = vorher.fetch;
+    globalThis.setInterval = vorher.setInterval;
+  }
+  assert.ok(abrufe.every((u) => u === "/api/studio/rittergut-seifersdorf"));
+});
+
+test("S-P3 Entwurf-Karte nennt den Zwischenstand mit Ladezeit (statt nur „gesperrt … kein Text“); die Stand-Zeile hat den Knopf „neu laden“", async () => {
+  standardWelt();
+  const body = (await hole()).body;
+  const V = await ansicht();
+  const html = renderToStaticMarkup(
+    React.createElement(V.StudioAnsicht, {
+      slug: SLUG,
+      lesung: { art: "daten", antwort: body },
+      kopiere: () => {},
+      kopierStatus: () => "Kopieren",
+      stand: { geladenAm: "2026-11-10T14:03:12Z", laedt: false, fehler: null },
+      neuLaden: () => {},
+    }),
+  );
+  const karte = (id) => new RegExp(`<article[^>]*data-asset="${id}".*?</article>`, "s").exec(html)?.[0] ?? "";
+  assert.ok(
+    sichtbar(karte(3)).includes("Entwurf: Ein Lauf kann diese Zeile noch füllen — angezeigt ist der Stand von 10.11.2026 15:03:12 (Europe/Berlin); „neu laden“ zeigt den aktuellen."),
+    sichtbar(karte(3)),
+  );
+  for (const id of [1, 2, 4]) assert.doesNotMatch(karte(id), /data-entwurf-hinweis/, String(id));
+  const t = sichtbar(html);
+  assert.ok(t.includes("Stand: geladen 10.11.2026 15:03:12 (Europe/Berlin) · Daten werden nicht von selbst aktualisiert neu laden"), t.slice(0, 1500));
+  assert.match(html, /<button[^>]*data-neu-laden[^>]*>neu laden<\/button>/);
+  // Ohne Stand (wie in den übrigen Tests) keine Stand-Zeile.
+  assert.doesNotMatch(await studioHtml(body), /data-stand-zeile/);
+});
+
+test("S-P4 Erste Lesung scheitert: Fehlerkarte mit „neu laden“; ein Klick liest genau einmal neu und zeigt dann die Daten; statische Ansicht ohne Knopf", async () => {
+  standardWelt();
+  const echt = (await hole()).body;
+  const V = await ansicht();
+  const vorher = globalThis.fetch;
+  const abrufe = [];
+  const antworten = [
+    () => ({ status: 502, json: async () => ({ fehler: "Supabase nicht erreichbar", fehler_art: "supabase" }) }),
+    () => ({ status: 200, json: async () => echt }),
+  ];
+  try {
+    globalThis.fetch = async (url) => {
+      abrufe.push(url);
+      return antworten[abrufe.length - 1]();
+    };
+    const { lz, erfasst } = await studioSeite();
+    lz.rendere();
+    await lz.ruhe();
+    let letzte = erfasst[erfasst.length - 1];
+    assert.equal(letzte.lesung.art, "abgewiesen");
+    assert.equal(letzte.stand, undefined, "kein alter Stand");
+    const html = renderToStaticMarkup(React.createElement(V.StudioAnsicht, letzte));
+    assert.match(html, /data-abgewiesen="502"/);
+    assert.match(html, /<button[^>]*data-neu-laden[^>]*>neu laden<\/button>/);
+    letzte.neuLaden();
+    await lz.ruhe();
+    letzte = erfasst[erfasst.length - 1];
+    assert.equal(abrufe.length, 2, "ein Klick, eine Lesung");
+    assert.equal(letzte.lesung.art, "daten");
+    assert.deepEqual({ laedt: letzte.stand.laedt, fehler: letzte.stand.fehler }, { laedt: false, fehler: null });
+  } finally {
+    globalThis.fetch = vorher;
+  }
+  const statisch = renderToStaticMarkup(
+    React.createElement(V.StudioAnsicht, { slug: SLUG, lesung: { art: "abgewiesen", httpStatus: 502, text: "Supabase nicht erreichbar" }, kopiere: () => {}, kopierStatus: () => "Kopieren" }),
+  );
+  assert.doesNotMatch(statisch, /data-neu-laden/);
+});
+
+test("S-P5 (Nachbesserung oberflaeche-3, caption9-3; Nachtrag d2-oberflaeche-1) Studio-Karte einer Caption zu einem Video: Medium mit Export und Urteil der Medien-Regel statt „keines (Text-Asset)“; die Beleg-Kette sagt „Caption-Teil erfüllt …“ statt grünem „erfüllt“; Medienliste nicht lesbar → „Urteil nicht ermittelt“; eigene Zeile ohne Export → „kein Export“", async () => {
+  standardWelt();
+  videoZeilen();
+  const PFLICHT = "Bild-/Videomaterial: KI-generierte Visualisierung, kein Foto der Bestandsimmobilie";
+  const text = `Caption zum Video, lang genug für die Regel.\n\n${PFLICHT}`;
+  legeAn({ id: 50, title: "Caption", status: "zur_freigabe", body: text, review_notes: "Befunde: keine.\nURTEIL: FREIGABE-EMPFEHLUNG", metadata: { objekt_slug: SLUG, steps: [{ agent: "researcher", output: "r" }, { agent: "scribe", output: text }], medium_id: 3 } });
+  const html = await studioHtml((await hole()).body);
+  const karte = /<article[^>]*data-asset="50".*?<\/article>/s.exec(html)?.[0] ?? "";
+  const t = sichtbar(karte);
+  assert.doesNotMatch(t, /keines \(Text-Asset\)/);
+  assert.match(t, /Caption zu Video #3/);
+  assert.match(t, /Video · Export #3 · 33333333… · Medien-Regel: sperrt — Prüfprotokoll fehlt \(\+3\)/, t.slice(0, 1500));
+  assert.match(karte, /data-karten-medium="gesperrt"/);
+  assert.match(t, /gesperrt: Prüfprotokoll fehlt/, "Freigabe: Sperre des Servers mit Medien-Regel");
+  assert.match(t, /Caption-Teil erfüllt \(Text und Pflichtzeile\) — die Medien-Regel prüft der Server beim Freigeben/);
+  assert.match(karte, /data-pruefregel="caption-teil"/);
+  // Nachtrag d2-oberflaeche-1: Medienliste nicht lesbar → „Urteil nicht ermittelt“, nicht „nicht unter den Videos“.
+  welt.stoerung = (a) => (a.art === "supabase" && a.tabelle === "studio_medium" ? { status: 500, body: { message: "Medien gestört" } } : null);
+  let gestoert;
+  try {
+    gestoert = /<article[^>]*data-asset="50".*?<\/article>/s.exec(await studioHtml((await hole()).body))?.[0] ?? "";
+  } finally {
+    welt.stoerung = null;
+  }
+  assert.match(gestoert, /data-karten-medium="nicht_ermittelt"/);
+  assert.match(sichtbar(gestoert), /Video #3 — Urteil nicht ermittelt \(Medienliste nicht lesbar\)/);
+  assert.doesNotMatch(sichtbar(gestoert), /nicht unter den Videos dieses Objekts/);
+  assert.match(sichtbar(gestoert), /gesperrt: Urteil der Medien-Regel nicht ermittelt/);
+  // Eine eigene Zeile, die kein Export ist (Original #2): „kein Export dieses Objekts“, wie die Freigabe-Zeile.
+  welt.content.find((z) => z.id === 50).metadata.medium_id = 2;
+  const original = /<article[^>]*data-asset="50".*?<\/article>/s.exec(await studioHtml((await hole()).body))?.[0] ?? "";
+  assert.match(original, /data-karten-medium="kein_export"/);
+  assert.match(sichtbar(original), /Video #2 — kein Export dieses Objekts \(Grund unter „Freigabe“\)/);
+  assert.match(sichtbar(original), /gesperrt: Medium ist kein Export/);
+  // Caption ohne Video bleibt, wie sie war: „keines (Text-Asset)“, grünes „erfüllt“ in der Kette.
+  zuruecksetzen();
+  standardWelt();
+  legeAn({ id: 51, title: "Text", status: "zur_freigabe", body: text, review_notes: "Befunde: keine.\nURTEIL: FREIGABE-EMPFEHLUNG", metadata: { objekt_slug: SLUG, steps: [{ agent: "researcher", output: "r" }, { agent: "scribe", output: text }] } });
+  const ohne = /<article[^>]*data-asset="51".*?<\/article>/s.exec(await studioHtml((await hole()).body))?.[0] ?? "";
+  assert.match(sichtbar(ohne), /keines \(Text-Asset\)/);
+  assert.doesNotMatch(ohne, /data-pruefregel="caption-teil"|data-karten-medium/);
 });
