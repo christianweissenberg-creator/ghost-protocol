@@ -8,15 +8,7 @@
 // und die Datenbank sieht der Browser nicht: beides liest nur der Server.
 // Kein Knopf erzeugt oder gibt frei; die Beleg-Kette kopiert auf Wunsch den CTA-Link (wie /content).
 // Seit Schritt 6 (10.11.2026) fragt das Anker-Panel in der Ansicht seine Prüfung selbst ab
-// (GET /api/studio/<slug>/anker, beim Aufbau und mit „Alle prüfen“).
-// Nachtrag Paket B (10.11.2026): Die Seite las nur beim Öffnen. Eine Zeile, die während eines Laufs angelegt wurde,
-// stand bis zum Neuladen des Tabs als „Entwurf, gesperrt: UNKLAR (kein Text)“ da. Jetzt nennt die Ansicht den Stand
-// (Zeitpunkt der Lesung) und hat einen Knopf „Neu laden“, der dieselbe Lesung noch einmal holt. Bewusst kein Takt:
-// Jede Lesung ruft den Steinadel-Export ab (über /api/objekte) und liest alle Zeilen des Objekts mit Text, Review
-// und metadata samt Stufen-Ausgaben (lib/studio/lesen.ts, ASSET_SPALTEN). Ein Takt, solange eine Zeile „entwurf“
-// ist, wiederholte das während jedes Laufs — und ohne Ende bei einer Zeile, die nach einem Abbruch ohne Vermerk
-// auf „entwurf“ stehen bleibt. Ein Klick kostet genau eine Lesung. Während des Neuladens bleibt der alte Stand
-// stehen (der Knopf zeigt, dass geladen wird); danach gilt die neue Lesung, auch wenn sie ein Fehler ist.
+// (GET /api/studio/<slug>/anker, beim Aufbau und mit „Alle prüfen“); diese Seite bleibt unverändert.
 
 import { useCallback, useEffect, useState } from "react";
 import { useParams } from "next/navigation";
@@ -31,10 +23,8 @@ export default function StudioSeite() {
   const roh = params?.objekt;
   const slug = typeof roh === "string" ? roh : Array.isArray(roh) ? String(roh[0] ?? "") : "";
 
-  // Die Lesung gehört zu ihrem Slug und ihrem Ladevorgang: Wechselt der Slug, gilt bis zur neuen Antwort "lädt".
-  // lauf zählt die Klicks auf „Neu laden“ (0 = Aufbau); jeder neue Wert löst genau eine Lesung aus.
-  const [lauf, setLauf] = useState(0);
-  const [stand, setStand] = useState<{ slug: string; lauf: number; lesung: StudioLesung } | null>(null);
+  // Die Lesung gehört zu ihrem Slug: Wechselt der Slug, gilt bis zur neuen Antwort "lädt".
+  const [stand, setStand] = useState<{ slug: string; lesung: StudioLesung } | null>(null);
   const [kopiert, setKopiert] = useState<string | null>(null);
 
   useEffect(() => {
@@ -53,14 +43,11 @@ export default function StudioSeite() {
           text: `Netzfehler: ${maskiert(e instanceof Error ? e.message : "unbekannter Fehler")}`,
         };
       }
-      if (!steuerung.signal.aborted) setStand({ slug, lauf, lesung });
+      if (!steuerung.signal.aborted) setStand({ slug, lesung });
     }
     laden();
     return () => steuerung.abort();
-  }, [slug, lauf]);
-
-  // Neu laden: eine Lesung je Klick; die Ansicht ignoriert Klicks, solange eine läuft (laedtNeu).
-  const neuLaden = useCallback(() => setLauf((n) => n + 1), []);
+  }, [slug]);
 
   const kopiere = useCallback((key: string, text: string) => {
     const merke = (wert: string) => {
@@ -83,18 +70,6 @@ export default function StudioSeite() {
     [kopiert]
   );
 
-  // Gleicher Slug, älterer Ladevorgang: der alte Stand bleibt sichtbar, bis die neue Lesung da ist.
-  const gleicherSlug = stand !== null && stand.slug === slug;
-  const lesung = gleicherSlug ? stand.lesung : LAEDT;
-  const laedtNeu = gleicherSlug && stand.lauf !== lauf;
-  return (
-    <StudioAnsicht
-      slug={slug}
-      lesung={lesung}
-      kopiere={kopiere}
-      kopierStatus={kopierStatus}
-      neuLaden={neuLaden}
-      laedtNeu={laedtNeu}
-    />
-  );
+  const lesung = stand !== null && stand.slug === slug ? stand.lesung : LAEDT;
+  return <StudioAnsicht slug={slug} lesung={lesung} kopiere={kopiere} kopierStatus={kopierStatus} />;
 }

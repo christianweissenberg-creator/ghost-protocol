@@ -18,7 +18,6 @@ import {
   kurzlinkAnzeige,
   maskiert,
   maskiertWert,
-  pruefauftragAnzeige,
   snapshotEtikett,
   snapshotWert,
   urteilAnzeige,
@@ -31,8 +30,6 @@ import type { BelegEintrag } from "@/components/studio/beleg-hilfen";
 // COUNSEL-Prüfungen mit geschätzten Kosten (R2: Vorprüfung des SCRIBE-Texts, Endprüfung des
 // Freigabetexts) und das aufgelöste Ziel des Kurzlinks samt Ergebnis der Textprüfung (E12). Zeilen ohne
 // diese Felder rendern unverändert.
-// Nachtrag (10.11.2026): Die Zeile Regelpaket nennt zusätzlich die Kennung der Prüfanweisungen an COUNSEL
-// (metadata.pruefauftrag, pruefauftragAnzeige) — Läufe mit verschiedenen Anweisungen sind so unterscheidbar.
 
 export function BelegZeile({ titel, vermerk, children }: { titel: string; vermerk?: string; children: ReactNode }) {
   return (
@@ -64,7 +61,6 @@ export function BelegKette({
   const anzeige = urteilAnzeige(counsel.urteil, lage.bezug);
   const counselUnvollstaendig = alsObjekt(meta.fehler)?.stufe === "counsel";
   const regel = alsObjekt(meta.regelpaket);
-  const pruefauftrag = pruefauftragAnzeige(meta);
   const snapshot = alsObjekt(meta.objekt_snapshot);
   const snapshotObjekt = alsObjekt(snapshot?.objekt);
   const exportKopf = alsObjekt(snapshot?.export);
@@ -157,12 +153,6 @@ export function BelegKette({
           </p>
         ) : (
           <p>nicht gespeichert (Lauf vor Stufe 1)</p>
-        )}
-        {/* Nachtrag Paket B: Prüfanweisungen außerhalb des Regelpakets (Urteilsform, Prüfpunkt Datierung) als Kennung. */}
-        {pruefauftrag && (
-          <p className="font-[family-name:var(--font-jbmono)] break-all" title={pruefauftrag.umfang ?? undefined} data-pruefauftrag>
-            {pruefauftrag.text}
-          </p>
         )}
       </BelegZeile>
 

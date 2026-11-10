@@ -1872,7 +1872,7 @@ test("P-P25 Textregel-Befunde einzeln (Gegenprüfung PR #10, DAT-4/B2): bei vier
   assert.equal(seite.vermerkText({ grund: "G", befunde: [`Befund ${NAME}`] }), `G (Befund ${regeln.NAMENS_ERSATZ})`);
 });
 
-test("P-P26 Auftragskennung (Gegenprüfung PR #10, B3): metadata.pruefauftrag belegt die Prüfanweisungen an COUNSEL — Hash über Kopf beider Aufträge, Prüfpunkt und Urteilsform; mit und ohne Prüfpunkt verschieden, in der Beleg-Kette sichtbar", async () => {
+test("P-P26 Auftragskennung (Gegenprüfung PR #10, B3): metadata.pruefauftrag belegt die Prüfanweisungen an COUNSEL — Hash über Kopf beider Aufträge, Prüfpunkt und Urteilsform; mit und ohne Prüfpunkt verschieden, ab dem ersten Schreiben in der Zeile", async () => {
   const { createHash } = await import("node:crypto");
   /** Kennung aus den tatsächlich gesendeten COUNSEL-Aufträgen nachgerechnet: [Kopf vor, Kopf end, Prüfpunkt, Schluss]. */
   const nachgerechnet = () => {
@@ -1920,17 +1920,6 @@ test("P-P26 Auftragskennung (Gegenprüfung PR #10, B3): metadata.pruefauftrag be
   assert.equal(abbruch.body.status, "fehler");
   assert.deepEqual(zeile(abbruch.body.contentId).metadata.pruefauftrag, p);
 
-  // Beleg-Kette: Zeile Regelpaket nennt die Kennung; Läufe davor und unlesbare Kennungen zeigen nichts
-  const html = ketteHtml(mit);
-  assert.ok(html.includes(`data-pruefauftrag="true">Prüfauftrag COUNSEL ${p.kennung} · mit Prüfpunkt Datierung</p>`), html.slice(0, 800));
-  assert.ok(ketteHtml(ohne).includes(`>Prüfauftrag COUNSEL ${ohne.metadata.pruefauftrag.kennung}</p>`));
-  // Fail-closed: „mit Prüfpunkt Datierung“ nur bei ausdrücklichem true (metadata kommt ungeprüft aus der DB)
-  for (const unklar of [{ kennung: p.kennung }, { kennung: p.kennung, datierung_pruefpunkt: "ja" }, { kennung: p.kennung, datierung_pruefpunkt: 1 }]) {
-    const k = ketteHtml({ ...mit, metadata: { ...mit.metadata, pruefauftrag: unklar } });
-    assert.ok(k.includes(`>Prüfauftrag COUNSEL ${p.kennung}</p>`), JSON.stringify(unklar));
-  }
-  for (const pruefauftrag of [undefined, null, "x", { kennung: "abc" }, { kennung: `${p.kennung}0` }, { kennung: NAME }, { kennung: "ABCDEF0123456789" }]) {
-    const k = ketteHtml({ ...mit, metadata: { ...mit.metadata, pruefauftrag } });
-    assert.ok(!k.includes("data-pruefauftrag") && !k.includes("Prüfauftrag COUNSEL"), JSON.stringify(pruefauftrag));
-  }
+  // Die Beleg-Kette zeigt die Kennung nicht: Die Studio-Bausteine (components/studio/) baut Paket C um, dieser Nachtrag
+  // lässt sie unverändert. Die Kennung steht in metadata.pruefauftrag und damit im Beleg der Zeile.
 });

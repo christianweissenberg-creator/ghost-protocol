@@ -43,7 +43,7 @@ const fake = await import("./harness/fake.mjs");
 const { welt, legeAn, zuruecksetzen } = fake;
 fake.installiere();
 const { React, jsxRuntime, renderToStaticMarkup, ladeTsx, baumLaufzeit, finde, text, ts } = await import("./harness/tsx.mjs");
-const { ladeStudioBausteine, hookLaufzeit, alsMarkup } = await import("./harness/studio.mjs");
+const { ladeStudioBausteine, hookLaufzeit } = await import("./harness/studio.mjs");
 const { NextRequest } = await import("next/server");
 const regeln = await import("../src/lib/freigabe-regeln.ts");
 const counsel = await import("../src/lib/counsel-urteil.ts");
@@ -566,11 +566,10 @@ async function ansicht() {
   });
 }
 
-/** Ansicht als Markup; extra: weitere Props der Seite (seit dem Nachtrag Paket B neuLaden, laedtNeu). */
-async function studioHtml(antwort, slug = SLUG, extra = {}) {
+async function studioHtml(antwort, slug = SLUG) {
   const V = await ansicht();
   return renderToStaticMarkup(
-    React.createElement(V.StudioAnsicht, { slug, lesung: { art: "daten", antwort }, kopiere: () => {}, kopierStatus: () => "Kopieren", ...extra }),
+    React.createElement(V.StudioAnsicht, { slug, lesung: { art: "daten", antwort }, kopiere: () => {}, kopierStatus: () => "Kopieren" }),
   );
 }
 
@@ -690,16 +689,13 @@ test("S-C6 Seite: Maskierung — kein geschützter Name im Markup, auch nicht au
 
 test("S-C7 Seite: keine Knöpfe, die etwas auslösen; Regeln mit Fundstellen, darunter der Bauträger — ohne Namen", async () => {
   gemessenerStand();
-  // Wie die Seite sie rendert: mit neuLaden (Nachtrag Paket B).
-  const html = await studioHtml((await hole()).body, SLUG, { neuLaden: () => {} });
+  const html = await studioHtml((await hole()).body);
   const t = sichtbar(html);
-  // Knöpfe: "Kopieren" des CTA-Links in den Beleg-Ketten (wie /content), seit Schritt 6 genau ein
-  // "Alle prüfen" im Anker-Panel (prüft die Anker neu, ohne bezahlte Aufrufe) und seit dem Nachtrag Paket B genau ein
-  // "Neu laden" (liest den Stand der Seite neu, nur lesend) — keiner sonst.
+  // Knöpfe: "Kopieren" des CTA-Links in den Beleg-Ketten (wie /content) und seit Schritt 6 genau ein
+  // "Alle prüfen" im Anker-Panel (prüft die Anker neu, ohne bezahlte Aufrufe) — keiner sonst.
   const knoepfe = [...html.matchAll(/<button[^>]*>(.*?)<\/button>/g)].map((m) => m[1]);
   assert.equal(knoepfe.filter((k) => k === "Alle prüfen").length, 1, knoepfe.join(" | "));
-  assert.equal(knoepfe.filter((k) => k === "Neu laden").length, 1, knoepfe.join(" | "));
-  assert.ok(knoepfe.every((k) => k === "Kopieren" || k === "Alle prüfen" || k === "Neu laden"), knoepfe.join(" | "));
+  assert.ok(knoepfe.every((k) => k === "Kopieren" || k === "Alle prüfen"), knoepfe.join(" | "));
   const panel = /<section[^>]*data-anker-panel[^>]*>.*?<\/section>/s.exec(html)?.[0] ?? "";
   assert.match(panel, /<button[^>]*data-alle-pruefen[^>]*>Alle prüfen<\/button>/);
   for (const verboten of ["Neues Asset", "Text erzeugen", ">Freigeben</button>", "Video einspielen"]) {
@@ -1115,154 +1111,6 @@ test("S-N10 (SI-1) Seite: Die Kennung aus useParams wird kodiert — kein Pfadwe
       s.lz.rendere();
       assert.equal(f.abrufe[f.abrufe.length - 1].url, url, roh);
     }
-  } finally {
-    globalThis.fetch = vorher;
-  }
-});
-
-// ═══ Nachtrag Paket B (10.11.2026): Stand der Seite und „Neu laden“ ═══
-// Die Seite las nur beim Öffnen; eine Zeile, die während eines Laufs entstand, stand bis zum Neuladen des Tabs als
-// „Entwurf, gesperrt: COUNSEL-Urteil UNKLAR (kein Text)“ da. Lösung: Stand-Zeile mit Zeitpunkt und Knopf, kein Takt.
-
-/** Laufender Lauf: Zeile 42 ist „entwurf“ ohne Text und Review (so legt die Pipeline sie beim Start an), 41 ist fertig. */
-function laufendeWelt() {
-  welt.objekteAntwort = exportAntwort([RITTERGUT]);
-  lauf(41, { status: "zur_freigabe", steps: NEU_VOLL, body: TEXT, review_notes: FREIGABE, am: "2026-11-10T13:00:00Z" });
-  lauf(42, { status: "entwurf", review_notes: null, am: "2026-11-10T14:04:00Z" });
-}
-const STAND_TEXT =
-  "Stand 10.11.2026 15:05:00 (Europe/Berlin) · Die Seite lädt nicht von selbst nach: Was danach geschieht, etwa ein laufender " +
-  "Content-Lauf, zeigt „Neu laden“.";
-const ENTWURF_HINWEIS = "Lauf beim Laden der Seite nicht abgeschlossen — er läuft noch oder brach ohne Vermerk ab. Das Ergebnis zeigt „Neu laden“.";
-const studioKarte = (html, id) => new RegExp(`<article[^>]*data-asset="${id}".*?</article>`, "s").exec(html)?.[0] ?? "";
-
-test("S-N15 (Nachtrag Paket B) Ansicht: Stand-Zeile mit dem Zeitpunkt der Lesung und „Neu laden“, gesperrt während des Neuladens; eine Entwurf-Karte sagt, dass der Lauf beim Laden nicht fertig war", async () => {
-  laufendeWelt();
-  const body = { ...(await hole()).body, erzeugt_am: "2026-11-10T14:05:00Z" };
-  const html = await studioHtml(body, SLUG, { neuLaden: () => {} });
-  const t = sichtbar(html);
-  assert.ok(t.includes(STAND_TEXT), t.slice(0, 700));
-  assert.match(html, /<div class="[^"]*" data-stand="true" aria-busy="false">/);
-  assert.match(html, /<button type="button" aria-disabled="false" class="[^"]*min-h-11[^"]*" data-neu-laden="true">Neu laden<\/button>/);
-  assert.ok(html.indexOf("data-stand=") < html.indexOf('data-teil="objekt"'), "der Stand gilt für die ganze Seite: vor Kopf, Panel und Liste");
-  // Entwurf-Karte: Status und Sperre wie bisher (Server-Regel unverändert), dazu der Hinweis — nur an dieser Karte
-  const k12 = sichtbar(studioKarte(html, 42));
-  assert.ok(k12.includes("Entwurf") && k12.includes("gesperrt: COUNSEL-Urteil UNKLAR (kein Text)"), k12);
-  assert.ok(k12.includes(ENTWURF_HINWEIS), k12);
-  assert.ok(!studioKarte(html, 41).includes("data-entwurf-hinweis"));
-  assert.equal((html.match(/data-entwurf-hinweis/g) ?? []).length, 1);
-  // Während des Neuladens: alter Stand, „Lädt neu …“, Knopf gesperrt (aria-disabled, der Fokus bleibt)
-  const laedt = await studioHtml(body, SLUG, { neuLaden: () => {}, laedtNeu: true });
-  assert.ok(sichtbar(laedt).includes(`${STAND_TEXT} Lädt neu …`), sichtbar(laedt).slice(0, 700));
-  assert.match(laedt, /data-stand="true" aria-busy="true"/);
-  assert.match(laedt, /<button type="button" aria-disabled="true"[^>]*data-neu-laden="true">Lädt …<\/button>/);
-  // Ohne neuLaden (statische Ansicht): der Stand, kein Knopf
-  const statisch = await studioHtml(body);
-  assert.ok(sichtbar(statisch).includes(STAND_TEXT));
-  assert.ok(!statisch.includes("data-neu-laden"));
-  // Abweisung: der Knopf steht in der Fehlermeldung (erneut versuchen), ohne Stand-Zeile
-  const V = await ansicht();
-  const fehler = renderToStaticMarkup(
-    React.createElement(V.StudioAnsicht, {
-      slug: SLUG,
-      lesung: V.leseStudioAntwort(500, { fehler: "Studio nicht ermittelbar: Boom" }),
-      kopiere: () => {},
-      kopierStatus: () => "Kopieren",
-      neuLaden: () => {},
-    }),
-  );
-  assert.match(fehler, /role="alert"[^>]*>.*Studio nicht ermittelbar: Boom \(HTTP 500\).*data-neu-laden="true">Neu laden<\/button>/s);
-  assert.ok(!fehler.includes("data-stand="));
-});
-
-/** Seite mit der echten Ansicht in einer Hook-Laufzeit: Klicks gehen an den echten Knopf. */
-async function seiteMitAnsicht() {
-  const lz = hookLaufzeit();
-  const LinkLz = ({ href, children, ...rest }) => lz.jsx("a", { href, ...rest, children });
-  const studio = ladeStudioBausteine({ ...lz.attrappen, "@/lib/counsel-urteil": counsel, "@/lib/freigabe-regeln": regeln });
-  const V = ladeTsx("components/studio/StudioAnsicht.tsx", {
-    ...lz.attrappen,
-    ...studio.module,
-    "next/link": { __esModule: true, default: LinkLz },
-    "@/lib/hooks-status": hooksStatus,
-    "@/lib/types": types,
-    "@/lib/studio/objekte": await objekteModul(),
-    "@/lib/studio/regeln": await regelnStudio(),
-  });
-  const seite = ladeTsx("app/studio/[objekt]/page.tsx", {
-    ...lz.attrappen,
-    "next/navigation": { useParams: () => ({ objekt: SLUG }) },
-    "@/components/studio/StudioAnsicht": V,
-    "@/components/studio/beleg-hilfen": studio.hilfen,
-  });
-  lz.setzeWurzel(seite.default);
-  return lz;
-}
-
-test("S-N16 (Nachtrag Paket B) Seite: „Neu laden“ holt genau eine Lesung je Klick, kein Takt; während der Lesung bleibt der alte Stand und weitere Klicks zählen nicht; danach gilt die neue Lesung, auch ein Fehler", async () => {
-  laufendeWelt();
-  const vorLauf = { ...(await hole()).body, erzeugt_am: "2026-11-10T14:05:00Z" };
-  // Der Lauf endet: Zeile 42 steht danach zur Freigabe
-  const z42 = welt.content.find((z) => z.id === 42);
-  Object.assign(z42, { status: "zur_freigabe", body: TEXT, review_notes: FREIGABE, metadata: { ...z42.metadata, steps: NEU_VOLL } });
-  const nachLauf = { ...(await hole()).body, erzeugt_am: "2026-11-10T14:09:30Z" };
-
-  const studioAbrufe = [];
-  const ankerAbrufe = [];
-  const vorher = globalThis.fetch;
-  globalThis.fetch = (url, init) =>
-    new Promise((ok) => {
-      const eintrag = { url, init, antworte: (status, daten) => ok({ status, json: async () => daten }) };
-      (String(url).endsWith("/anker") ? ankerAbrufe : studioAbrufe).push(eintrag);
-    });
-  try {
-    const lz = await seiteMitAnsicht();
-    const knopf = (baum) => finde(baum, (k) => k.type === "button" && k.props["data-neu-laden"])[0];
-    const karte42 = (baum) => sichtbar(alsMarkup(finde(baum, (k) => k.type === "article" && k.props["data-asset"] === 42)));
-    let baum = lz.rendere();
-    assert.equal(studioAbrufe.length, 1, "eine Lesung beim Aufbau");
-    studioAbrufe[0].antworte(200, vorLauf);
-    baum = await lz.ruhe();
-    let t = sichtbar(alsMarkup(baum));
-    assert.ok(t.includes(STAND_TEXT), t.slice(0, 600));
-    assert.ok(karte42(baum).includes("gesperrt: COUNSEL-Urteil UNKLAR (kein Text)") && karte42(baum).includes(ENTWURF_HINWEIS));
-    // Kein Takt: auch nach vielen Runden keine zweite Lesung
-    baum = await lz.ruhe(60);
-    assert.equal(studioAbrufe.length, 1, "kein Takt");
-    assert.equal(ankerAbrufe.length, 1, "Anker-Panel: eine Prüfung beim Aufbau");
-    // Klick: genau eine Lesung (gleiche Adresse, ohne Cache); der alte Stand bleibt sichtbar, der Knopf ist gesperrt
-    assert.equal(knopf(baum).props["aria-disabled"], false);
-    knopf(baum).props.onClick();
-    baum = await lz.ruhe();
-    assert.equal(studioAbrufe.length, 2);
-    assert.deepEqual([studioAbrufe[1].url, studioAbrufe[1].init.cache], ["/api/studio/rittergut-seifersdorf", "no-store"]);
-    t = sichtbar(alsMarkup(baum));
-    assert.ok(t.includes(`${STAND_TEXT} Lädt neu …`), t.slice(0, 600));
-    assert.ok(karte42(baum).includes(ENTWURF_HINWEIS), "bis zur Antwort der alte Stand");
-    assert.equal(knopf(baum).props["aria-disabled"], true);
-    assert.equal(text(knopf(baum)), "Lädt …");
-    knopf(baum).props.onClick();
-    baum = await lz.ruhe();
-    assert.equal(studioAbrufe.length, 2, "Klick während der Lesung ignoriert");
-    assert.equal(studioAbrufe[1].init.signal.aborted, false);
-    // Neue Lesung: Lauf 42 ist fertig, die Karte zeigt es
-    studioAbrufe[1].antworte(200, nachLauf);
-    baum = await lz.ruhe();
-    t = sichtbar(alsMarkup(baum));
-    assert.ok(t.includes("Stand 10.11.2026 15:09:30 (Europe/Berlin)") && !t.includes("Lädt neu"), t.slice(0, 600));
-    assert.ok(karte42(baum).includes("Zur Freigabe") && !karte42(baum).includes("Lauf beim Laden"), karte42(baum));
-    assert.equal(knopf(baum).props["aria-disabled"], false);
-    assert.equal(ankerAbrufe.length, 1, "Neu laden prüft die Anker nicht neu");
-    // Fehler beim Neuladen: die neue Lesung gilt — kein alter Stand unter einer Fehlermeldung; der Knopf bleibt
-    knopf(baum).props.onClick();
-    baum = await lz.ruhe();
-    studioAbrufe[2].antworte(500, { fehler: "Studio nicht ermittelbar: Boom", fehler_art: "programmfehler" });
-    baum = await lz.ruhe();
-    t = sichtbar(alsMarkup(baum));
-    assert.ok(t.includes("Studio nicht lesbar Studio nicht ermittelbar: Boom (HTTP 500)"), t.slice(0, 600));
-    assert.ok(!t.includes("Stand 10.11.2026"));
-    assert.equal(text(knopf(baum)), "Neu laden");
-    assert.equal(studioAbrufe.length, 3);
   } finally {
     globalThis.fetch = vorher;
   }

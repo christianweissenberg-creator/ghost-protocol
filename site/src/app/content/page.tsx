@@ -31,7 +31,6 @@ import {
   maskiert,
   maskiertWert,
   urteilAnzeige,
-  vermerkDetail,
   zeitText,
 } from "@/components/studio/beleg-hilfen";
 import type { ContentMetadata, CounselVermerk, FassungsBezug, FreigabeLage, Vermerk } from "@/components/studio/beleg-hilfen";
@@ -392,6 +391,19 @@ function ohne<T>(eintraege: Record<number, T>, id: number): Record<number, T> {
   const kopie = { ...eintraege };
   delete kopie[id];
   return kopie;
+}
+
+/**
+ * Detail eines Fehler- oder Warnvermerks für die Anzeige (Nachtrag Paket B, 10.11.2026): Trägt er die Befunde einer
+ * Textprüfung einzeln (metadata.fehler.befunde, je höchstens 160 Zeichen, api/content/pipeline), stehen alle da — das
+ * Feld detail ist auf 160 Zeichen gekürzt und verlor bei drei und mehr Befunden den letzten. Sonst detail; null ohne
+ * beides. Nicht maskiert (das tut der Aufrufer). Hier statt in components/studio/beleg-hilfen.ts: Die Studio-Dateien
+ * baut Paket C um, dieser Nachtrag lässt sie unverändert.
+ */
+function vermerkDetail(v: { detail?: unknown; befunde?: unknown }): string | null {
+  const befunde = Array.isArray(v.befunde) ? v.befunde.filter((b): b is string => typeof b === "string" && b.trim() !== "") : [];
+  if (befunde.length > 0) return befunde.join("; ");
+  return typeof v.detail === "string" && v.detail ? v.detail : null;
 }
 
 /**
