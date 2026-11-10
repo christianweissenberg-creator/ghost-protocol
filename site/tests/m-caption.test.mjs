@@ -466,6 +466,34 @@ test("M-C7 Ohne medium_id: keine Abfrage auf studio_medium, keine Pflichtzeile, 
   }
 });
 
+test("M-C11 Caption-Lauf (Nachtrag d2-text-erzeugen-2): Für jede Kanal-Wahl von „Text erzeugen“ bekommt SCRIBE die Anweisungen für eine Caption zu einem fertigen Video — kein Video-Skript, keine Schnitt- oder Einblendmarken (kein „-Skript“, „[B-ROLL]“, „[TEXTOVERLAY]“) in irgendeinem Auftrag; die Pflichtzeile bleibt einmal als eigene Zeile", async () => {
+  const wahlen = [["instagram", "reel", "Schreibe die Caption zu einem fertigen Instagram-Reel:"], ["tiktok", "tiktok_short", "Schreibe die Caption zu einem fertigen TikTok-Video:"], ["youtube", "short", "Schreibe Titel und Beschreibung zu einem fertigen YouTube-Short:"], ["x", "thread", "Schreibe den Text zu einem fertigen Video auf X im Steinadel-Ton"], ["linkedin", "linkedin_post", "Schreibe den Begleittext zu einem fertigen Video auf LinkedIn"]];
+  for (const [platform, format, kopf] of wahlen) {
+    zuruecksetzen();
+    welt.pipelineModul = pipeline;
+    exportMit(RITTERGUT);
+    medien();
+    agenten();
+    const r = await pipePost({ ...LAUF, platform, format, medium_id: EXPORT_ID });
+    assert.equal(r.status, 200, `${platform}: ${JSON.stringify(r.body).slice(0, 300)}`);
+    const scribe = auftrag("scribe");
+    assert.ok(scribe.includes(`ANWEISUNGEN:\n${kopf}`), `${platform}: ${scribe.slice(scribe.indexOf("ANWEISUNGEN"), scribe.indexOf("ANWEISUNGEN") + 200)}`);
+    assert.ok(scribe.includes("- Das Video existiert schon: ein kurzer, fertiger Clip."), platform);
+    assert.equal(pflichtzeilen(scribe), 1, `${platform}: Pflichtzeile einmal als eigene Zeile`);
+    if (platform === "x" || platform === "linkedin") assert.ok(scribe.includes(`CTA mit EXAKT diesem Link: ${linkAusAuftrag(scribe)}`), `${platform}: CTA-Link wie in den Plattform-Anweisungen`);
+    for (const a of welt.aktivierungen) {
+      for (const marke of ["-Skript", "[B-ROLL]", "[TEXTOVERLAY]", "[TRANSITION]", "Trending"]) assert.ok(!a.task.includes(marke), `${platform}: ${a.agent} ohne „${marke}“`);
+    }
+  }
+  // Gegenprobe ohne medium_id: die Anweisungen eines neuen Beitrags wie bisher (der Zeichenvergleich aller Aufträge steht im PR).
+  zuruecksetzen();
+  welt.pipelineModul = pipeline;
+  exportMit(RITTERGUT);
+  agenten();
+  await pipePost({ ...LAUF, platform: "tiktok", format: "tiktok_short" });
+  assert.ok(auftrag("scribe").includes("Schreibe ein TikTok-Skript (TikTok Short (30-60 Sek)):"));
+});
+
 // ═══ „Text erzeugen“ im Studio (Nachbesserung Paket C, Auftrag C) ═══
 
 test("M-C8 „Text erzeugen“: erst die Bestätigung mit „bezahlter Lauf (Claude)“ — nichts gesendet; „Ja, bezahlten Lauf starten“ sendet genau einen Lauf mit Objekt, medium_id und Lauf-ID an die echte Pipeline (Agenten-Attrappe, nichts Bezahltes); ein zweiter Klick sendet nicht doppelt; nach verlorener Antwort dieselbe Lauf-ID → 409 statt zweitem Lauf", async () => {

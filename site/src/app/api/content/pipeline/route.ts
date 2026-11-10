@@ -602,6 +602,59 @@ const CAPTION_AUFTRAG =
   "- Die Caption enthält diese Pflichtzeile wörtlich als eigene Zeile, Zeichen für Zeichen, ohne Formatierung und ohne Zusatz in derselben Zeile:\n" +
   KI_PFLICHTZEILE_CAPTION;
 
+/**
+ * Anweisungen an SCRIBE für die Caption zu einem vorhandenen Video (Paket C, Nachtrag d2-text-erzeugen-2). Das Video ist
+ * fertig; SCRIBE schreibt nur den Text, der damit gepostet wird. Sie ersetzen bei medium_id die Anweisungen für einen
+ * neuen Beitrag (platformInstructions: Video-Skripte mit Schnitt- und Einblendmarken, Reel von 30-90 Sekunden, Thread
+ * aus 6-7 Tweets). Je Plattform: Form und Länge, CTA wie in den Plattform-Anweisungen, Hashtags; dazu keine Marken für
+ * Schnitt, Szene, Einblendung oder Ton. Die Pflichtzeile steht in CAPTION_AUFTRAG. Läufe ohne medium_id bekommen
+ * weiter platformInstructions, zeichengleich.
+ */
+function captionAnweisungen(platform: string, objekt: boolean, ctaLink: string | null): string {
+  const cta = ctaLink ? `CTA mit EXAKT diesem Link: ${ctaLink}` : objekt ? "CTA ohne Link (kein Kampagnen-Link hinterlegt)" : "CTA ohne Link";
+  const xText = `Schreibe den Text zu einem fertigen Video auf X${objekt ? " im Steinadel-Ton (premium, editorial, ruhig, max 1 Emoji)" : ""}:
+- Ein Post von höchstens 270 Zeichen oder ein Thread aus 2-3 Posts im Stil "1/3", "2/3", ...; das Video hängt am ersten Post
+- Falls AfA/Steuerzahlen erwähnt werden: Modellrechnung-Disclaimer-Satz PFLICHT
+  ("Modellrechnung — individuelle steuerliche Wirkung abhängig von persönlicher
+  Situation und Behördenbescheinigung; keine Steuerberatung.")
+- Letzter Post: ${cta}
+- Höchstens 2 Hashtags`;
+  const form: Record<string, string> = {
+    instagram: `Schreibe die Caption zu einem fertigen Instagram-Reel:
+- Der erste Satz trägt allein (vor „… mehr“) und sagt, was das Video zeigt
+- Danach 2-4 kurze Sätze; ${cta}
+- Länge ohne Hashtags: höchstens 600 Zeichen
+- Am Ende höchstens 5 passende Hashtags`,
+    tiktok: `Schreibe die Caption zu einem fertigen TikTok-Video:
+- 1-3 kurze Sätze; der erste sagt, was das Video zeigt
+- ${cta}
+- Länge ohne Hashtags: höchstens 300 Zeichen
+- Am Ende 3-5 passende Hashtags`,
+    youtube: `Schreibe Titel und Beschreibung zu einem fertigen YouTube-Short:
+- Titel: höchstens 70 Zeichen, sachlich
+- Beschreibung: 2-4 Sätze, was das Video zeigt; ${cta}
+- Am Ende der Beschreibung 2-3 passende Hashtags`,
+    x: xText,
+    twitter: xText,
+    linkedin: `Schreibe den Begleittext zu einem fertigen Video auf LinkedIn (Fachton, premium, editorial, ruhig):
+- Zeile 1-2: was das Video zeigt, mit einer belegten Zahl oder einer sachlichen These
+- 2-3 kurze Absätze mit je 1-3 Sätzen, keine Reel-Ästhetik, höchstens 1 Emoji
+- Schluss: ${cta}
+- Höchstens 3 fachliche Hashtags am Ende
+- Länge: 500 bis 1.200 Zeichen`,
+  };
+  const allgemein = [
+    "- Das Video existiert schon: ein kurzer, fertiger Clip. Du schreibst nur den Text, der mit ihm gepostet wird — kein neues Video, keine Szenenfolge.",
+    "- Keine Marken für Schnitt, Szene, Einblendung oder Ton (nichts in eckigen Klammern), keine Vorschläge für Musik, Thumbnail oder Texteinblendungen.",
+    ...(objekt ? ["- Zahlen NUR aus den Objektdaten (siehe REGEL); nichts erfinden."] : []),
+    "- Die Pflichtzeile aus der AUFTRAGSART als eigene, letzte Zeile (nach den Hashtags).",
+  ];
+  return `${form[platform] ?? `Schreibe den Begleittext zu einem fertigen Video:
+- 2-4 kurze Sätze, was das Video zeigt; ${cta}
+- Höchstens 3 passende Hashtags`}
+${allgemein.join("\n")}`;
+}
+
 // Namensschutz (R24): Grund, mit dem ein Freigabetext mit geschütztem Namen endet.
 const NAMENSSCHUTZ_GRUND = "Namensschutz: Freigabetext enthält einen geschützten Namen";
 
@@ -1790,7 +1843,8 @@ format === "reel" ? `REEL (30-90 Sek):
     // einer Notiz, brach altersBefund den Lauf nach zwei bezahlten Aufrufen ab. Der Beleg (steps[0].output) bleibt
     // ungekürzt.
     // Paket C, Schritt 9: Bei einer Caption zu einem Video (medium_id) steht die Auftragsart mit der Pflichtzeile
-    // direkt unter Plattform und Kategorie (CAPTION_AUFTRAG); sonst ist der Auftrag unverändert.
+    // direkt unter Plattform und Kategorie (CAPTION_AUFTRAG); sonst ist der Auftrag unverändert. Seit dem Nachtrag
+    // d2-text-erzeugen-2 bekommt eine Caption eigene Anweisungen (captionAnweisungen) statt der für einen neuen Beitrag.
     await fuehreStufeAus(
       steps[1],
       `CONTENT-PRODUKTION: Schreibe Content zum Thema "${thema}".
@@ -1802,7 +1856,7 @@ RECHERCHE-ERGEBNISSE (von RESEARCHER):
 ${maskiereAlter(steps[0].output ?? "", datierung)}
 
 ANWEISUNGEN:
-${platformInstructions[platform] ?? platformInstructions.twitter}
+${mediumId !== null ? captionAnweisungen(platform, objekt !== null, ctaLink) : (platformInstructions[platform] ?? platformInstructions.twitter)}
 
 STILREGELN:
 - Tonalität: ${objekt ? "Steinadel — premium, editorial, ruhig" : "Professionell aber zugänglich, keine Corporate-Sprache"}
