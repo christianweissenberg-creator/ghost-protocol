@@ -702,7 +702,10 @@ test("MP-24 Stapel liest Videos in Sammelabfragen (Nachtrag d1-regression-1, d1-
   weitereVideos();
   const drei = await messen();
   pruefen(drei, [3, 13, 23]);
+  const vorStudio = welt.log.length;
   const studio = await (await studioRoute.GET(new NextRequest(`http://harness.local/api/studio/${SLUG}`, { headers: { cookie: "gp-auth=test" } }), { params: Promise.resolve({ objekt: SLUG }) })).json();
+  // Alle Videos gehören zum Objekt: Die Karte liest keine fremden Medien nach (Nachtrag d1-nachweis-3, F3).
+  assert.ok(!welt.log.slice(vorStudio).some((l) => l.tabelle === "studio_medium" && inListe(l.query, "id") !== undefined), "im Normalfall keine Abfrage nach fremden Medien");
   for (const id of ["50", "51", "52"]) {
     const eintrag = drei.s.wartend.find((e) => e.id === id);
     const karte = studio.assets.wert.find((a) => String(a.id) === id);
@@ -763,6 +766,27 @@ test("MP-26 leseKetten (Nachtrag d1-regression-1): je Medium dieselbe Kette wie 
     assert.equal(gestoert.get(43).original, null);
   } finally {
     welt.stoerung = null;
+  }
+});
+
+test("MP-27 Studio-Karte (Nachtrag d1-nachweis-3, F2): fremde Medien höchstens 25 je Anfrage nachgelesen — 26 Captions mit unbekannten Videos: 25 „nicht gefunden“, das mit der höchsten id „nicht ermittelt“, je wie im Stapel", async () => {
+  freigabenCache.setzeFreigabenZurueck();
+  video();
+  for (let i = 0; i < 26; i += 1) {
+    legeAn({ id: 200 + i, title: `Caption ${i}`, status: "zur_freigabe", body: CAPTION, review_notes: "URTEIL: FREIGABE-EMPFEHLUNG", metadata: captionMeta(101 + i) });
+  }
+  const vorher = welt.log.length;
+  const studio = await (await studioRoute.GET(new NextRequest(`http://harness.local/api/studio/${SLUG}`, { headers: { cookie: "gp-auth=test" } }), { params: Promise.resolve({ objekt: SLUG }) })).json();
+  const nachgelesen = welt.log.slice(vorher).filter((l) => l.tabelle === "studio_medium" && inListe(l.query, "id") !== undefined);
+  assert.equal(nachgelesen.length, 1);
+  assert.deepEqual(inListe(nachgelesen[0].query, "id"), Array.from({ length: 25 }, (_, i) => 101 + i), "höchstens 25, die kleinsten ids");
+  const { s } = await stapelEintrag();
+  for (let i = 0; i < 26; i += 1) {
+    const karte = studio.assets.wert.find((a) => a.id === 200 + i);
+    const eintrag = s.wartend.find((e) => e.id === String(200 + i));
+    const erwartet = i < 25 ? `Medium ${101 + i} nicht gefunden` : "Urteil der Medien-Regel nicht ermittelt";
+    assert.equal(karte.freigabe_sperre, erwartet, `Karte ${200 + i}`);
+    assert.equal(eintrag.freigabe_sperre, erwartet, `Stapel ${200 + i}`);
   }
 });
 
@@ -1056,6 +1080,29 @@ test("MP-18 Prüfansicht mit Video-Attrappe (Chrome-Verhalten): Zähler zählt d
   v2.zeige(1);
   v2.zeige(1);
   assert.equal(zaehler(), "2/108");
+});
+
+test("MP-18b Prüfansicht (Nachtrag d1-nachweis-5): Die Bildzahl kommt aus der Dauer des geladenen Videos, erst ohne sie aus dem Beleg — Beleg 2,53 s, Video 60 Bilder (2,5 s): der erste Rückschritt ab dem Ende trifft Bild 58", async () => {
+  video({ export: { dauer_s: 2.53 } });
+  const k = await kette();
+  assert.equal(k.export.dauer_s, 2.53);
+  const lz = hookLaufzeit();
+  const P2 = ladeStudioBausteine({ ...lz.attrappen, "@/lib/counsel-urteil": counsel, "@/lib/freigabe-regeln": regeln }).pruef;
+  lz.setzeWurzel(P2.PruefAnsicht, { slug: SLUG, kette: k, anker: HOF, dateiAdresse: (id) => `/x/${id}`, holen: async () => new Response("{}"), gespeichert: () => {} });
+  const ref = findeKnoten(lz.rendere(), (n) => n.type === "video").props.ref;
+  const v = videoAttrappe({ fps: 24, bilder: 60 });
+  ref.current = v;
+  lz.abbauen();
+  lz.wiederAufbauen();
+  const knopf = (attr) => findeKnoten(lz.rendere(), (n) => n.type === "button" && n.props[attr] !== undefined).props;
+  // Nach dem Beleg wären es 61 Bilder (2,53 × 24 gerundet), und der erste Druck bliebe am letzten Bild stehen.
+  v.currentTime = v.duration;
+  assert.equal(v.bild(), 59);
+  knopf("data-bild-zurueck").onClick();
+  assert.equal(v.bild(), 58);
+  knopf("data-bild-vor").onClick();
+  knopf("data-bild-vor").onClick();
+  assert.equal(v.bild(), 59, "vorwärts bleibt am letzten Bild des Videos");
 });
 
 

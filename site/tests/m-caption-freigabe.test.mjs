@@ -95,6 +95,14 @@ test("MCF-3 Beleg-Kette: Caption zu einem Video zeigt die Zeile „Video“ (Med
   assert.equal(lageOhne.pruefung.freigebbar, false);
   assert.equal(lageOhne.pruefung.grund, regeln.pflichtzeileFehlt(P));
   assert.equal(S.hilfen.freigabeLage(eintrag({})).medium, undefined, "Zeilen ohne Video behalten die bisherige Lage");
+  // null wie ein fehlender Schlüssel: kein Video, wie an den anderen drei Stellen (Nachtrag d1-nachweis-3) — ohne medium
+  // in der Lage, ohne Pflichtzeilen-Grund und ohne Zeile „Video“ in der Beleg-Kette.
+  const ohneSchluessel = S.hilfen.freigabeLage({ ...eintrag({ steps: [{ agent: "researcher", output: "r" }, { agent: "scribe", output: kurz }] }), body: kurz });
+  const mitNull = S.hilfen.freigabeLage({ ...eintrag({ medium_id: null, steps: [{ agent: "researcher", output: "r" }, { agent: "scribe", output: kurz }] }), body: kurz });
+  assert.equal(mitNull.medium, undefined);
+  assert.deepEqual(mitNull.pruefung, ohneSchluessel.pruefung);
+  assert.notEqual(mitNull.pruefung.grund, regeln.pflichtzeileFehlt(P));
+  assert.doesNotMatch(html(eintrag({ medium_id: null })), /data-beleg-medium/);
 });
 
 test("MCF-4 Freigabe-Stapel: Medien-Badge mit Video, Fassung, Hash-Anfang und Urteil der Medien-Regel (Gründe im title); ohne medium kein Badge", () => {
