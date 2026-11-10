@@ -680,8 +680,9 @@ test("Totmann: Plan wie scripts/setup-vps-crons.sh:21/:24/:27 (aus der Datei gel
     assert.match(j.fundstelle, /^GG\/decisions_log\.md Abschnitt 30\.07\.2026; /);
     assert.equal(j.grund, "Crons abgeschaltet (Betreiber-Entscheid)");
   }
-  // Prüfbefund B1: kein Beobachtungsfenster, solange Deploy und SQL nicht festgehalten sind.
-  assert.equal(NACHWEIS_SEIT, null);
+  // Prüfbefund B1: ein Beobachtungsfenster erst, wenn Deploy und SQL festgehalten sind — seit Objekt-Studio Paket C
+  // (Schritt 10, 10.11.2026): beides am 07.11.2026 (Europe/Berlin).
+  assert.equal(NACHWEIS_SEIT, "2026-11-07");
   assert.equal(NACHWEIS_TABELLE, "lauf_nachweis");
   assert.equal(JOB_AUTO_PRODUCE_PROBE, "content-auto-produce-probe");
   assert.ok(!TOTMANN_PLAN.some((j) => j.job === JOB_AUTO_PRODUCE_PROBE), "die Probe steht in keinem Plan");
@@ -699,7 +700,9 @@ test("Totmann §2.5: alle Jobs aus → bernstein, je Job 'aus' ohne Sollzeitpunk
     ],
   );
   assert.equal(b.wert.lesefehler, null);
-  assert.equal(b.wert.nachweis_seit, null);
+  assert.equal(b.wert.nachweis_seit, "2026-11-07");
+  // Der null-Zweig (nicht festgehalten) bleibt erreichbar: ausdrücklich übergeben.
+  assert.equal(bewerteTotmann(TOTMANN_PLAN, [], MO_1004, null, null).wert.nachweis_seit, null);
   // Prüfbefund B7: Der Grund steht auch in hinweis — den liest ein Client von vor dem Totmann.
   assert.equal(b.hinweis, ALLE_AUS);
   // Prüfbefund B10: Zeitzone und Karenz heißen Setzung, auch solange kein Job aktiv ist.
