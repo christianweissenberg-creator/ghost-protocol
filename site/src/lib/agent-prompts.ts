@@ -529,7 +529,13 @@ ${STEINADEL_REGELPAKET}`,
   amplifier: {
     model: AGENT_MODELLE.amplifier,
     // 2048: Distribution-Empfehlungen schnitten bei 1024 die letzte Zeile ab (E-Lauf 27.07.)
-    maxTokens: 2048,
+    // 4096 (Nachtrag Paket B, 10.11.2026): Im Abnahmelauf vom 10.11.2026 endete der Pipeline-Auftrag (7-Tage-Plan,
+    // Matrix und Entwürfe für sechs Plattformen) bei 2048 mit stop_reason max_tokens nach 4949 Zeichen, also rund
+    // 2,4 Zeichen je Token. Die Pipeline begrenzt den Plan seither auf ~900 Wörter (geschätzt ~6.300 Zeichen,
+    // ~2.600 Tokens); 4096 lässt dafür etwa 1,6-fachen Spielraum. Mehrkosten höchstens 2048 Tokens × 5 USD je
+    // Mio. (Haiku 4.5, lib/kosten.ts) ≈ 0,01 USD je Aufruf; berechnet werden nur erzeugte Tokens. Der Wert gilt
+    // für jeden AMPLIFIER-Aufruf über /api/agents/activate (dort max_tokens), nicht nur für die Pipeline.
+    maxTokens: 4096,
     systemPrompt: `${COMPANY_CONTEXT}
 
 Du bist AMPLIFIER — Tier 2, Growth & Distribution Director.

@@ -393,12 +393,29 @@ function ohne<T>(eintraege: Record<number, T>, id: number): Record<number, T> {
   return kopie;
 }
 
-/** Fehler- oder Warnvermerk lesbar machen; alte Zeilen haben einen Text statt Vermerk. Maskiert. */
+/**
+ * Detail eines Fehler- oder Warnvermerks für die Anzeige (Nachtrag Paket B, 10.11.2026): Trägt er die Befunde einer
+ * Textprüfung einzeln (metadata.fehler.befunde, je höchstens 160 Zeichen, api/content/pipeline), stehen alle da — das
+ * Feld detail ist auf 160 Zeichen gekürzt und verlor bei drei und mehr Befunden den letzten. Sonst detail; null ohne
+ * beides. Nicht maskiert (das tut der Aufrufer). Hier statt in components/studio/beleg-hilfen.ts: Die Studio-Dateien
+ * baut Paket C um, dieser Nachtrag lässt sie unverändert.
+ */
+function vermerkDetail(v: { detail?: unknown; befunde?: unknown }): string | null {
+  const befunde = Array.isArray(v.befunde) ? v.befunde.filter((b): b is string => typeof b === "string" && b.trim() !== "") : [];
+  if (befunde.length > 0) return befunde.join("; ");
+  return typeof v.detail === "string" && v.detail ? v.detail : null;
+}
+
+/**
+ * Fehler- oder Warnvermerk lesbar machen; alte Zeilen haben einen Text statt Vermerk. Maskiert. Nachtrag Paket B
+ * (10.11.2026): Ein Abbruch an einer Textregel nennt alle Befunde (befunde), nicht nur das gekürzte Detail.
+ */
 function vermerkText(v: unknown): string | null {
   if (typeof v === "string") return v.trim() ? maskiert(v) : null;
   if (!istObjekt(v) || typeof v.grund !== "string" || !v.grund) return null;
   const stufe = typeof v.stufe === "string" && v.stufe ? `${v.stufe.toUpperCase()}: ` : "";
-  const detail = typeof v.detail === "string" && v.detail ? ` (${v.detail})` : "";
+  const detailText = vermerkDetail(v);
+  const detail = detailText ? ` (${detailText})` : "";
   return maskiert(`${stufe}${v.grund}${detail}`);
 }
 
@@ -661,9 +678,11 @@ function flussHinweis(r: PipelineResult): string | null {
     const stufeRoh =
       typeof f?.stufe === "string" && f.stufe ? stufenName(f.stufe) : gescheitert ? stufenName(gescheitert.agent) : null;
     const stufe = stufeRoh === null ? null : maskiert(stufeRoh);
+    // Nachtrag Paket B: alle Befunde einer Textprüfung (vermerkDetail), sonst das Detail.
+    const detailRoh = f ? vermerkDetail(f) : null;
     const grundRoh =
       typeof f?.grund === "string" && f.grund
-        ? `${f.grund}${typeof f.detail === "string" && f.detail ? ` (${f.detail})` : ""}`
+        ? `${f.grund}${detailRoh ? ` (${detailRoh})` : ""}`
         : (gescheitert?.fehler ?? null);
     return `Abbruch${stufe ? ` in Stufe ${stufe}` : ""}: ${grundRoh ? maskiert(grundRoh) : "ohne Grund"}${offenText}`;
   }

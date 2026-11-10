@@ -157,6 +157,40 @@ test("Z-P1 Pipeline Ende-zu-Ende: jeder Protokollfehler von activate einzeln in 
   assert.ok(zeile(r.body.contentId).metadata.steps[0].protokoll_fehler.some((e) => e.startsWith("metrics-Insert")));
 });
 
+// Nachtrag Paket B (10.11.2026): AMPLIFIER endete im Abnahmelauf mit stop_reason max_tokens (4949 Zeichen bei 2048).
+// maxTokens steht je Agent in lib/agent-prompts.ts, activate schickt ihn als max_tokens; die Pipeline setzt ihn nicht.
+test("Z-AMP1 AMPLIFIER: max_tokens 4096 im Claude-Aufruf über activate, Auftrag mit Umfangsrahmen; die anderen Stufen unverändert", async () => {
+  activateWelt();
+  const antwort = welt.claude;
+  const jeStufe = {};
+  welt.claude = (anfrage) => {
+    (jeStufe[stufeAus(anfrage)] ??= []).push(anfrage.max_tokens);
+    return antwort(anfrage);
+  };
+  const r = await pipePost(TOPIC_LAUF);
+  assert.equal(r.body.status, "complete", JSON.stringify(r.body.fehler ?? null));
+  assert.deepEqual(jeStufe, { researcher: [12000], scribe: [8000], counsel: [4096, 4096], publisher: [12000], amplifier: [4096] });
+  const { AGENT_PROMPTS } = await import("../src/lib/agent-prompts.ts");
+  assert.equal(AGENT_PROMPTS.amplifier.maxTokens, 4096);
+  const amplifier = welt.aktivierungen.find((a) => a.agent === "amplifier").task;
+  assert.ok(
+    amplifier.endsWith(
+      "Liefere einen konkreten Aktionsplan mit fertigen Repurpose-Entwürfen.\nUMFANG: HALTE den Plan KOMPAKT (max. ~900 Wörter — je " +
+        "Repurpose-Entwurf höchstens 3 Sätze, keine langen Tabellen). Lieber jeden Teil kurz als einen Teil unvollständig.",
+    ),
+    amplifier.slice(-400),
+  );
+  // Ein abgeschnittener AMPLIFIER bleibt eine Warnung (keine Gate-Stufe), der Lauf bleibt complete — wie bisher.
+  zuruecksetzen();
+  welt.pipelineModul = pipeline;
+  activateWelt();
+  const normal = welt.claude;
+  welt.claude = (anfrage) => (stufeAus(anfrage) === "amplifier" ? claudeText("Plan, Tag 1 …", "max_tokens") : normal(anfrage));
+  const ab = await pipePost(TOPIC_LAUF);
+  assert.equal(ab.body.status, "complete");
+  assert.ok(ab.body.warnungen.some((w) => w.stufe === "amplifier" && w.grund === "Antwort abgeschnitten"));
+});
+
 test("Z-D1 delegate Ende-zu-Ende: protokoll_fehler je Eintrag mit Agentenpräfix (auch metrics-Insert)", async () => {
   activateWelt();
   const auftragId = "3f2b8c1e-4d5a-4b6c-8d7e-9f0a1b2c3d4e";
