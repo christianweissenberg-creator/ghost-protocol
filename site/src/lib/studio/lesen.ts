@@ -85,13 +85,16 @@ export function exportFehlerArt(httpStatus: number, fehler: string | null, fehle
   return "unbekannt";
 }
 
-/** Fehlerantwort von /api/objekte als Teil "fehler". Der Hinweis ist der Code der Route bzw. "HTTP <Status>". */
-export function exportFehlerAusAntwort(httpStatus: number, daten: unknown, versuchAm: string): StudioMesswert<ObjektKopf> {
+/**
+ * Fehlerantwort von /api/objekte als Teil "fehler". Der Hinweis ist der Code der Route bzw. "HTTP <Status>".
+ * Generisch seit Schritt 6 (10.11.2026): Auch der Cover-Abgleich der Anker-Prüfung liest den Export.
+ */
+export function exportFehlerAusAntwort<T = ObjektKopf>(httpStatus: number, daten: unknown, versuchAm: string): StudioMesswert<T> {
   const obj = istObjekt(daten) ? daten : null;
   const feld = obj ? (textOderNull(obj.fehler) ?? textOderNull(obj.error)) : null;
   const fehler = feld !== null && feld.trim() !== "" ? feld.trim() : null;
   const grund = httpStatus === 401 ? "HTTP 401" : (fehler ?? `HTTP ${httpStatus}`);
-  return teilFehler(QUELLE_EXPORT, versuchAm, exportFehlerArt(httpStatus, fehler, obj?.fehler_art), grund);
+  return teilFehler<T>(QUELLE_EXPORT, versuchAm, exportFehlerArt(httpStatus, fehler, obj?.fehler_art), grund);
 }
 
 /** Ganze Zahl aus dem Export (Zahl oder Ziffernfolge); sonst null. */

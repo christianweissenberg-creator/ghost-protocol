@@ -2,9 +2,11 @@
 //
 // Zeigt die Antwort von GET /api/studio/[objekt]: Objektkopf aus dem Steinadel-Export, Kennzahlen
 // (Assets, Claude-Kosten in USD), die Asset-Liste mit derselben Beleg-Kette wie /content und die
-// Regeln, die mitlaufen. Bereiche späterer Bauschritte stehen als "noch nicht gebaut (Schritt N)"
-// da — ohne Zahl. Keine Knöpfe, die etwas auslösen: Freigegeben wird im Content-Tab; einzig die
-// Beleg-Kette kopiert auf Wunsch den CTA-Link (wie auf /content).
+// Regeln, die mitlaufen. Seit Schritt 6 (10.11.2026) dazu das Anker-Panel (components/studio/
+// AnkerPanel.tsx) mit eigener Prüfung über GET /api/studio/[objekt]/anker. Bereiche späterer
+// Bauschritte stehen als "noch nicht gebaut (Schritt N)" da — ohne Zahl. Kein Knopf erzeugt, prüft mit
+// Kosten oder gibt frei: Freigegeben wird im Content-Tab; die Beleg-Kette kopiert auf Wunsch den
+// CTA-Link (wie auf /content), „Alle prüfen“ im Anker-Panel prüft die Anker neu (ohne bezahlte Aufrufe).
 // Jeder Text aus Export und Datenbank erscheint maskiert (der Server maskiert schon, die Ansicht
 // noch einmal). Jede Zahl trägt im title Quelle und Messzeitpunkt.
 // Zeitangaben des Studios stehen in Europe/Berlin mit Zonenangabe (wie die Zählung des Servers in
@@ -28,6 +30,7 @@ import type {
   StudioMesswert,
   StudioStatus,
 } from "@/lib/studio/typen";
+import { AnkerPanel } from "@/components/studio/AnkerPanel";
 import { BelegKette } from "@/components/studio/BelegKette";
 import {
   FARBE_BERNSTEIN,
@@ -518,8 +521,8 @@ export function StudioAnsicht({
           Objekt-<em>Studio</em>
         </h1>
         <p className="gp-sub">
-          Liest den Steinadel-Export und die Content-Läufe zu diesem Objekt. Das Studio erzeugt, prüft und postet nichts;
-          freigegeben wird im Content-Tab.
+          Liest den Steinadel-Export, die Content-Läufe und die Anker-Dateien zu diesem Objekt. Das Studio erzeugt und
+          postet nichts; es prüft nur die Anker gegen ihr Manifest. Freigegeben wird im Content-Tab.
         </p>
       </div>
 
@@ -558,12 +561,8 @@ export function StudioAnsicht({
         <>
           <ObjektKopfKarte m={lesung.antwort.objekt} slug={lesung.antwort.objekt_slug} />
           <Kennzahlen antwort={lesung.antwort} />
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8">
-            <NichtGebaut
-              titel="Anker-Material"
-              schritt={STUDIO_BAUSCHRITTE.anker}
-              text="Anker-Bilder mit Art, Maßen, Exposé-Seite und Hash-Abgleich gegen die ausgelieferten Dateien."
-            />
+          <AnkerPanel slug={lesung.antwort.objekt_slug} />
+          <div className="mb-8">
             <NichtGebaut
               titel="Video / Medien"
               schritt={STUDIO_BAUSCHRITTE.medien}
