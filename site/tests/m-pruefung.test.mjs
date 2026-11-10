@@ -578,7 +578,7 @@ test("MP-20 Studio-Karte fail-closed (Nachbesserung mutanten-3, caption9-2): Med
   }
 });
 
-test("MP-21 Stapel-Zwischenstand (Nachbesserung caption9-1, Nachtrag d1-regression-2): der Lesefehler eines Videos gilt höchstens 2 min — bis dahin aus dem Zwischenstand mit demselben Grund, danach liest die nächste Anfrage voll und nennt den richtigen Grund; die Medienkennung ist beantwortet, bevor die erste Medien-Zeile gelesen wird", async (t) => {
+test("MP-21 Stapel-Zwischenstand (Nachbesserung caption9-1, Nachtrag d1-regression-2, d2-stapel-3): der Lesefehler eines Videos gilt höchstens 90 s — bis dahin aus dem Zwischenstand mit demselben Grund, danach liest die nächste Anfrage voll und nennt den richtigen Grund; die Medienkennung ist beantwortet, bevor die erste Medien-Zeile gelesen wird", async (t) => {
   t.mock.timers.enable({ apis: ["Date"], now: Date.parse("2026-11-10T15:00:00.000Z") });
   const FEHLERSTAND = freigabenCache.FREIGABEN_FEHLERSTAND_MS;
   freigabenCache.setzeFreigabenZurueck();
@@ -600,11 +600,11 @@ test("MP-21 Stapel-Zwischenstand (Nachbesserung caption9-1, Nachtrag d1-regressi
   }
   t.mock.timers.tick(FEHLERSTAND - 1);
   const zwei = await stapelEintrag();
-  assert.equal(zwei.abfrage, "unveraendert", "der Fehlerstand gilt bis knapp 2 min");
+  assert.equal(zwei.abfrage, "unveraendert", "der Fehlerstand gilt bis knapp 90 s");
   assert.match(zwei.eintrag.freigabe_sperre, /^Medium 3 nicht lesbar: Verbindung abgebrochen \(einmalig\)/);
   t.mock.timers.tick(1);
   const drei = await stapelEintrag();
-  assert.equal(drei.abfrage, "voll", "nach 2 min liest die Route voll");
+  assert.equal(drei.abfrage, "voll", "nach 90 s liest die Route voll");
   assert.equal(drei.eintrag.freigabe_sperre, "Rechte laut Prüfprotokoll nicht geklärt");
   t.mock.timers.tick(FEHLERSTAND);
   const vier = await stapelEintrag();
@@ -780,7 +780,7 @@ test("MP-26 leseKetten (Nachtrag d1-regression-1): je Medium dieselbe Kette wie 
   }
 });
 
-test("MP-27 Studio-Karte (Nachtrag d1-nachweis-3, F2): fremde Medien höchstens 25 je Anfrage nachgelesen — 26 Captions mit unbekannten Videos: 25 „nicht gefunden“, das mit der höchsten id „nicht ermittelt“, je wie im Stapel", async () => {
+test("MP-27 Studio-Karte (Nachtrag d1-nachweis-3, F2): fremde Medien höchstens 25 je Anfrage nachgelesen — 26 Captions mit unbekannten Videos: 25 „nicht gefunden“, das mit der höchsten id „nicht ermittelt“, je wie im Stapel, solange dort keine weiteren Video-Captions stehen (d2-stapel-4 d)", async () => {
   freigabenCache.setzeFreigabenZurueck();
   video();
   for (let i = 0; i < 26; i += 1) {
@@ -817,7 +817,61 @@ test("MP-28 Stapel: Lesefehler der Prüfprotokolle eines Videos (Nachtrag d1-reg
   }
 });
 
-test("MP-25 Stapel bei dauerhaftem Medien-Lesefehler (Nachtrag d1-regression-2): höchstens eine volle Abfrage je 2 min — 11 Anfragen im Takt von 30 s lesen dreimal voll (bei 0, 2 und 4 min), jede Antwort nennt den Lesefehler", async (t) => {
+test("MP-29 Stapel (Nachtrag d2-stapel-1, d2-stapel-4 a): Die Protokolle je Video beginnen, bevor die erste Rundreise der Ketten endet (parallel, nicht danach); bei gestörten Protokollen zählt wie beim Freigeben zuerst gefunden, Objekt und Fassung", async () => {
+  video();
+  await pruefe(3, eingabe());
+  caption();
+  weitereVideos();
+  // Parallelität: Die erste Rundreise (Medien) wird angehalten; die Protokolle müssen schon vorher beginnen.
+  freigabenCache.setzeFreigabenZurueck();
+  const reihe = [];
+  let rundreise = 0;
+  welt.vorAntwort = async (a) => {
+    if (a.art !== "supabase") return;
+    if (a.tabelle === "studio_medium" && (rundreise += 1) === 1) {
+      reihe.push("kette1:start");
+      await new Promise((r) => setTimeout(r, 40));
+      reihe.push("kette1:ende");
+    } else if (a.tabelle === "studio_pruefung" && a.params.get("limit") !== "1") {
+      reihe.push(`protokoll:${a.params.get("medium_id")}`);
+    }
+  };
+  try {
+    assert.equal((await stapelEintrag()).abfrage, "voll");
+  } finally {
+    welt.vorAntwort = null;
+  }
+  const ende = reihe.indexOf("kette1:ende");
+  const protokolle = reihe.filter((x) => x.startsWith("protokoll:"));
+  assert.deepEqual(protokolle.sort(), ["protokoll:eq.13", "protokoll:eq.23", "protokoll:eq.3"]);
+  for (const p of protokolle) assert.ok(reihe.indexOf(p) < ende, `${p} vor dem Ende der ersten Rundreise: ${reihe.join(" → ")}`);
+  // Vorrang: Protokolle gestört — trotzdem erst nicht gefunden, fremdes Objekt, kein Export (wie mediumZurFreigabe).
+  for (const [metadata, grund] of [
+    [{ medium_id: 77 }, "Medium 77 nicht gefunden"],
+    [{ objekt_slug: "villa-x" }, "Medium 3 gehört nicht zum Objekt dieser Zeile"],
+    [{ medium_id: 2 }, "Medium ist kein Export"],
+    [{}, "Medium 3 nicht lesbar: Protokolle gestört"],
+  ]) {
+    zuruecksetzen();
+    freigabenCache.setzeFreigabenZurueck();
+    video();
+    await pruefe(3, eingabe());
+    caption(metadata);
+    welt.stoerung = (a) => (a.art === "supabase" && a.tabelle === "studio_pruefung" && a.params.get("limit") !== "1" ? { status: 500, body: { message: "Protokolle gestört" } } : null);
+    try {
+      const { eintrag } = await stapelEintrag();
+      assert.equal(eintrag.freigabe_sperre, grund, JSON.stringify(metadata));
+    } finally {
+      welt.stoerung = null;
+    }
+    if (grund !== "Medium 3 nicht lesbar: Protokolle gestört") {
+      const server = await freigeben(50);
+      assert.deepEqual([server.status, server.body.fehler], [409, grund], `Freigeben ${JSON.stringify(metadata)}`);
+    }
+  }
+});
+
+test("MP-25 Stapel bei dauerhaftem Medien-Lesefehler (Nachtrag d1-regression-2, d2-stapel-3): höchstens eine volle Abfrage je 90 s — 11 nacheinander laufende Anfragen im Takt von 30 s lesen viermal voll (bei 0, 90, 180 und 270 s), jede Antwort nennt den Lesefehler", async (t) => {
   t.mock.timers.enable({ apis: ["Date"], now: Date.parse("2026-11-10T15:00:00.000Z") });
   freigabenCache.setzeFreigabenZurueck();
   video();
@@ -836,9 +890,9 @@ test("MP-25 Stapel bei dauerhaftem Medien-Lesefehler (Nachtrag d1-regression-2):
   } finally {
     welt.stoerung = null;
   }
-  assert.deepEqual(arten.map((a, i) => (a === "voll" ? i * 30 : null)).filter((x) => x !== null), [0, 120, 240], arten.join(", "));
+  assert.deepEqual(arten.map((a, i) => (a === "voll" ? i * 30 : null)).filter((x) => x !== null), [0, 90, 180, 270], arten.join(", "));
   const volleContent = welt.log.slice(vorher).filter((l) => l.tabelle === "content" && /(?:^|&)select=[^&]*body/.test(l.query));
-  assert.equal(volleContent.length, 6, "drei volle Paare content (wartend und hängend)");
+  assert.equal(volleContent.length, 8, "vier volle Paare content (wartend und hängend)");
 });
 
 // ═══ Prüfansicht ═══

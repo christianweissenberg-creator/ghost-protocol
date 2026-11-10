@@ -300,6 +300,14 @@ export function fremdeMedienIds(assets: StudioAssetsTeil, medien: StudioMedienTe
  * Nachbesserung caption9-2 mit denselben Gründen wie Freigeben und Stapel: kein Export (Zeile dieses Objekts), fremdes
  * Objekt oder nicht gefunden (aus fremde, von der Route nachgelesen; ohne Lesung: nicht ermittelt). Ob eine Karte ein
  * Video hat, entscheidet mediumIdAus (null wie fehlend). Karten ohne Video bleiben unverändert.
+ *
+ * Bewusste Ausnahmen vom gleichen ersten Grund (Nachtrag d2-stapel-4, gemessen in der Delta-Prüfung; alle fail-closed):
+ * (b) Eine unlesbare Medien-Zeile irgendwo im Objekt macht den Teil medien zu „fehler“, die Karte sagt dann für jedes
+ *     Video „nicht ermittelt“, Stapel und Freigeben urteilen je Kette. (c) Fremde Medien liest die Route nur mit id,
+ *     Objekt und Fassung nach; ist eine fremde Zeile sonst unlesbar, sagt die Karte „gehört nicht zum Objekt“, der Stapel
+ *     „nicht lesbar“, das Freigeben 502. (d) Die Kappen auf 25 wählen verschiedene ids: der Stapel aus allen Video-Captions
+ *     des Stapels, die Karte nur aus den fremden ids dieses Objekts. (b) und (c) entstehen nur durch Schreiben an Pipeline
+ *     und App vorbei oder durch einen Datenbankfehler, (d) erst ab mehr als 25 Video-Captions.
  */
 export function mitMedienUrteil(assets: StudioAssetsTeil, medien: StudioMedienTeil, fremde: FremdeMedien = { art: "nicht_gelesen" }): StudioAssetsTeil {
   if (assets.wert === null) return assets;

@@ -990,7 +990,7 @@ test("FS-P13 Leerer Stapel: Auch ein leerer Zwischenstand gilt — die nächste 
   assert.deepEqual([anfragen(), fuenfte.kopf.get("x-freigaben-abfrage")], [PROBE, "unveraendert"], "wieder leer, nichts geändert: nur die Probe");
 });
 
-test("FS-P14 Kennung und Zwischenstand (lib/freigaben-cache.ts): je Liste Zählung, Reihenfolge, ids und updated_at; andere Spalten nicht; unlesbare Zeilen oder Zählungen → keine Kennung; gültig ab vollAm bis unter 30 min, mit dem Lesefehler eines Videos bis unter 2 min (Nachtrag d1-regression-2)", async () => {
+test("FS-P14 Kennung und Zwischenstand (lib/freigaben-cache.ts): je Liste Zählung, Reihenfolge, ids und updated_at; andere Spalten nicht; unlesbare Zeilen oder Zählungen → keine Kennung; gültig ab vollAm bis unter 30 min, mit dem Lesefehler eines Videos bis unter 90 s (Nachtrag d1-regression-2, d2-stapel-3)", async () => {
   const C = await zwischenstand();
   assert.equal(C.FREIGABEN_PROBE_SPALTEN, "id,updated_at,metadata->medium_id");
   assert.equal(C.FREIGABEN_ABFRAGE_HEADER, "x-freigaben-abfrage");
@@ -1036,11 +1036,11 @@ test("FS-P14 Kennung und Zwischenstand (lib/freigaben-cache.ts): je Liste Zählu
   C.merkeFreigaben(w, h, 5_000);
   C.setzeFreigabenZurueck();
   assert.equal(C.gueltigerFreigabenStand(5_000), null, "zurückgesetzt");
-  // Mit dem Lesefehler eines Videos: Höchstalter 2 min statt 30 min.
-  assert.equal(C.FREIGABEN_FEHLERSTAND_MS, 2 * 60_000);
+  // Mit dem Lesefehler eines Videos: Höchstalter 90 s statt 30 min (Nachtrag d2-stapel-3).
+  assert.equal(C.FREIGABEN_FEHLERSTAND_MS, 90_000);
   C.merkeFreigaben(w, h, 6_000, { kennung: "", daten: null }, C.FREIGABEN_FEHLERSTAND_MS);
-  assert.equal(C.gueltigerFreigabenStand(6_000 + C.FREIGABEN_FEHLERSTAND_MS - 1).gueltigMs, C.FREIGABEN_FEHLERSTAND_MS, "knapp unter 2 min");
-  assert.equal(C.gueltigerFreigabenStand(6_000 + C.FREIGABEN_FEHLERSTAND_MS), null, "2 min");
+  assert.equal(C.gueltigerFreigabenStand(6_000 + C.FREIGABEN_FEHLERSTAND_MS - 1).gueltigMs, C.FREIGABEN_FEHLERSTAND_MS, "knapp unter 90 s");
+  assert.equal(C.gueltigerFreigabenStand(6_000 + C.FREIGABEN_FEHLERSTAND_MS), null, "90 s");
 });
 
 // ═══ Mutationsprüfung (09.11.2026) ═══

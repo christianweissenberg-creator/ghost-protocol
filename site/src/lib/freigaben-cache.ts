@@ -44,9 +44,13 @@
 // geblieben. Medien-Zeilen ändern sich nie; ein neues Video an einer Zeile ändert deren updated_at. Der Zwischenstand
 // hält die gelesenen Medien mit, damit eine Antwort ohne volle Abfrage dieselben Urteile zeigt.
 //
-// Lesefehler eines Videos (Nachtrag d1-regression-2): Dann gilt der Zwischenstand nur FREIGABEN_FEHLERSTAND_MS (2 min)
-// statt FREIGABEN_VOLL_SPAETESTENS_MS. Der Fehler steht so höchstens 2 min im Stand (danach liest die Route voll und
-// nennt den dann richtigen Grund), und ein dauerhafter Fehler kostet höchstens eine volle Abfrage je 2 min.
+// Lesefehler eines Videos (Nachtrag d1-regression-2, Dauer seit d2-stapel-3): Dann gilt der Zwischenstand nur
+// FREIGABEN_FEHLERSTAND_MS (90 s) statt FREIGABEN_VOLL_SPAETESTENS_MS. Gezählt wird ab vollAm (kurz vor der vollen
+// Abfrage). Im 60-s-Takt eines Tabs findet so spätestens der zweite Abruf nach dem Fehler den Stand abgelaufen und liest
+// voll: Sichtbar bleibt der Fehler bis rund 2 min, „neu laden“ nach 90 s liest sofort voll. Ein dauerhafter Fehler kostet
+// höchstens eine volle Abfrage je 90 s — gilt für nacheinander laufende Anfragen. Gleichzeitige Anfragen (zwei Tabs, ein
+// Abruf beim Zurückkehren in einen Tab, während ein anderer noch voll liest) lesen beide voll; die volle Abfrage wird
+// nicht gebündelt (kein Single-Flight, Nachtrag d2-stapel-2: Hängend-Grenze und Uhr gelten je Anfrage).
 //
 // Nur die Route importiert diese Datei ("server-only"); kein Browser-Code erreicht sie (Wächter R5-W7 in
 // tests/r-content-waechter.test.mjs). Verhalten: tests/r-freigaben-probe.test.mjs.
@@ -57,8 +61,8 @@ import { contentKennung } from "./content-liste-cache";
 /** Höchstalter des Zwischenstands: Ist seine volle Abfrage so alt, liest die Route wieder voll — auch ohne erkannte Änderung. */
 export const FREIGABEN_VOLL_SPAETESTENS_MS = 30 * 60_000;
 
-/** Höchstalter eines Zwischenstands mit dem Lesefehler eines Videos (Nachtrag d1-regression-2). */
-export const FREIGABEN_FEHLERSTAND_MS = 2 * 60_000;
+/** Höchstalter eines Zwischenstands mit dem Lesefehler eines Videos (Nachtrag d1-regression-2; 90 s seit d2-stapel-3). */
+export const FREIGABEN_FEHLERSTAND_MS = 90_000;
 
 /** Spalten der Änderungsprobe; Filter, Sortierung, Grenzen und count "exact" wie bei der vollen Abfrage. */
 export const FREIGABEN_PROBE_SPALTEN = "id,updated_at,metadata->medium_id";
