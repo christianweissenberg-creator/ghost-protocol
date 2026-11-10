@@ -1230,7 +1230,8 @@ test("M-K3 Panel: Ein veralteter Lauf setzt keinen Stand; Abbrechen und Abbau be
   const { P } = t;
   const meldungen = [];
   const haengt = (_url, _datei, _kopf, o) => new Promise((_, nein) => o.signal.addEventListener("abort", () => nein(o.signal.reason)));
-  const r = await P.ladeHoch(SLUG, [{ rolle: "original", datei: alsDatei(ORIGINAL, "o.mp4", "video/mp4"), mime: "video/mp4" }], t.holen, (m) => meldungen.push(m), { senden: haengt, stillstandMs: 30 });
+  // Mit Frist im Test: Bricht die Frist des Panels nicht ab, scheitert der Test hier, statt die Suite hängen zu lassen.
+  const r = await binnen(P.ladeHoch(SLUG, [{ rolle: "original", datei: alsDatei(ORIGINAL, "o.mp4", "video/mp4"), mime: "video/mp4" }], t.holen, (m) => meldungen.push(m), { senden: haengt, stillstandMs: 30 }), 5_000, "Frist ohne Daten");
   assert.equal(r.art, "abgewiesen");
   assert.match(r.text, /^Upload von Original gescheitert: seit 0,03 s keine Daten übertragen — abgebrochen \(Netz\)$/);
   assert.equal(r.hinweis, P.HINWEIS_UPLOAD);
@@ -1317,6 +1318,134 @@ test("M-K5 Abgleich im Panel: Eingaben während der Messung gesperrt; das Ergebn
   tippe("y", "31");
   assert.equal(abgleichStand(), "bereit", "Rezept geändert → Ergebnis verworfen");
   assert.equal(findeEinen(t.baum(), (n) => n.props?.["data-abgleich-gemessen"] !== undefined), null);
+});
+
+test("M-K6 Upload im Browser (Nachbesserung oberflaeche-2): sendenPerXhr mit XMLHttpRequest-Attrappe — genau ein PUT auf die signierte URL mit allen Kopfzeilen, Fortschritt aus upload.onprogress, Abbruch über das Signal, Netzfehler; das Panel nimmt im Browser diesen Weg statt holen und fragt während des Laufs beim Verlassen der Seite nach (beforeunload)", async () => {
+  // Node hat kein XMLHttpRequest; die Attrappe bildet nur die genutzte Schnittstelle nach (open, setRequestHeader, send, abort, upload.onprogress, onload, onerror, onabort).
+  class XhrAttrappe {
+    static alle = [];
+    static beimSenden = null;
+    constructor() {
+      this.upload = {};
+      this.kopf = {};
+      this.geoeffnet = [];
+      this.status = 0;
+      this.responseText = "";
+      this.abgebrochen = 0;
+      XhrAttrappe.alle.push(this);
+    }
+    open(methode, url) {
+      this.geoeffnet.push([methode, url]);
+    }
+    setRequestHeader(k, v) {
+      this.kopf[k] = v;
+    }
+    send(body) {
+      this.body = body;
+      XhrAttrappe.beimSenden?.(this);
+    }
+    abort() {
+      this.abgebrochen += 1;
+      this.onabort?.();
+    }
+  }
+  const hatte = Object.hasOwn(globalThis, "XMLHttpRequest");
+  const vorher = globalThis.XMLHttpRequest;
+  const hatteFenster = Object.hasOwn(globalThis, "window");
+  const fensterVorher = globalThis.window;
+  globalThis.XMLHttpRequest = XhrAttrappe;
+  try {
+    const t = await panelLaufzeit();
+    const { P } = t;
+    const URL_ = "https://storage.invalid/object/upload/sign/medien/eingang/x.mp4?token=t";
+    const blob = new Blob([Buffer.alloc(1000)]);
+    // (a) Erfolg: ein open("PUT", url), alle Kopfzeilen, Fortschritt je Ereignis, Antwort mit Status und Text.
+    const gemeldet = [];
+    const p = P.sendenPerXhr(URL_, blob, { "content-type": "video/mp4", "x-upsert": "false" }, { signal: new AbortController().signal, fortschritt: (n) => gemeldet.push(n) });
+    const x = XhrAttrappe.alle.at(-1);
+    assert.deepEqual(x.geoeffnet, [["PUT", URL_]]);
+    assert.deepEqual(x.kopf, { "content-type": "video/mp4", "x-upsert": "false" });
+    assert.equal(x.body, blob, "die Datei selbst wird gesendet");
+    x.upload.onprogress({ loaded: 400 });
+    x.upload.onprogress({ loaded: 1000 });
+    x.status = 200;
+    x.responseText = '{"Key":"medien/eingang/x.mp4"}';
+    x.onload();
+    assert.deepEqual(await binnen(p, 2_000, "XHR-Antwort"), { status: 200, text: '{"Key":"medien/eingang/x.mp4"}' });
+    assert.deepEqual(gemeldet, [400, 1000]);
+    // (b) Abbruch über das Signal: der XHR wird abgebrochen, das Versprechen scheitert mit AbortError.
+    const ac = new AbortController();
+    const p2 = P.sendenPerXhr(URL_, blob, {}, { signal: ac.signal, fortschritt: () => {} });
+    const x2 = XhrAttrappe.alle.at(-1);
+    ac.abort();
+    await assert.rejects(binnen(p2, 2_000, "Abbruch des XHR"), (e) => e.name === "AbortError");
+    assert.equal(x2.abgebrochen, 1);
+    // (c) Schon abgebrochenes Signal: kein XHR, sofort AbortError.
+    const anzahl = XhrAttrappe.alle.length;
+    await assert.rejects(binnen(P.sendenPerXhr(URL_, blob, {}, { signal: AbortSignal.abort(), fortschritt: () => {} }), 2_000, "Abbruch vorab"), (e) => e.name === "AbortError");
+    assert.equal(XhrAttrappe.alle.length, anzahl, "kein XHR nach einem Abbruch");
+    // (d) Netzfehler: eigener Fehlertext.
+    const p4 = P.sendenPerXhr(URL_, blob, {}, { signal: new AbortController().signal, fortschritt: () => {} });
+    XhrAttrappe.alle.at(-1).onerror();
+    await assert.rejects(binnen(p4, 2_000, "Netzfehler"), /^Error: Netzfehler beim Upload$/);
+    // (e) Das Panel im Browser: Prüflauf über XHR (die Attrappe reicht den PUT an den Storage der Harness weiter), kein PUT über holen.
+    //     Dazu ein Fenster nur mit den Hörer-Methoden: Während des Laufs hängt das Panel einen beforeunload-Hörer an, danach nicht mehr.
+    const fenster = {
+      hoerer: new Set(),
+      addEventListener(typ, f) {
+        if (typ === "beforeunload") this.hoerer.add(f);
+      },
+      removeEventListener(typ, f) {
+        if (typ === "beforeunload") this.hoerer.delete(f);
+      },
+    };
+    globalThis.window = fenster;
+    XhrAttrappe.alle.length = 0;
+    let erstesTorAuf;
+    const erstesTor = new Promise((ja) => (erstesTorAuf = ja));
+    let ersterDa;
+    const ersterGesendet = new Promise((ja) => (ersterDa = ja));
+    XhrAttrappe.beimSenden = async (z) => {
+      if (XhrAttrappe.alle.length === 1) {
+        ersterDa();
+        await erstesTor;
+      }
+      const [methode, url] = z.geoeffnet[0];
+      const res = await fetch(url, { method: methode, headers: z.kopf, body: z.body });
+      z.upload.onprogress?.({ loaded: Math.floor(z.body.size / 2) });
+      z.upload.onprogress?.({ loaded: z.body.size });
+      z.status = res.status;
+      z.responseText = await res.text();
+      z.onload?.();
+    };
+    waehleDateien(t, { startbild: alsDatei(STARTBILD, "start.png", "image/png"), original: alsDatei(ORIGINAL, "original.mp4", "video/mp4"), export: alsDatei(EXPORT, "export.mp4", "video/mp4"), beleg: BELEG_DATEI() });
+    assert.equal(fenster.hoerer.size, 0, "vor dem Lauf keine Nachfrage");
+    knopf(t, "data-pruefen-knopf").props.onClick();
+    await binnen(ersterGesendet, 5_000, "erster XHR");
+    t.lz.rendere();
+    assert.equal(einspielStand(t), "laeuft");
+    assert.equal(fenster.hoerer.size, 1, "während des Laufs fragt der Browser beim Verlassen nach");
+    let verhindert = 0;
+    for (const f of fenster.hoerer) f({ preventDefault: () => (verhindert += 1) });
+    assert.equal(verhindert, 1, "der Hörer ruft preventDefault (Nachfrage des Browsers)");
+    erstesTorAuf();
+    await binnen((async () => { for (let i = 0; i < 400 && einspielStand(t) !== "vorschau" && einspielStand(t) !== "fehler"; i += 1) await t.lz.ruhe(2); })(), 10_000, "Vorschau über XHR");
+    assert.equal(einspielStand(t), "vorschau", textVon(findeEinen(t.baum(), (n) => n.props?.["data-medien-fehler"] !== undefined)));
+    assert.equal(XhrAttrappe.alle.length, 3, "Startbild, Original und Export je ein XHR");
+    for (const z of XhrAttrappe.alle) {
+      assert.equal(z.geoeffnet.length, 1);
+      assert.equal(z.geoeffnet[0][0], "PUT");
+      assert.match(new URL(z.geoeffnet[0][1]).pathname, /\/eingang\/[0-9a-f-]{36}\.(png|mp4)$/);
+      assert.equal(z.kopf["x-upsert"], "false");
+    }
+    assert.ok(!t.log.some(([m]) => m === "PUT"), "kein PUT über holen, wenn der Browser XMLHttpRequest hat");
+    assert.equal(fenster.hoerer.size, 0, "nach dem Lauf keine Nachfrage mehr");
+  } finally {
+    if (hatte) globalThis.XMLHttpRequest = vorher;
+    else delete globalThis.XMLHttpRequest;
+    if (hatteFenster) globalThis.window = fensterVorher;
+    else delete globalThis.window;
+  }
 });
 
 // ═══ Niedrige Befunde der Gegenprüfung (B): Eingaben, Grenzen, Harness, Testlücken ═══
