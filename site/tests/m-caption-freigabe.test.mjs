@@ -124,4 +124,6 @@ test("MCF-4 Freigabe-Stapel: Medien-Badge mit Video, Fassung, Hash-Anfang und Ur
   assert.match(html, new RegExp(`title="Medien-Regel: Rechte laut Prüfprotokoll nicht geklärt"[^>]*>Video #3 · export · ${"b".repeat(8)}… · Medien-Regel sperrt<`));
   assert.match(html, new RegExp(`>Video #4 · export · ${"c".repeat(8)}… · Medien-Regel erfüllt<`));
   assert.equal((html.match(/Medien-Regel (sperrt|erfüllt)</g) ?? []).length, 2, "kein Badge ohne medium");
+  // Auch kein leeres Badge (Mutant X66): Jede Plakette trägt Text.
+  assert.doesNotMatch(html, /uppercase"[^>]*><\/span>/, "kein leeres Badge");
 });

@@ -87,6 +87,15 @@ const FAELLE = [
   ["8 Startbild-Abgleich", kette({ startbild: { startbild_abgleich: "nicht_bestanden", startbild_abweichung_max: 7 } }), [protokoll()], "Startbild-Abgleich nicht bestanden (größte Abweichung 7)"],
   ["8 Startbild fehlt", kette({ startbild: null }), [protokoll()], "Startbild des Originals fehlt"],
   ["8 verschiedene Anker", kette({ startbild: { anker_id: "kein-anker" } }), [protokoll()], "Export, Original und Startbild nennen verschiedene Anker"],
+  // Teilprüfungen einzeln (Nachbesserung regel8-3, Mutanten R1–R5, B1, X32): je genau ein Grund.
+  ["1 Original ist kein Original", kette({ original: { fassung: "export" } }), [protokoll()], "Original des Exports fehlt"],
+  ["1 Original mit anderer id", kette({ original: { id: 9 } }), [protokoll()], "Original des Exports fehlt"],
+  ["1 job_id auf beiden Seiten leer", kette({ export: { job_id: null }, original: { job_id: null } }), [protokoll()], "Original und Export tragen nicht dieselbe job_id"],
+  ["7 von unter 0", kette({ export: { schnitt_von_s: -0.5 } }), [protokoll()], "Schnittfenster fehlt oder liegt nicht im Original (0 ≤ von < bis ≤ Dauer)"],
+  ["8 anderer Anker am Original", kette({ original: { anker_id: "kein-anker" } }), [protokoll()], "Export, Original und Startbild nennen verschiedene Anker"],
+  ["8 Startbild mit anderer Fassung", kette({ startbild: { fassung: "original" } }), [protokoll()], "Startbild des Originals fehlt"],
+  ["8 Startbild mit anderer id", kette({ startbild: { id: 9 } }), [protokoll()], "Startbild des Originals fehlt"],
+  ["8 Original ohne Startbild-Verweis", kette({ original: { startbild_id: null } }), [protokoll()], "Startbild des Originals fehlt"],
   ["9 Rechte offen", kette(), [protokoll({ rechte_status: "offen", rechte_nachweis: null })], "Rechte laut Prüfprotokoll nicht geklärt"],
   ["9 ohne Verweis", kette(), [protokoll({ rechte_nachweis: "   " })], "Rechte als geklärt vermerkt, aber ohne Nachweis-Verweis"],
 ];

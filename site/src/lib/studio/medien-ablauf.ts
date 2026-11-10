@@ -46,9 +46,14 @@ export function abweisung(status: AbbruchStatus, fehler: string, art: StudioAbwe
   return NextResponse.json(antwort, { status, headers: KEIN_CACHE });
 }
 
-/** Antwort für einen Fehler der Route: MedienAbbruch mit seinem Status, alles andere als Programmfehler (500). */
+/**
+ * Antwort für einen Fehler der Route: MedienAbbruch mit seinem Status; ein Bild über der Pixelgrenze (BildZuGross aus
+ * lib/studio/startbild.ts, am Namen erkannt — so lädt diese Datei startbild.ts nicht) als 413 (Nachbesserung
+ * sicherheit-2); alles andere als Programmfehler (500).
+ */
 export function alsAbweisung(e: unknown, wobei: string) {
   if (e instanceof MedienAbbruch) return abweisung(e.status, e.message, e.art, e.extra);
+  if (e instanceof Error && e.name === "BildZuGross") return abweisung(413, `${wobei}: ${e.message}`, "zu_gross");
   return abweisung(500, `${wobei}: ${bereinigeFehler(e)}`, "programmfehler");
 }
 

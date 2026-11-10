@@ -86,9 +86,28 @@ export interface BildMasse {
   orientierung: number | null;
 }
 
+/**
+ * Bild über MAX_PIXEL Bildpunkten (sharp meldet „exceeds pixel limit“): eine Abweisung der Eingabe (413), kein
+ * Programmfehler (Nachbesserung sicherheit-2; vorher 500 „programmfehler“).
+ */
+export class BildZuGross extends Error {
+  constructor(grund: string) {
+    super(grund);
+    this.name = "BildZuGross";
+  }
+}
+
 /** Maße und Orientierung aus dem Dateikopf, ohne die Bilddaten zu dekodieren. */
 export async function bildMasse(s: SharpFabrik, eingabe: Buffer): Promise<BildMasse> {
-  const m = await s(eingabe, { limitInputPixels: MAX_PIXEL }).metadata();
+  let m: Awaited<ReturnType<ReturnType<SharpFabrik>["metadata"]>>;
+  try {
+    m = await s(eingabe, { limitInputPixels: MAX_PIXEL }).metadata();
+  } catch (e) {
+    if (e instanceof Error && /pixel limit/i.test(e.message)) {
+      throw new BildZuGross(`Bild über ${MAX_PIXEL.toLocaleString("de-DE")} Bildpunkten — Grenze des Abgleichs`);
+    }
+    throw e;
+  }
   if (typeof m.width !== "number" || typeof m.height !== "number") throw new Error("Bildmaße nicht lesbar");
   return { breite: m.width, hoehe: m.height, orientierung: typeof m.orientation === "number" ? m.orientation : null };
 }

@@ -96,6 +96,45 @@ test("M-S4 Toleranzgrenze: Abweichung genau 2 besteht, 3 nicht (größte Abweich
   }
 });
 
+test("M-S4b Anteil über der Toleranz an der Grenze (Mutant M3c): 1000 Werte um genau 2 → Anteil 0; um 3 → round4(1000/n)", async () => {
+  const { data, info } = await ausschnitt().raw().toBuffer({ resolveWithObject: true });
+  const n = data.length;
+  for (const [delta, anteil] of [[2, 0], [3, Math.round((1000 / n) * 10_000) / 10_000]]) {
+    const kopie = Buffer.from(data);
+    for (let i = 0; i < 1000; i += 1) kopie[i] = kopie[i] >= 128 ? kopie[i] - delta : kopie[i] + delta;
+    const png = await sharp(kopie, { raw: { width: info.width, height: info.height, channels: info.channels } }).png().toBuffer();
+    const e = await gleicheStartbildAb({ anker, startbild: png, ausschnitt: REZEPT });
+    assert.equal(e.abweichung_max, delta);
+    assert.equal(e.anteil_ueber_toleranz, anteil, `Abweichung ${delta}`);
+  }
+  assert.ok(Math.round((1000 / n) * 10_000) / 10_000 > 0, "der Anteil bei 3 ist von 0 unterscheidbar");
+});
+
+test("M-S8 Speichergrenze (Nachbesserung sicherheit-3): Passen die Maße nicht zum Rezept, dekodiert der Abgleich kein Bild — nur die Dateiköpfe (metadata), nie raw oder toBuffer", async () => {
+  const echt = await ladeSharp();
+  const aufrufe = [];
+  const spion = (...args) => {
+    const inst = echt.sharp(...args);
+    for (const name of ["metadata", "raw", "toBuffer", "extract"]) {
+      const f = inst[name].bind(inst);
+      inst[name] = (...a) => {
+        aufrufe.push(name);
+        return f(...a);
+      };
+    }
+    return inst;
+  };
+  const gross = await sharp({ create: { width: 3000, height: 3000, channels: 3, background: { r: 10, g: 20, b: 30 } } }).png({ palette: true }).toBuffer();
+  const e = await gleicheStartbildAb({ anker, startbild: gross, ausschnitt: REZEPT }, { sharp: spion, versionen: echt.versionen });
+  assert.equal(e.urteil, "nicht_bestanden");
+  assert.match(e.grund, /Maße passen nicht: Startbild 3000×3000, Ausschnitt 160×90/);
+  assert.deepEqual(aufrufe, ["metadata", "metadata"], "nur Anker- und Startbild-Kopf gelesen");
+  // Gegenprobe: Mit passenden Maßen wird dekodiert (sonst wäre der Spion wirkungslos).
+  aufrufe.length = 0;
+  await gleicheStartbildAb({ anker, startbild: await ausschnitt().png().toBuffer(), ausschnitt: REZEPT }, { sharp: spion, versionen: echt.versionen });
+  assert.ok(aufrufe.includes("raw") && aufrufe.includes("toBuffer"), aufrufe.join(","));
+});
+
 test("M-S5 Maße passen nicht → nicht bestanden mit Grund, ohne Vergleich (keine Zahl als Platzhalter)", async () => {
   const zuGross = await sharp(ANKER).extract({ left: 0, top: 0, width: 161, height: 90 }).png().toBuffer();
   const e = await gleicheStartbildAb({ anker, startbild: zuGross, ausschnitt: REZEPT });

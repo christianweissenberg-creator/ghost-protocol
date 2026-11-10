@@ -213,6 +213,8 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   let a: Ablage | null = null;
   /** Eigene Dateien unter eingang/ und arbeit/, die bei einem Fehler gelöscht werden. */
   const eigene = new Set<string>();
+  /** Für den Fehlertext: Prüflauf oder Einspielen (Nachbesserung sicherheit-2; vorher immer „Einspielen“). */
+  let wobei = "Prüflauf oder Einspielen nicht möglich";
   try {
     const herkunft = pruefeAnfrageHerkunft(request.headers);
     if (herkunft) return abweisung(herkunft.status, herkunft.fehler, "herkunft");
@@ -221,6 +223,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     if (koerper.art === "zu_gross") throw new MedienAbbruch(413, "zu_gross", "Anfrage größer als 1 MB");
     if (koerper.art === "ungueltig") throw new MedienAbbruch(400, "eingabe", "Anfrage ist kein gültiges JSON");
     const { eingang, beleg, modus } = leseAnfrage(koerper.wert);
+    wobei = modus.art === "einspielen" ? "Einspielen nicht möglich" : "Prüflauf nicht möglich";
     const manifest = ankerManifest(slug);
     if (manifest === null) throw new MedienAbbruch(400, "eingabe", "Für dieses Objekt gibt es kein Anker-Manifest");
     const anker = zulaessigerAnker(manifest, beleg.anker_id);
@@ -325,7 +328,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
         // Aufräumen ist Nebensache; der Fehler der Route geht vor.
       }
     }
-    return alsAbweisung(e, "Einspielen nicht möglich");
+    return alsAbweisung(e, wobei);
   } finally {
     freigeben?.();
   }

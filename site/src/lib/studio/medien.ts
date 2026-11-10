@@ -199,10 +199,48 @@ export function zeichen(text: string): number {
   return Array.from(text).length;
 }
 
+/** Einzelnes Ersatzzeichen (UTF-16-Surrogat ohne Partner): in Postgres TEXT und JSONB nicht speicherbar. */
+const EINZELNES_ERSATZZEICHEN = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+
+/**
+ * In Postgres speicherbarer Text: ohne U+0000 und ohne einzelnes Ersatzzeichen (Nachbesserung ablauf7-1). Vorher ging
+ * so ein Text durch den Prüflauf und scheiterte erst beim Einfügen, mit Dateien schon auf den Inhalts-Pfaden.
+ */
+export function speicherbarerText(s: string): boolean {
+  return !s.includes("\u0000") && !EINZELNES_ERSATZZEICHEN.test(s);
+}
+
+const NICHT_SPEICHERBAR = "enthält U+0000 oder ein einzelnes Ersatzzeichen (in Postgres nicht speicherbar)";
+
 function text(roh: unknown, feld: string, max: number): Pruefung<string> {
   if (typeof roh !== "string" || roh.trim() === "") return { ok: false, grund: `${feld}: Text fehlt` };
+  if (!speicherbarerText(roh)) return { ok: false, grund: `${feld}: ${NICHT_SPEICHERBAR}` };
   if (zeichen(roh) > max) return { ok: false, grund: `${feld}: höchstens ${max} Zeichen` };
   return { ok: true, wert: roh };
+}
+
+/** Höchsttiefe und -größe von beleg.parameter (Nachbesserung sicherheit-2: tiefe Verschachtelung brach structuredClone). */
+export const PARAMETER_TIEFE_MAX = 10;
+export const PARAMETER_ZEICHEN_MAX = 10_000;
+
+/** beleg.parameter ohne Rekursion prüfen: Tiefe, speicherbare Schlüssel und Texte, Größe als JSON; null = in Ordnung. */
+function parameterGrund(roh: Record<string, unknown>): string | null {
+  const stapel: Array<{ wert: unknown; tiefe: number }> = [{ wert: roh, tiefe: 1 }];
+  while (stapel.length > 0) {
+    const { wert, tiefe } = stapel.pop() as { wert: unknown; tiefe: number };
+    if (typeof wert === "string") {
+      if (!speicherbarerText(wert)) return `beleg.parameter: ${NICHT_SPEICHERBAR}`;
+      continue;
+    }
+    if (typeof wert !== "object" || wert === null) continue;
+    if (tiefe > PARAMETER_TIEFE_MAX) return `beleg.parameter: höchstens ${PARAMETER_TIEFE_MAX} Ebenen`;
+    for (const [k, v] of Object.entries(wert)) {
+      if (!Array.isArray(wert) && !speicherbarerText(k)) return `beleg.parameter: Schlüssel ${NICHT_SPEICHERBAR}`;
+      stapel.push({ wert: v, tiefe: tiefe + 1 });
+    }
+  }
+  if (JSON.stringify(roh).length > PARAMETER_ZEICHEN_MAX) return `beleg.parameter: höchstens ${PARAMETER_ZEICHEN_MAX.toLocaleString("de-DE")} Zeichen als JSON`;
+  return null;
 }
 
 function kosten(roh: unknown, feld: string): Pruefung<number | null> {
@@ -304,6 +342,8 @@ export function pruefeBeleg(roh: unknown): Pruefung<Beleg> {
   if (typeof roh.job_id !== "string" || !JOB_ID.test(roh.job_id)) return { ok: false, grund: "beleg.job_id: 1–100 Zeichen aus Buchstaben, Ziffern und . _ : -" };
   if (!istObjekt(roh.parameter)) return { ok: false, grund: "beleg.parameter: JSON-Objekt" };
   if (Object.hasOwn(roh.parameter, "hinweise")) return { ok: false, grund: "beleg.parameter: Schlüssel hinweise ist vergeben (Hinweise je Rolle unter beleg.hinweise)" };
+  const parameterFehler = parameterGrund(roh.parameter);
+  if (parameterFehler !== null) return { ok: false, grund: parameterFehler };
   const prompt = text(roh.prompt, "beleg.prompt", PROMPT_MAX);
   if (!prompt.ok) return prompt;
 

@@ -850,12 +850,14 @@ test("M-R1 Studio: Credits = Summe der Originale (6,5), Deckel 100, Rest 93,5 �
   // Datenbank vorbei eingetragen) werden nicht summiert, der Teil warnt.
   zeilen().push({ ...zeilen()[1], id: 10, sha256: "f".repeat(64), speicher_pfad: `${SLUG}/${"f".repeat(64)}.mp4`, erzeuger: "higgsfield-api", kosten_credits: null, kosten_vorschau_credits: null, kosten_usd: 0.42 });
   zeilen().push({ ...zeilen()[2], id: 11, sha256: "9".repeat(64), speicher_pfad: `${SLUG}/${"9".repeat(64)}.mp4`, kosten_credits: 5, kosten_quelle: "falsch" });
+  // Trägt ein Connector-Original an der Datenbank vorbei auch USD, zählen nur seine Credits (Mutant X6).
+  zeilen().push({ ...zeilen()[1], id: 12, sha256: "8".repeat(64), speicher_pfad: `${SLUG}/${"8".repeat(64)}.mp4`, kosten_credits: 1.5, kosten_vorschau_credits: 1.5, kosten_usd: 0.42 });
   const w = await holeStudio();
-  assert.equal(w.kosten_credits.wert.summe, 6.5);
-  assert.equal(w.kosten_credits.wert.originale, 2);
+  assert.equal(w.kosten_credits.wert.summe, 8, "6,5 + 1,5 Credits, ohne die 0,42 USD");
+  assert.equal(w.kosten_credits.wert.originale, 3);
   assert.equal(w.kosten_credits.wert.originale_ohne_angabe, 1);
   assert.equal(w.kosten_credits.status, "warnung");
-  assert.match(w.kosten_credits.hinweis, /1 Original\(e\) mit USD-Kosten \(Weg 2b\) — nicht in den Credits/);
+  assert.match(w.kosten_credits.hinweis, /2 Original\(e\) mit USD-Kosten \(Weg 2b\) — nicht in den Credits/);
   assert.match(w.kosten_credits.hinweis, /1 Zeile\(n\) außer Originalen mit Credits — nicht summiert/);
 });
 
@@ -866,6 +868,17 @@ test("M-R2 Studio: Messplan-Tabelle fehlt → „nicht angelegt“ (nie 0, nie f
   assert.equal(fehlt.status, "nicht_gemessen");
   assert.match(fehlt.hinweis, /nicht angelegt \(PGRST205\)/);
   welt.studio.messplanFehlt = false;
+  // Postgres meldet eine fehlende Tabelle als 42P01 (je nach Schema-Cache statt PGRST205): ebenso „nicht angelegt“ (Mutant X7b).
+  welt.stoerung = (a) => (a.art === "supabase" && a.tabelle === "studio_messplan" ? { status: 404, body: { code: "42P01", details: null, hint: null, message: 'relation "public.studio_messplan" does not exist' } } : null);
+  try {
+    const p01 = (await holeStudio()).messung;
+    assert.deepEqual(p01.wert, { art: "nicht_angelegt", code: "42P01" });
+    assert.match(p01.hinweis, /nicht angelegt \(42P01\)/);
+  } finally {
+    welt.stoerung = null;
+  }
+  const { tabelleFehltCode } = await lade("src/lib/studio/messplan.ts");
+  assert.deepEqual([tabelleFehltCode({ code: "42P01" }), tabelleFehltCode({ code: "PGRST205" }), tabelleFehltCode({ code: "42501" })], ["42P01", "PGRST205", null]);
   const leer = (await holeStudio()).messung;
   assert.deepEqual(leer.wert, { art: "leer" });
   assert.equal(leer.hinweis, "noch kein Eintrag (Schritt 11)");
@@ -1300,4 +1313,171 @@ test("M-K5 Abgleich im Panel: Eingaben während der Messung gesperrt; das Ergebn
   tippe("y", "31");
   assert.equal(abgleichStand(), "bereit", "Rezept geändert → Ergebnis verworfen");
   assert.equal(findeEinen(t.baum(), (n) => n.props?.["data-abgleich-gemessen"] !== undefined), null);
+});
+
+// ═══ Niedrige Befunde der Gegenprüfung (B): Eingaben, Grenzen, Harness, Testlücken ═══
+
+test("M-P5 Beleg (Nachbesserung ablauf7-1, sicherheit-2): U+0000 und einzelne Ersatzzeichen → 400 vor jeder Dateiarbeit; beleg.parameter höchstens 10 Ebenen und 10.000 Zeichen — auch 120.000 Ebenen ergeben 400, nicht 500", async () => {
+  const e = await hochladen();
+  const vorher = welt.studio.log.length;
+  let tief = {};
+  for (let i = 0; i < 120_000; i += 1) tief = { a: tief };
+  for (const [b, muster] of [
+    [beleg({ prompt: "Test-Prompt mit \u0000 darin" }), /beleg\.prompt: enthält U\+0000 oder ein einzelnes Ersatzzeichen/],
+    [beleg({ ki_hinweis_text: "Hinweis \ud800 kaputt" }), /beleg\.ki_hinweis_text: enthält U\+0000/],
+    [beleg({ kosten_quelle: "Quelle\u0000" }), /beleg\.kosten_quelle: enthält U\+0000/],
+    [beleg({ hinweise: { export: ["Hinweis \udc00"] } }), /hinweise\.export: enthält U\+0000/],
+    [beleg({ prompt_klauseln: [{ id: "licht", text: "Licht\u0000" }] }), /beleg\.prompt_klauseln\.licht: enthält U\+0000/],
+    [beleg({ parameter: { stufe: "a\u0000b" } }), /beleg\.parameter: enthält U\+0000/],
+    [beleg({ parameter: { ["schlüssel\ud800"]: 1 } }), /beleg\.parameter: Schlüssel enthält U\+0000/],
+    [beleg({ parameter: { a: { b: { c: { d: { e: { f: { g: { h: { i: { j: { k: 1 } } } } } } } } } } } }), /beleg\.parameter: höchstens 10 Ebenen/],
+    [beleg({ parameter: tief }), /beleg\.parameter: höchstens 10 Ebenen/],
+    [beleg({ parameter: { lang: "x".repeat(10_001) } }), /beleg\.parameter: höchstens 10\.000 Zeichen als JSON/],
+  ]) {
+    const r = await pruefen(e, b);
+    assert.equal(r.status, 400, muster.source);
+    assert.match(r.body.fehler, muster);
+  }
+  assert.equal((await pruefen(e, beleg({ parameter: { a: { b: { c: { d: { e: { f: { g: { h: { i: 1 } } } } } } } } } }))).status, 200, "10 Ebenen gehen");
+  assert.deepEqual(ops(vorher).filter((o) => o !== "download" && o !== "list"), [], "die abgewiesenen Belege ohne Dateiarbeit");
+  assert.ok(medien.speicherbarerText("Umlaute äöü und 😀 sind speicherbar"));
+  assert.equal(medien.speicherbarerText("a\u0000"), false);
+  assert.equal(medien.speicherbarerText("\ud83d"), false);
+});
+
+test("M-G2 Pixelgrenze (Nachbesserung sicherheit-2): Ein Bild über 40 Mio. Bildpunkten → 413 mit Grund statt 500 „programmfehler“ — im Abgleich und im Prüflauf (Text je Modus)", async () => {
+  // 6400 × 6400 = 40,96 Mio. Bildpunkte, als Palette-PNG nur rund 40 kB (gemessen lokal: 39.973 B).
+  const riesig = await sharp({ create: { width: 6400, height: 6400, channels: 3, background: { r: 0, g: 0, b: 0 } } }).png({ compressionLevel: 9, palette: true }).toBuffer();
+  const g = await hochladen({ abgleich: { bytes: riesig, mime: "image/png" } });
+  const r = await post(abgleichRoute, "/abgleich", { eingang: g.abgleich, anker_id: "test-anker", ausschnitt: REZEPT });
+  assert.equal(r.status, 413, JSON.stringify(r.body));
+  assert.equal(r.body.fehler_art, "zu_gross");
+  assert.match(r.body.fehler, /^Abgleich nicht möglich: Bild über 40\.000\.000 Bildpunkten — Grenze des Abgleichs$/);
+  const dateien = { ...DATEIEN, startbild: { bytes: riesig, mime: "image/png" } };
+  const e = await hochladen(dateien);
+  const p = await pruefen(e, beleg({}, dateien));
+  assert.equal(p.status, 413, JSON.stringify(p.body));
+  assert.match(p.body.fehler, /^Prüflauf nicht möglich: Bild über 40\.000\.000 Bildpunkten/);
+});
+
+test("M-U3 upload-url räumt nicht auf, solange ein Job läuft (Mutant X40): alte Reste bleiben, aufgeraeumt ist null", async () => {
+  const eingang = await hochladen();
+  const alt = "eingang/00000009-0000-4000-8000-000000000009.png";
+  let oeffnen;
+  steinadel.tor = new Promise((f) => (oeffnen = f));
+  const angekommen = new Promise((f) => (steinadel.angekommen = f));
+  const erster = pruefen(eingang);
+  try {
+    await binnen(angekommen, 5_000, "erster Job");
+    // Erst jetzt anlegen: Der erste Job räumt beim Start selbst auf (vor dem Anker-Abruf, an dem er wartet).
+    legeObjektAn(welt.studio, alt, Buffer.from("alt"), { alterMs: 3 * 3_600_000 });
+    const r = await binnen(post(uploadRoute, "/upload-url", { dateien: [{ rolle: "export", bytes: 1, mime: "video/mp4" }] }), 5_000, "upload-url");
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.equal(r.body.aufgeraeumt, null, "während eines Jobs kein Aufräumen");
+    assert.ok(objektPfade().includes(alt), "der alte Rest bleibt");
+  } finally {
+    oeffnen();
+    steinadel.tor = null;
+  }
+  assert.equal((await erster).status, 200);
+});
+
+test("M-P6 Endung je Rolle im Eingangspfad (Mutant X57): Startbild mit .mp4 oder Original mit .png → 400 vor Sperre, Anker-Abruf und Dateiarbeit", async () => {
+  const e = await hochladen();
+  const vorher = welt.studio.log.length;
+  for (const eingang of [{ ...e, startbild: "eingang/00000001-0000-4000-8000-000000000001.mp4" }, { ...e, original: "eingang/00000002-0000-4000-8000-000000000002.png" }]) {
+    const r = await post(medienRoute, "", { eingang, beleg: beleg(), nur_pruefen: true });
+    assert.equal(r.status, 400, JSON.stringify(eingang));
+  }
+  assert.equal(steinadel.abrufe, 0, "kein Anker-Abruf");
+  assert.deepEqual(ops(vorher), [], "keine Dateiarbeit");
+});
+
+test("M-J1 JSON-Körper (Mutant X52): Kündigt Content-Length mehr als 1 MB an, wird der Körper gar nicht gelesen", async () => {
+  let gelesen = false;
+  // highWaterMark 0: pull läuft erst beim Lesen (sonst füllt der Strom seine Warteschlange schon beim Anlegen).
+  const strom = new ReadableStream(
+    {
+      pull() {
+        gelesen = true;
+        throw new Error("Körper gelesen");
+      },
+    },
+    { highWaterMark: 0 },
+  );
+  const anfrage = { headers: new Headers({ "content-length": String(medien.JSON_MAX_BYTES + 1) }), body: strom };
+  assert.deepEqual(await ablage.leseJsonKoerper(anfrage), { art: "zu_gross" });
+  assert.equal(gelesen, false);
+});
+
+test("M-E11 Spaltenvergleich (Nachbesserung ablauf7-3): Jede der 32 Einfüge-Spalten zählt beim Vergleich mit einer vorhandenen Zeile — je Rolle eine abweichende Spalte, genau diese gemeldet", async () => {
+  const SPALTEN = ["objekt_slug", "art", "fassung", "startbild_id", "abgeleitet_von", "speicher_pfad", "sha256", "bytes", "mime", "breite", "hoehe", "fps", "dauer_s", "aigc_kennzeichen", "schnitt_von_s", "schnitt_bis_s", "anker_id", "anker_sha256", "ausschnitt", "startbild_abgleich", "startbild_abweichung_max", "erzeuger", "modell", "job_id", "parameter", "prompt", "prompt_klauseln", "ki_hinweis_text", "kosten_vorschau_credits", "kosten_credits", "kosten_usd", "kosten_quelle"];
+  assert.deepEqual([...medien.EINFUEGE_SPALTEN].sort(), [...SPALTEN].sort(), "die Einfüge-Spalten sind genau diese 32");
+  const eingang = await hochladen();
+  const v = await pruefen(eingang);
+  assert.equal(v.status, 200);
+  const anders = (w) => (w === null ? 7 : typeof w === "number" ? w + 1 : typeof w === "boolean" ? !w : typeof w === "string" ? `${w}x` : Array.isArray(w) ? [...w, { id: "neu", text: "neu" }] : { ...w, neu: 1 });
+  for (const { rolle, felder } of v.body.vorschau) {
+    assert.deepEqual(medien.abweichendeFelder(felder, structuredClone(felder)), [], `${rolle}: gleich`);
+    for (const s of SPALTEN) {
+      const vorhanden = { ...structuredClone(felder), [s]: anders(felder[s]) };
+      assert.deepEqual(medien.abweichendeFelder(felder, vorhanden), [s], `${rolle}.${s}`);
+    }
+  }
+});
+
+test("M-E12 Einspielen (Nachbesserung ablauf7-3): Hinweise stehen je Rolle in parameter.hinweise der Zeile, die sie betreffen; die Maße des Startbilds misst der Server (nicht aus dem Rezept)", async () => {
+  const b = beleg({ hinweise: { startbild: ["H-Start"], original: ["H-Original"], export: ["H-Export"] } });
+  const { e } = await ganzEinspielen(b);
+  assert.equal(e.status, 200, JSON.stringify(e.body));
+  const [sb, og, ex] = zeilen();
+  assert.deepEqual(sb.parameter, { hinweise: ["H-Start"] });
+  assert.deepEqual(og.parameter, { stufe: "test", laenge_s: 4, hinweise: ["H-Original"] });
+  assert.deepEqual(ex.parameter, { hinweise: ["H-Export"] });
+  // Startbild einen Bildpunkt breiter als das Rezept: gemessen, nicht übernommen (Abgleich: Maße passen nicht).
+  zuruecksetzen();
+  ablage.setzeSperreZurueck();
+  exportMitCover();
+  const breiter = await sharp(ANKER_BYTES).extract({ left: REZEPT.x, top: REZEPT.y, width: REZEPT.breite + 1, height: REZEPT.hoehe }).png().toBuffer();
+  const dateien = { ...DATEIEN, startbild: { bytes: breiter, mime: "image/png" } };
+  const v = await pruefen(await hochladen(dateien), beleg({}, dateien));
+  assert.equal(v.status, 200, JSON.stringify(v.body));
+  const startbild = v.body.vorschau[0].felder;
+  assert.deepEqual([startbild.breite, startbild.hoehe], [REZEPT.breite + 1, REZEPT.hoehe]);
+  assert.equal(startbild.startbild_abgleich, "nicht_bestanden");
+  assert.match(v.body.abgleich.grund, /Maße passen nicht/);
+});
+
+test("M-B2 Attrappe der DB so streng wie das SQL (Nachbesserung ablauf7-2): ausdrückliches null in parameter/prompt_klauseln → 23502; Typen (INT, NUMERIC, BOOLEAN) → 22P02/22003; U+0000 → 22P05, einzelnes Ersatzzeichen → 22P02; Storage-PUT über 50 MB oder mit fremdem MIME-Typ → abgewiesen", async () => {
+  const service = createClient("http://supabase.test", SERVICE);
+  const startbild = {
+    objekt_slug: SLUG, art: "bild", fassung: "startbild", speicher_pfad: `${SLUG}/${"a".repeat(64)}.png`, sha256: "a".repeat(64), bytes: 10, mime: "image/png",
+    anker_id: "test-anker", anker_sha256: "b".repeat(64), ausschnitt: { ...REZEPT }, startbild_abgleich: "bestanden",
+  };
+  for (const [extra, code] of [
+    [{ parameter: null }, "23502"],
+    [{ prompt_klauseln: null }, "23502"],
+    [{ breite: 1920.5 }, "22P02"],
+    [{ hoehe: 3e9 }, "22003"],
+    [{ fps: "abc" }, "22P02"],
+    [{ dauer_s: {} }, "22P02"],
+    [{ aigc_kennzeichen: "ja" }, "22P02"],
+    [{ ki_hinweis_text: "a\u0000b" }, "22P05"],
+    [{ parameter: { x: "\ud800" } }, "22P02"],
+  ]) {
+    const r = await service.from("studio_medium").insert({ ...startbild, ...extra });
+    assert.equal(r.error?.code, code, JSON.stringify(extra));
+  }
+  // Ohne die Schlüssel greifen die Defaults; ein numerischer Text ist für NUMERIC zulässig.
+  assert.equal((await service.from("studio_medium").insert({ ...startbild, fps: "24.000" })).error, null);
+  // Storage: Grenze 50.000.000 B und die MIME-Liste des Buckets.
+  const r1 = await post(uploadRoute, "/upload-url", { dateien: [{ rolle: "export", bytes: 1, mime: "video/mp4" }] });
+  const ziel = r1.body.dateien[0];
+  const zuGross = await fetch(ziel.signedUrl, { method: "PUT", headers: { "content-type": "video/mp4", "x-upsert": "false" }, body: Buffer.alloc(50_000_001) });
+  assert.equal(zuGross.status, 400);
+  assert.equal((await zuGross.json()).statusCode, "413");
+  const fremd = await fetch(ziel.signedUrl, { method: "PUT", headers: { "content-type": "text/plain", "x-upsert": "false" }, body: Buffer.from("x") });
+  assert.equal(fremd.status, 400);
+  assert.equal((await fremd.json()).statusCode, "415");
+  assert.ok(!objektPfade().includes(ziel.pfad), "nichts gespeichert");
 });

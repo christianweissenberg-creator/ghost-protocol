@@ -100,6 +100,10 @@ export async function storageAntwort(welt, url, methode, kopf, rohKoerper, signa
     if (!z || !t || t.pfad !== z.pfad) return json(400, { statusCode: "403", error: "Unauthorized", message: "invalid signature" });
     if (s.objekte.has(z.pfad) && !t.upsert) return json(400, { statusCode: "409", error: "Duplicate", message: "The resource already exists" });
     const bytes = await koerperBytes(rohKoerper);
+    // Grenzen des Buckets (Nachbesserung ablauf7-2): 50.000.000 B und die MIME-Liste (MP4, JPEG, PNG).
+    if (bytes.length > 50_000_000) return json(400, { statusCode: "413", error: "Payload too large", message: "The object exceeded the maximum allowed size" });
+    const mimeTyp = (kopf.get("content-type") ?? "").split(";")[0].trim().toLowerCase();
+    if (!["video/mp4", "image/jpeg", "image/png"].includes(mimeTyp)) return json(400, { statusCode: "415", error: "invalid_mime_type", message: `mime type ${mimeTyp || "(leer)"} is not supported` });
     legeObjektAn(s, z.pfad, bytes, { mime: kopf.get("content-type") ?? "application/octet-stream" });
     return json(200, { Key: `${BUCKET}/${z.pfad}` });
   }
@@ -194,6 +198,50 @@ const SPALTEN = {
 
 function istZahl(x) {
   return typeof x === "number" && Number.isFinite(x);
+}
+
+// ── Typen und Kodierung wie Postgres (Nachbesserung ablauf7-2: vorher nahm die Attrappe mehr an als das SQL) ──
+
+const INT_MIN = -2_147_483_648;
+const INT_MAX = 2_147_483_647;
+/** NUMERIC nimmt Zahlen und numerische Texte an (PostgREST reicht JSON-Texte an den Typ weiter). */
+const istNumeric = (x) => istZahl(x) || (typeof x === "string" && /^-?\d+(\.\d+)?$/.test(x.trim()));
+const EINZELNES_ERSATZZEICHEN = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+
+/** Typfehler einer studio_medium-Zeile wie Postgres: {code, spalte} oder null. */
+export function mediumTypFehler(z) {
+  for (const k of ["breite", "hoehe", "startbild_abweichung_max", "startbild_id", "abgeleitet_von"]) {
+    const w = z[k];
+    if (w === null || w === undefined) continue;
+    if (!Number.isInteger(w)) return { code: "22P02", spalte: k, text: `invalid input syntax for type integer: "${w}"` };
+    if (k !== "startbild_id" && k !== "abgeleitet_von" && (w < INT_MIN || w > INT_MAX)) return { code: "22003", spalte: k, text: `value "${w}" is out of range for type integer` };
+  }
+  for (const k of ["fps", "dauer_s", "schnitt_von_s", "schnitt_bis_s", "kosten_vorschau_credits", "kosten_credits", "kosten_usd"]) {
+    const w = z[k];
+    if (w !== null && w !== undefined && !istNumeric(w)) return { code: "22P02", spalte: k, text: `invalid input syntax for type numeric: "${typeof w === "object" ? JSON.stringify(w) : w}"` };
+  }
+  if (z.aigc_kennzeichen !== null && z.aigc_kennzeichen !== undefined && typeof z.aigc_kennzeichen !== "boolean") {
+    return { code: "22P02", spalte: "aigc_kennzeichen", text: `invalid input syntax for type boolean: "${z.aigc_kennzeichen}"` };
+  }
+  return null;
+}
+
+/** Text, den Postgres nicht speichert, in allen Texten und Schlüsseln einer Zeile: U+0000 (22P05), einzelnes Ersatzzeichen (22P02). */
+export function kodierungsFehler(wert) {
+  const stapel = [wert];
+  while (stapel.length > 0) {
+    const w = stapel.pop();
+    if (typeof w === "string") {
+      if (w.includes("\u0000")) return { code: "22P05", text: "unsupported Unicode escape sequence: \\u0000 cannot be converted to text" };
+      if (EINZELNES_ERSATZZEICHEN.test(w)) return { code: "22P02", text: "invalid input syntax for type json: Unicode low surrogate must follow a high surrogate" };
+    } else if (typeof w === "object" && w !== null) {
+      for (const [k, v] of Object.entries(w)) {
+        if (!Array.isArray(w)) stapel.push(k);
+        stapel.push(v);
+      }
+    }
+  }
+  return null;
 }
 function zeichen(t) {
   return Array.from(t).length;
@@ -314,7 +362,17 @@ export function studioTabelle(welt, tabelle, url, methode, kopf, body, h) {
     // Wie BIGSERIAL in Postgres: Der Sequenzwert ist verbraucht, auch wenn das Einfügen danach scheitert.
     const z = { id: s.ids[tabelle]++ };
     for (const k of def.einfuegen) z[k] = roh[k] === undefined ? null : structuredClone(roh[k]);
+    const kodierung = kodierungsFehler(roh);
+    if (kodierung) return json(400, { code: kodierung.code, details: null, hint: null, message: kodierung.text });
     if (tabelle === "studio_medium") {
+      // NOT NULL mit Default: Der Default gilt nur ohne Schlüssel; ein ausdrückliches null lehnt Postgres ab (23502).
+      for (const k of ["parameter", "prompt_klauseln"]) {
+        if (Object.hasOwn(roh, k) && roh[k] === null) {
+          return json(400, { code: "23502", details: null, hint: null, message: `null value in column "${k}" of relation "studio_medium" violates not-null constraint` });
+        }
+      }
+      const typ = mediumTypFehler(z);
+      if (typ) return json(400, { code: typ.code, details: null, hint: null, message: typ.text });
       if (z.parameter === null) z.parameter = {};
       if (z.prompt_klauseln === null) z.prompt_klauseln = [];
       z.startbild_ziel = z.startbild_id === null ? null : "startbild";
