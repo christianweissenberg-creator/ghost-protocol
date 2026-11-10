@@ -1219,6 +1219,10 @@ test("M-K3 Panel: Ein veralteter Lauf setzt keinen Stand; Abbrechen und Abbau be
   const puts = () => t3.log.filter(([m]) => m === "PUT").length;
   const putsVorher = puts();
   t3.lz.abbauen();
+  // Das Tor danach öffnen: Ohne Abbruch liefe der PUT jetzt durch, und der Lauf ginge weiter.
+  const tor3 = t3.tore.get("eingang/");
+  t3.tore.delete("eingang/");
+  tor3.oeffnen?.();
   await t3.lz.ruhe(20);
   assert.equal(puts(), putsVorher, "kein weiterer PUT nach dem Abbau");
   assert.ok(!t3.log.some(([m, u]) => m === "POST" && u.endsWith("/medien")), "kein Prüflauf nach dem Abbau");
