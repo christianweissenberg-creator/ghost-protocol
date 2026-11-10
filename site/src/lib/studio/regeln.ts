@@ -68,11 +68,13 @@ export const STUDIO_REGELN: readonly StudioRegel[] = [
     pruefung: "Code, in jeder Antwort und Anzeige des Studios",
   },
   {
-    // Seit Schritt 6 (10.11.2026) gebaut: Manifest als Code-Konstante, Prüfung auf dem Server.
+    // Seit Schritt 6 (10.11.2026) gebaut: Manifest als Code-Konstante, Prüfung auf dem Server; seit der Gegenprüfung
+    // von PR #8 (10.11.2026) mit Zwischenspeicher (lib/studio/anker-speicher.ts: 15 min, „Alle prüfen“ ab 60 s).
     regel: "Anker-Bilder nur aus dem Anker-Manifest und mit unverändertem Datei-Hash; ein Anker heißt Visualisierung, nie Foto.",
-    fundstelle: "site/src/lib/studio/anker.ts (ANKER_MANIFESTE); site/src/lib/studio/anker-pruefung.ts (pruefeAnker)",
+    fundstelle:
+      "site/src/lib/studio/anker.ts (ANKER_MANIFESTE); site/src/lib/studio/anker-pruefung.ts (pruefeAnker); site/src/lib/studio/anker-speicher.ts (ankerErgebnis)",
     pruefung:
-      "Code, serverseitig: SHA-256 jeder Live-Datei gegen das Manifest und urls.cover im Export — beim Laden des Studios und mit „Alle prüfen“",
+      "Code, serverseitig: SHA-256 jeder Live-Datei gegen das Manifest und urls.cover im Export — beim Laden des Studios (Ergebnis höchstens 15 min alt, das Alter steht dabei) und mit „Alle prüfen“ (höchstens einmal je 60 s)",
   },
   {
     regel: "Ein Video startet nur aus einem Ausschnitt eines Ankers; das Startbild wird gegen diesen Ausschnitt abgeglichen.",
