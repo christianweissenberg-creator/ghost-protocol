@@ -18,6 +18,7 @@ import {
   rezeptImAnker,
   sha256Text,
   vorschauHash,
+  vorschauFormGrund,
   vorschauUnterschiede,
 } from "@/lib/studio/medien";
 import type { Beleg, VorschauZeile, ZeilenFelder } from "@/lib/studio/medien";
@@ -103,6 +104,9 @@ function leseAnfrage(roh: unknown): Anfrage {
     return { eingang, beleg: beleg.wert, modus: { art: "pruefen" } };
   }
   if (typeof bestaetigt !== "string" || !HEX64.test(bestaetigt)) throw new MedienAbbruch(400, "eingabe", "bestaetigt: vorschau_sha256 des Prüflaufs (64 Hex-Zeichen)");
+  // Nachtrag d2-oberflaeche-7: Form und Tiefe der Vorschau vor jeder Arbeit (sonst rekursiert kanonisch ungebremst).
+  const vorschauGrund = roh.vorschau === undefined ? null : vorschauFormGrund(roh.vorschau);
+  if (vorschauGrund !== null) throw new MedienAbbruch(400, "eingabe", vorschauGrund);
   return { eingang, beleg: beleg.wert, modus: { art: "einspielen", bestaetigt, vorschau: roh.vorschau } };
 }
 

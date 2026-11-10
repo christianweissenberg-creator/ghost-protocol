@@ -3,8 +3,9 @@
 //
 // Jeder Schritt bricht mit MedienAbbruch ab (HTTP-Status, Fehlerart, Grund); die Route macht daraus die Antwort
 // (Fehlerarten wie in Stufe 1: 400 Eingabe, 403/415 Herkunft, 404 unbekannt, 409 Zustand oder Regel,
-// 413 zu groß, 415 Dateisignatur, 500 Programm- oder Schreibfehler, 502 Storage, Supabase oder Anker nicht
-// lesbar). Jeder Grund geht bereinigt hinaus (bereinigeFehler).
+// 413 zu groß, 415 Dateisignatur, 422 hochgeladenes Bild nicht lesbar (Nachtrag d2-oberflaeche-4), 500 Programm-
+// oder Schreibfehler, 502 Storage, Supabase oder Anker nicht lesbar). Jeder Grund geht bereinigt hinaus
+// (bereinigeFehler).
 // - Anker: nur ein Eintrag des Manifests mit als_anker; die Datei wird für jede Anfrage live geladen und gegen das
 //   Manifest gehasht (ladeAnkerDatei, Regeln der Anker-Prüfung aus Schritt 6), nie aus dem Zwischenspeicher.
 //   Anderer Hash → 409, nicht erreichbar → 502.
@@ -26,7 +27,7 @@ import { pruefeStudioSlug } from "./objekte";
 import type { StudioObjekt } from "./objekte";
 import type { MediumMime, StudioAbweisungsArt, StudioFehlerAntwort, UploadRolle } from "./typen";
 
-export type AbbruchStatus = 400 | 403 | 404 | 409 | 413 | 415 | 500 | 502;
+export type AbbruchStatus = 400 | 403 | 404 | 409 | 413 | 415 | 422 | 500 | 502;
 
 /** Abbruch einer Medien-Route mit HTTP-Status, Fehlerart und Grund (plus Feldliste, vorhandene ids oder laufendem Job). */
 export class MedienAbbruch extends Error {
@@ -49,11 +50,13 @@ export function abweisung(status: AbbruchStatus, fehler: string, art: StudioAbwe
 /**
  * Antwort für einen Fehler der Route: MedienAbbruch mit seinem Status; ein Bild über der Pixelgrenze (BildZuGross aus
  * lib/studio/startbild.ts, am Namen erkannt — so lädt diese Datei startbild.ts nicht) als 413 (Nachbesserung
- * sicherheit-2); alles andere als Programmfehler (500).
+ * sicherheit-2); ein beschädigtes oder abgeschnittenes hochgeladenes Bild (BildUnlesbar) als 422 (Nachtrag
+ * d2-oberflaeche-4); alles andere als Programmfehler (500).
  */
 export function alsAbweisung(e: unknown, wobei: string) {
   if (e instanceof MedienAbbruch) return abweisung(e.status, e.message, e.art, e.extra);
   if (e instanceof Error && e.name === "BildZuGross") return abweisung(413, `${wobei}: ${e.message}`, "zu_gross");
+  if (e instanceof Error && e.name === "BildUnlesbar") return abweisung(422, `${wobei}: ${e.message}`, "eingabe");
   return abweisung(500, `${wobei}: ${bereinigeFehler(e)}`, "programmfehler");
 }
 

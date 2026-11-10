@@ -115,6 +115,25 @@ export class BildZuGross extends Error {
   }
 }
 
+/**
+ * Hochgeladenes Bild nicht lesbar — etwa abgeschnitten nach einem abgebrochenen Download (gültiger Kopf, Daten fehlen):
+ * eine Abweisung der Eingabe (422), kein Programmfehler (Nachtrag d2-oberflaeche-4; vorher 500 „programmfehler“). Nur für
+ * das hochgeladene Bild; die Anker-Datei ist gegen das Manifest gehasht, ein Fehler dort bleibt ein Programmfehler.
+ */
+export class BildUnlesbar extends Error {
+  constructor(grund: string) {
+    super(grund);
+    this.name = "BildUnlesbar";
+  }
+}
+
+/** Fehler beim Lesen des hochgeladenen Bilds: Pixelgrenze bleibt BildZuGross, alles andere wird BildUnlesbar. */
+function alsBildFehler(e: unknown): Error {
+  if (e instanceof BildZuGross) return e;
+  const grund = e instanceof Error && e.message ? e.message.split("\n")[0] : "unbekannt";
+  return new BildUnlesbar(`Bild nicht lesbar (beschädigt oder abgeschnitten): ${grund}`);
+}
+
 /** Maße und Orientierung aus dem Dateikopf, ohne die Bilddaten zu dekodieren. */
 export async function bildMasse(s: SharpFabrik, eingabe: Buffer): Promise<BildMasse> {
   let m: Awaited<ReturnType<ReturnType<SharpFabrik>["metadata"]>>;
@@ -164,7 +183,9 @@ function runde4(x: number): number {
 export async function gleicheStartbildAb(e: AbgleichEingabe, mod?: SharpModul): Promise<AbgleichErgebnis> {
   const { sharp, versionen } = mod ?? (await ladeSharp());
   const ankerMasse = await bildMasse(sharp, e.anker.bytes);
-  const startMasse = await bildMasse(sharp, e.startbild);
+  const startMasse = await bildMasse(sharp, e.startbild).catch((f: unknown) => {
+    throw alsBildFehler(f);
+  });
   const a = e.ausschnitt;
   if (startMasse.breite !== a.breite || startMasse.hoehe !== a.hoehe) {
     return ohneVergleich(e, versionen, startMasse, ankerMasse, `Maße passen nicht: Startbild ${startMasse.breite}×${startMasse.hoehe}, Ausschnitt ${a.breite}×${a.hoehe}`);
@@ -175,7 +196,9 @@ export async function gleicheStartbildAb(e: AbgleichEingabe, mod?: SharpModul): 
     }
   }
   const soll = await pixel(sharp, e.anker.bytes, a);
-  const ist = await pixel(sharp, e.startbild);
+  const ist = await pixel(sharp, e.startbild).catch((f: unknown) => {
+    throw alsBildFehler(f);
+  });
   if (soll.breite !== ist.breite || soll.hoehe !== ist.hoehe || soll.kanaele !== ist.kanaele || soll.daten.length !== ist.daten.length) {
     return ohneVergleich(e, versionen, startMasse, ankerMasse, "dekodierte Bilder unterschiedlich groß");
   }

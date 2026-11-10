@@ -484,6 +484,35 @@ test("M-E2 Vorschau veraltet → 409 mit Feldliste, nichts eingefügt; ohne mitg
   assert.equal(zeilen().length, 0);
 });
 
+test("M-E14 Vorschau beim Einspielen (Nachtrag d2-oberflaeche-7): falsche Form oder 100.000 verschachtelte Listen (rund 200 kB) → 400 vor jeder Dateiarbeit statt 500 „Maximum call stack size exceeded“; die echte Vorschau des Servers geht durch", async () => {
+  const eingang = await hochladen();
+  const v = await pruefen(eingang);
+  const echte = v.body.vorschau;
+  assert.equal(medien.vorschauFormGrund(echte), null, "die Vorschau des Servers hat die erlaubte Form");
+  const pfadeVorher = objektPfade().slice().sort();
+  // 100.000 verschachtelte Listen in den felder der ersten Zeile, als Text gebaut (JSON.stringify rekursierte selbst).
+  const tief = "[".repeat(100_000) + "]".repeat(100_000);
+  const zeilenText = echte.map((z, i) => (i === 0 ? `{"rolle":"startbild","felder":{"tief":${tief}}}` : JSON.stringify(z))).join(",");
+  const roh = `{"eingang":${JSON.stringify(eingang)},"beleg":${JSON.stringify(beleg())},"bestaetigt":"${"e".repeat(64)}","vorschau":[${zeilenText}]}`;
+  assert.ok(roh.length > 200_000 && roh.length < 1_000_000, String(roh.length));
+  const r = await post(medienRoute, "", roh);
+  assert.equal(r.status, 400, JSON.stringify(r.body).slice(0, 300));
+  assert.equal(r.body.fehler, `vorschau: höchstens ${medien.VORSCHAU_TIEFE_MAX} Ebenen`);
+  for (const [vorschau, grund] of [
+    [{}, "vorschau: Liste mit genau 3 Zeilen"],
+    [echte.slice(0, 2), "vorschau: Liste mit genau 3 Zeilen"],
+    [[...echte.slice(0, 2), { rolle: "export" }], "vorschau: jede Zeile mit rolle und felder"],
+  ]) {
+    const f = await post(medienRoute, "", { eingang, beleg: beleg(), bestaetigt: "e".repeat(64), vorschau });
+    assert.deepEqual([f.status, f.body.fehler], [400, grund]);
+  }
+  assert.deepEqual(objektPfade().slice().sort(), pfadeVorher, "keine Dateiarbeit: die Uploads liegen unverändert im Eingang");
+  assert.equal(zeilen().length, 0, "nichts eingefügt");
+  // Die echte Vorschau geht weiter durch.
+  const ok = await einspielen(eingang, beleg(), v.body);
+  assert.equal(ok.status, 200, JSON.stringify(ok.body).slice(0, 300));
+});
+
 test("M-E3 Nach dem Prüflauf ausgetauschte Datei im Eingang → 409 beim Einspielen, nichts eingefügt", async () => {
   const eingang = await hochladen();
   const v = await pruefen(eingang);
@@ -1300,7 +1329,7 @@ test("M-K4 Panel-Texte: PUT-Fehler nennt Datei und Ursache des Storage, Hinweis 
   assert.equal(P.creditsText({ wert: { summe: 6.5, deckel: 100, rest: 93.5, originale: 1, originale_ohne_angabe: 0 }, status: "ok", quelle: "Test", gemessen_am: "2026-11-10T15:00:00Z" }).unter, "Deckel 100 · Rest 93,5 · 1 Original(e)");
 });
 
-test("M-K5 Abgleich im Panel: Eingaben während der Messung gesperrt; das Ergebnis nennt Bild, Anker und Rezept; jede Änderung verwirft es; „Noch offen“ nennt, was fehlt (Nachbesserung oberflaeche-5)", async () => {
+test("M-K5 Abgleich im Panel: Eingaben während der Messung gesperrt; das Ergebnis nennt Bild, Anker und Rezept; jede Änderung verwirft es; „Noch offen“ nennt, was fehlt (Nachbesserung oberflaeche-5); „Abbrechen“ während des Uploads, danach kein POST …/abgleich (Nachtrag d2-oberflaeche-3)", async () => {
   const t = await panelLaufzeit();
   const abgleichStand = () => findeEinen(t.baum(), (n) => n.type === "details" && n.props["data-abgleich"] !== undefined).props["data-abgleich"];
   const offen = () => textVon(findeEinen(t.baum(), (n) => n.props?.["data-abgleich-fehlt"] !== undefined));
@@ -1328,9 +1357,27 @@ test("M-K5 Abgleich im Panel: Eingaben während der Messung gesperrt; das Ergebn
   tippe("y", "31");
   assert.equal(abgleichStand(), "bereit", "Rezept geändert → Ergebnis verworfen");
   assert.equal(findeEinen(t.baum(), (n) => n.props?.["data-abgleich-gemessen"] !== undefined), null);
+  // Nachtrag d2-oberflaeche-3: Abbrechen während des Uploads — kein POST …/abgleich danach.
+  assert.equal(findeEinen(t.baum(), (n) => n.type === "button" && n.props["data-abgleich-abbrechen"] !== undefined), null, "ohne Lauf kein Abbrechen");
+  t.tore.set("eingang/", {});
+  knopf(t, "data-abgleich-knopf").props.onClick();
+  await binnen((async () => { while (!t.tore.get("eingang/").oeffnen) await new Promise((r) => setImmediate(r)); })(), 5_000, "PUT am Tor");
+  t.lz.rendere();
+  const vorher = t.log.length;
+  knopf(t, "data-abgleich-abbrechen").props.onClick();
+  const tor2 = t.tore.get("eingang/");
+  t.tore.delete("eingang/");
+  tor2.oeffnen?.();
+  await t.lz.ruhe(20);
+  assert.equal(abgleichStand(), "fehler");
+  const fehler = textVon(findeEinen(t.baum(), (n) => n.props?.["data-medien-fehler"] !== undefined));
+  assert.match(fehler, /Abgebrochen — kein weiterer Schritt dieses Laufs\./);
+  assert.match(fehler, /Ein schon hochgeladenes Bild bleibt bis zu 2 h im Eingang/);
+  assert.ok(!t.log.slice(vorher).some(([m, u]) => m === "POST" && u.endsWith("/abgleich")), "kein POST …/abgleich nach dem Abbruch");
+  assert.equal(findeAlle(t.baum(), (n) => n.type === "input" && n.props["data-rezept"] !== undefined).every((n) => n.props.disabled !== true), true, "Eingaben wieder frei");
 });
 
-test("M-K6 Upload im Browser (Nachbesserung oberflaeche-2): sendenPerXhr mit XMLHttpRequest-Attrappe — genau ein PUT auf die signierte URL mit allen Kopfzeilen, Fortschritt aus upload.onprogress, Abbruch über das Signal, Netzfehler; das Panel nimmt im Browser diesen Weg statt holen und fragt während des Laufs beim Verlassen der Seite nach (beforeunload)", async () => {
+test("M-K6 Upload im Browser (Nachbesserung oberflaeche-2): sendenPerXhr mit XMLHttpRequest-Attrappe — genau ein PUT auf die signierte URL mit allen Kopfzeilen, Fortschritt aus upload.onprogress, Abbruch über das Signal, Netzfehler; das Panel nimmt im Browser diesen Weg statt holen und fragt während des Laufs beim Verlassen der Seite nach (beforeunload); die Live-Region meldet nur die Phase, nicht jeden Prozentschritt (Nachtrag d2-oberflaeche-5)", async () => {
   // Node hat kein XMLHttpRequest; die Attrappe bildet nur die genutzte Schnittstelle nach (open, setRequestHeader, send, abort, upload.onprogress, onload, onerror, onabort).
   class XhrAttrappe {
     static alle = [];
@@ -1439,6 +1486,18 @@ test("M-K6 Upload im Browser (Nachbesserung oberflaeche-2): sendenPerXhr mit XML
     let verhindert = 0;
     for (const f of fenster.hoerer) f({ preventDefault: () => (verhindert += 1) });
     assert.equal(verhindert, 1, "der Hörer ruft preventDefault (Nachfrage des Browsers)");
+    // Nachtrag d2-oberflaeche-5: Fortschritt sichtbar, in der Live-Region nur die Phase.
+    const erster = XhrAttrappe.alle[0];
+    erster.upload.onprogress({ loaded: Math.floor(erster.body.size / 2) });
+    t.lz.rendere();
+    const sichtbarerText = textVon(findeEinen(t.baum(), (n) => n.props?.["data-medien-laeuft"] !== undefined));
+    assert.match(sichtbarerText, /^Startbild hochladen: .* von .* \((49|50) %\) …$/, sichtbarerText);
+    const phase = findeEinen(t.baum(), (n) => n.props?.["data-medien-phase"] !== undefined);
+    assert.equal(phase.props["aria-live"], "polite");
+    assert.equal(textVon(phase), "Startbild hochladen …");
+    assert.equal(findeEinen(phase, (n) => n.props?.["data-medien-laeuft"] !== undefined), null, "der Text mit Prozent steht nicht in der Live-Region");
+    assert.equal(t.P.phasenText("Original hochladen: 3 MB von 15 MB (20 %) …"), "Original hochladen …");
+    assert.equal(t.P.phasenText("Prüflauf läuft …"), "Prüflauf läuft …");
     erstesTorAuf();
     await binnen((async () => { for (let i = 0; i < 400 && einspielStand(t) !== "vorschau" && einspielStand(t) !== "fehler"; i += 1) await t.lz.ruhe(2); })(), 10_000, "Vorschau über XHR");
     assert.equal(einspielStand(t), "vorschau", textVon(findeEinen(t.baum(), (n) => n.props?.["data-medien-fehler"] !== undefined)));
@@ -1504,6 +1563,24 @@ test("M-G2 Pixelgrenze (Nachbesserung sicherheit-2): Ein Bild über 40 Mio. Bild
   const p = await pruefen(e, beleg({}, dateien));
   assert.equal(p.status, 413, JSON.stringify(p.body));
   assert.match(p.body.fehler, /^Prüflauf nicht möglich: Bild über 40\.000\.000 Bildpunkten/);
+});
+
+test("M-G3 Beschädigtes Bild (Nachtrag d2-oberflaeche-4): Ein abgeschnittenes PNG mit gültigem Kopf und passenden Maßen → 422 „Bild nicht lesbar“ statt 500 „programmfehler“ — im Abgleich und im Prüflauf", async () => {
+  // Gültiger Kopf (Maße wie das Rezept), aber nur 60 % der Datei: metadata() liest den Kopf, das Dekodieren scheitert.
+  const ganz = await sharp(ANKER_BYTES).extract({ left: REZEPT.x, top: REZEPT.y, width: REZEPT.breite, height: REZEPT.hoehe }).png().toBuffer();
+  const abgeschnitten = ganz.subarray(0, Math.floor(ganz.length * 0.6));
+  const kopf = await sharp(abgeschnitten).metadata();
+  assert.deepEqual([kopf.width, kopf.height], [REZEPT.breite, REZEPT.hoehe], "der Kopf ist lesbar");
+  const g = await hochladen({ abgleich: { bytes: abgeschnitten, mime: "image/png" } });
+  const r = await post(abgleichRoute, "/abgleich", { eingang: g.abgleich, anker_id: "test-anker", ausschnitt: REZEPT });
+  assert.equal(r.status, 422, JSON.stringify(r.body));
+  assert.equal(r.body.fehler_art, "eingabe");
+  assert.match(r.body.fehler, /^Abgleich nicht möglich: Bild nicht lesbar \(beschädigt oder abgeschnitten\): /);
+  const dateien = { ...DATEIEN, startbild: { bytes: abgeschnitten, mime: "image/png" } };
+  const e = await hochladen(dateien);
+  const p = await pruefen(e, beleg({}, dateien));
+  assert.equal(p.status, 422, JSON.stringify(p.body));
+  assert.match(p.body.fehler, /^Prüflauf nicht möglich: Bild nicht lesbar \(beschädigt oder abgeschnitten\): /);
 });
 
 test("M-U3 upload-url räumt nicht auf, solange ein Job läuft (Mutant X40): alte Reste bleiben, aufgeraeumt ist null", async () => {

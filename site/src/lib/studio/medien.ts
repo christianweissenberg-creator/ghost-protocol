@@ -210,7 +210,7 @@ export function speicherbarerText(s: string): boolean {
   return !s.includes("\u0000") && !EINZELNES_ERSATZZEICHEN.test(s);
 }
 
-const NICHT_SPEICHERBAR = "enthält U+0000 oder ein einzelnes Ersatzzeichen (in Postgres nicht speicherbar)";
+export const NICHT_SPEICHERBAR = "enthält U+0000 oder ein einzelnes Ersatzzeichen (in Postgres nicht speicherbar)";
 
 function text(roh: unknown, feld: string, max: number): Pruefung<string> {
   if (typeof roh !== "string" || roh.trim() === "") return { ok: false, grund: `${feld}: Text fehlt` };
@@ -613,6 +613,31 @@ export function planeZeilen(e: PlanEingabe): VorschauZeile[] {
   };
   const felder = { startbild, original, export: exportZeile };
   return MEDIEN_ROLLEN.map((rolle) => ({ rolle, felder: felder[rolle] }));
+}
+
+/**
+ * Höchste Tiefe der mitgeschickten Vorschau: Liste (1) → Zeile (2) → felder (3) → parameter (4), darin bis zu
+ * PARAMETER_TIEFE_MAX Ebenen; dazu Luft. Tiefer geht keine Vorschau, die der Server selbst gebaut hat.
+ */
+export const VORSCHAU_TIEFE_MAX = 3 + PARAMETER_TIEFE_MAX + 3;
+
+/**
+ * Form der beim Einspielen mitgeschickten Vorschau (Nachtrag d2-oberflaeche-7): eine Liste aus genau einer Zeile je
+ * Rolle, jede mit rolle und felder, höchstens VORSCHAU_TIEFE_MAX Ebenen — ohne Rekursion geprüft. Vorher ging sie
+ * ungeprüft in kanonisch (rekursiv); 100.000 verschachtelte Listen (rund 200 kB) gaben 500 „Maximum call stack size
+ * exceeded“. null = in Ordnung.
+ */
+export function vorschauFormGrund(roh: unknown): string | null {
+  if (!Array.isArray(roh) || roh.length !== MEDIEN_ROLLEN.length) return `vorschau: Liste mit genau ${MEDIEN_ROLLEN.length} Zeilen`;
+  for (const z of roh) if (!istObjekt(z) || typeof z.rolle !== "string" || !istObjekt(z.felder)) return "vorschau: jede Zeile mit rolle und felder";
+  const stapel: Array<{ wert: unknown; tiefe: number }> = [{ wert: roh, tiefe: 1 }];
+  while (stapel.length > 0) {
+    const { wert, tiefe } = stapel.pop() as { wert: unknown; tiefe: number };
+    if (typeof wert !== "object" || wert === null) continue;
+    if (tiefe > VORSCHAU_TIEFE_MAX) return `vorschau: höchstens ${VORSCHAU_TIEFE_MAX} Ebenen`;
+    for (const v of Object.values(wert)) stapel.push({ wert: v, tiefe: tiefe + 1 });
+  }
+  return null;
 }
 
 /** JSON mit rekursiv sortierten Schlüsseln (Arrays behalten ihre Reihenfolge); undefined fällt weg wie bei JSON.stringify. */

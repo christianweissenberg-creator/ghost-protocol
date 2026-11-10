@@ -3,7 +3,7 @@ import { createServiceClient } from "@/lib/supabase";
 import { ABFRAGE_TIMEOUT_MS, KEIN_CACHE, bereinigeFehler, istZeitueberschreitung, pruefeAnfrageHerkunft } from "@/lib/status-server";
 import { pruefeMedienFreigabe } from "@/lib/medien-freigabe";
 import { medienVorgaben } from "@/lib/studio/lesen";
-import { istObjekt } from "@/lib/studio/medien";
+import { NICHT_SPEICHERBAR, istObjekt, speicherbarerText } from "@/lib/studio/medien";
 import { leseJsonKoerper, medienClient } from "@/lib/studio/medien-ablage";
 import { MedienAbbruch, abweisung, alsAbweisung, studioSlug } from "@/lib/studio/medien-ablauf";
 import { DURCH, dateiNachpruefen, leseKette } from "@/lib/studio/medien-urteil";
@@ -76,11 +76,14 @@ function leseEingabe(roh: unknown): Eingabe {
   if (roh.rechte_status !== "offen" && roh.rechte_status !== "geklaert") throw new MedienAbbruch(400, "eingabe", "rechte_status: offen oder geklaert");
   const nachweis = roh.rechte_nachweis === undefined || roh.rechte_nachweis === null ? null : roh.rechte_nachweis;
   if (nachweis !== null && (typeof nachweis !== "string" || zeichen(nachweis) > 300)) throw new MedienAbbruch(400, "eingabe", "rechte_nachweis: Text bis 300 Zeichen");
+  // Nachtrag d2-oberflaeche-6: wie im Beleg (ablauf7-1) — Postgres lehnt U+0000 und einzelne Ersatzzeichen erst beim Einfügen ab (vorher 500).
+  if (nachweis !== null && !speicherbarerText(nachweis)) throw new MedienAbbruch(400, "eingabe", `rechte_nachweis: ${NICHT_SPEICHERBAR}`);
   if (roh.rechte_status === "geklaert" && (nachweis === null || nachweis.trim() === "")) {
     throw new MedienAbbruch(400, "eingabe", "rechte_status geklaert nur mit Nachweis-Verweis");
   }
   const notiz = roh.notiz === undefined || roh.notiz === null ? null : roh.notiz;
   if (notiz !== null && (typeof notiz !== "string" || zeichen(notiz) > 1000)) throw new MedienAbbruch(400, "eingabe", "notiz: Text bis 1000 Zeichen");
+  if (notiz !== null && !speicherbarerText(notiz)) throw new MedienAbbruch(400, "eingabe", `notiz: ${NICHT_SPEICHERBAR}`);
   return {
     medium_sha256: roh.medium_sha256,
     pruefer_kuerzel: roh.pruefer_kuerzel,

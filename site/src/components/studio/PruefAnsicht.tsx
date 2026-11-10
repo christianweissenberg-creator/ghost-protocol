@@ -175,10 +175,17 @@ function Auswahl({ name, wert, setze, titel, daten }: { name: string; wert: Wahl
 
 type SpeicherStand = { art: "bereit" } | { art: "laeuft" } | { art: "fehler"; text: string } | { art: "fertig"; urteil: string; gruende: string[]; id: number | null };
 
-/** Eingaben außerhalb der Ansicht gehalten (PruefBereich): Schließen und Öffnen verliert sie nicht (oberflaeche-4). */
+/**
+ * Eingaben außerhalb der Ansicht gehalten (PruefBereich): Schließen und Öffnen verliert sie nicht (oberflaeche-4). Dazu die
+ * zuletzt gespeicherte Anfrage (Nachtrag d2-oberflaeche-2): Solange die Eingaben ihr gleichen, ist der Knopf gesperrt —
+ * auch nach Schließen und Öffnen, das die Ansicht neu aufbaut. Prüfprotokolle sind unveränderlich; ein zweites gleiches
+ * hätte nur die Historie verdoppelt.
+ */
 export interface GehalteneEingaben {
   wert: PruefEingaben;
   setze: (f: (e: PruefEingaben) => PruefEingaben) => void;
+  gespeichertAls?: string | null;
+  merkeGespeichert?: (anfrage: string) => void;
 }
 
 /** Text bei einem Videofehler: Die Ursache meldet der Browser nicht (401, 404, 409, 502 und eine abgelaufene URL sehen gleich aus). */
@@ -223,6 +230,9 @@ export function PruefAnsicht({
   const [videoVersuch, setVideoVersuch] = useState(0);
   const fehlt = eingabenFehler(eingaben, klauseln);
   const laeuft = stand.art === "laeuft";
+  // Gleicht die Anfrage der zuletzt gespeicherten (im PruefBereich gehalten), gilt sie als gespeichert.
+  const anfrage = JSON.stringify(alsAnfrage(eingaben, ex.sha256, klauseln));
+  const schonGespeichert = stand.art === "fertig" || (stand.art === "bereit" && gehalten?.gespeichertAls != null && gehalten.gespeichertAls === anfrage);
   // Neu laden: neue Anfrage an die Datei-Route (frische signierte URL); der Zusatz umgeht einen gemerkten Abruf.
   const quelleSchluessel = dateiAdresse(video.id);
   const quelleAdresse = videoVersuch === 0 ? quelleSchluessel : `${quelleSchluessel}?neu=${videoVersuch}`;
@@ -271,7 +281,7 @@ export function PruefAnsicht({
   };
 
   async function speichern() {
-    if (eingabenFehler(eingaben, klauseln).length > 0 || stand.art === "laeuft" || stand.art === "fertig") return;
+    if (eingabenFehler(eingaben, klauseln).length > 0 || stand.art === "laeuft" || schonGespeichert) return;
     setStand({ art: "laeuft" });
     let status: number | null = null;
     let daten: unknown = null;
@@ -279,7 +289,7 @@ export function PruefAnsicht({
       const res = await holen(`/api/studio/${encodeURIComponent(slug)}/medien/${ex.id}/pruefung`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(alsAnfrage(eingaben, ex.sha256, klauseln)),
+        body: anfrage,
         cache: "no-store",
       });
       status = res.status;
@@ -291,6 +301,7 @@ export function PruefAnsicht({
     const obj = istObjekt(daten) ? daten : null;
     if (status === 200 && obj && typeof obj.urteil === "string" && Array.isArray(obj.gruende)) {
       setStand({ art: "fertig", urteil: obj.urteil, gruende: obj.gruende.filter((g): g is string => typeof g === "string"), id: typeof obj.pruefung_id === "number" ? obj.pruefung_id : null });
+      gehalten?.merkeGespeichert?.(anfrage);
       gespeichert();
       return;
     }
@@ -396,7 +407,7 @@ export function PruefAnsicht({
         className="mt-4 space-y-3 min-w-0"
         onSubmit={(e) => {
           e.preventDefault();
-          if (fehlt.length === 0 && stand.art !== "laeuft" && stand.art !== "fertig") void speichern();
+          if (fehlt.length === 0 && stand.art !== "laeuft" && !schonGespeichert) void speichern();
         }}
         onKeyDown={(e) => {
           // Enter in einem Eingabefeld sendet nicht ab (oberflaeche-7); gespeichert wird nur über den Knopf.
@@ -472,13 +483,13 @@ export function PruefAnsicht({
         )}
         <button
           type="submit"
-          aria-disabled={fehlt.length > 0 || stand.art === "laeuft" || stand.art === "fertig"}
+          aria-disabled={fehlt.length > 0 || stand.art === "laeuft" || schonGespeichert}
           className="min-h-11 px-4 py-2 rounded-lg text-xs font-medium bg-surface-elevated text-foreground hover:opacity-80 transition-opacity aria-disabled:opacity-40 aria-disabled:cursor-not-allowed"
           data-protokoll-speichern
         >
           Prüfprotokoll speichern
         </button>
-        {stand.art === "fertig" && (
+        {schonGespeichert && (
           <p className="text-[10px] text-text-muted" data-erneut-speichern>
             Gespeichert. Ein weiteres Protokoll erst nach einer Änderung (jedes Protokoll bleibt unverändert stehen).
           </p>

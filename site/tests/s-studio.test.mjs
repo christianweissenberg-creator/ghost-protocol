@@ -1655,7 +1655,7 @@ test("S-P4 Erste Lesung scheitert: Fehlerkarte mit „neu laden“; ein Klick li
   assert.doesNotMatch(statisch, /data-neu-laden/);
 });
 
-test("S-P5 (Nachbesserung oberflaeche-3, caption9-3) Studio-Karte einer Caption zu einem Video: Medium mit Export und Urteil der Medien-Regel statt „keines (Text-Asset)“; die Beleg-Kette sagt „Caption-Teil erfüllt …“ statt grünem „erfüllt“", async () => {
+test("S-P5 (Nachbesserung oberflaeche-3, caption9-3; Nachtrag d2-oberflaeche-1) Studio-Karte einer Caption zu einem Video: Medium mit Export und Urteil der Medien-Regel statt „keines (Text-Asset)“; die Beleg-Kette sagt „Caption-Teil erfüllt …“ statt grünem „erfüllt“; Medienliste nicht lesbar → „Urteil nicht ermittelt“; eigene Zeile ohne Export → „kein Export“", async () => {
   standardWelt();
   videoZeilen();
   const PFLICHT = "Bild-/Videomaterial: KI-generierte Visualisierung, kein Foto der Bestandsimmobilie";
@@ -1671,6 +1671,24 @@ test("S-P5 (Nachbesserung oberflaeche-3, caption9-3) Studio-Karte einer Caption 
   assert.match(t, /gesperrt: Prüfprotokoll fehlt/, "Freigabe: Sperre des Servers mit Medien-Regel");
   assert.match(t, /Caption-Teil erfüllt \(Text und Pflichtzeile\) — die Medien-Regel prüft der Server beim Freigeben/);
   assert.match(karte, /data-pruefregel="caption-teil"/);
+  // Nachtrag d2-oberflaeche-1: Medienliste nicht lesbar → „Urteil nicht ermittelt“, nicht „nicht unter den Videos“.
+  welt.stoerung = (a) => (a.art === "supabase" && a.tabelle === "studio_medium" ? { status: 500, body: { message: "Medien gestört" } } : null);
+  let gestoert;
+  try {
+    gestoert = /<article[^>]*data-asset="50".*?<\/article>/s.exec(await studioHtml((await hole()).body))?.[0] ?? "";
+  } finally {
+    welt.stoerung = null;
+  }
+  assert.match(gestoert, /data-karten-medium="nicht_ermittelt"/);
+  assert.match(sichtbar(gestoert), /Video #3 — Urteil nicht ermittelt \(Medienliste nicht lesbar\)/);
+  assert.doesNotMatch(sichtbar(gestoert), /nicht unter den Videos dieses Objekts/);
+  assert.match(sichtbar(gestoert), /gesperrt: Urteil der Medien-Regel nicht ermittelt/);
+  // Eine eigene Zeile, die kein Export ist (Original #2): „kein Export dieses Objekts“, wie die Freigabe-Zeile.
+  welt.content.find((z) => z.id === 50).metadata.medium_id = 2;
+  const original = /<article[^>]*data-asset="50".*?<\/article>/s.exec(await studioHtml((await hole()).body))?.[0] ?? "";
+  assert.match(original, /data-karten-medium="kein_export"/);
+  assert.match(sichtbar(original), /Video #2 — kein Export dieses Objekts \(Grund unter „Freigabe“\)/);
+  assert.match(sichtbar(original), /gesperrt: Medium ist kein Export/);
   // Caption ohne Video bleibt, wie sie war: „keines (Text-Asset)“, grünes „erfüllt“ in der Kette.
   zuruecksetzen();
   standardWelt();

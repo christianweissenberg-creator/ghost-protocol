@@ -102,6 +102,7 @@ export const HINWEIS_UPLOAD = "Schon hochgeladene Dateien dieses Laufs bleiben b
 export const HINWEIS_SERVER = "Der Server hat die hochgeladenen Dateien dieses Laufs verworfen, sofern er sie schon bearbeitet hatte; bitte neu beginnen.";
 export const HINWEIS_BELEGT = "Die hochgeladenen Dateien bleiben liegen; nach dem laufenden Job erneut starten.";
 export const HINWEIS_ABBRUCH = "Schon hochgeladene Dateien bleiben bis zu 2 h im Eingang; ein schon gesendeter Prüflauf endet auf dem Server, schreibt aber nichts.";
+export const HINWEIS_ABBRUCH_ABGLEICH = "Ein schon hochgeladenes Bild bleibt bis zu 2 h im Eingang; eine schon gesendete Messung endet auf dem Server und legt keine Zeile an.";
 
 /** Job-Arten der Prozess-Sperre in Klartext (medien-ablage.ts, JobArt). */
 const JOB_TEXT: Readonly<Record<string, string>> = { pruefen: "Prüflauf", einspielen: "Einspielen", abgleich: "Abgleich" };
@@ -157,6 +158,15 @@ export interface Datei {
   name: string;
   type: string;
   size: number;
+}
+
+/**
+ * Phase eines Statustexts ohne Fortschritt (Nachtrag d2-oberflaeche-5): „Original hochladen: 3 MB von 15 MB (20 %) …“ wird
+ * „Original hochladen …“. Nur die Phase geht in die Live-Region (Datei begonnen, Prüflauf, Abgleich); der Text mit
+ * Prozent steht sichtbar daneben. Sonst sagte ein Screenreader bis zu 101 Meldungen je Datei an.
+ */
+export function phasenText(text: string): string {
+  return text.replace(/: [^:]* \(\d{1,3} %\) …$/u, " …");
 }
 
 /** Anzeigename einer Upload-Rolle (oberflaeche-9: keine Rollen-Kennungen im sichtbaren Text). */
@@ -437,8 +447,10 @@ function FreigabeUrteil({ k }: { k: MedienKette }) {
 export function PruefBereich({ k, slug, anker, holen, neuLaden }: { k: MedienKette; slug: string; anker: AnkerEintrag | null; holen: Holen; neuLaden: () => void }) {
   const [offen, setOffen] = useState(false);
   const [eingaben, setEingaben] = useState<PruefEingaben | null>(null);
+  // Zuletzt gespeicherte Anfrage (Nachtrag d2-oberflaeche-2): hält die Sperre „kein zweites gleiches Protokoll“ über Schließen und Öffnen.
+  const [gespeichertAls, setGespeichertAls] = useState<string | null>(null);
   const leer = () => leereEingaben(k.original?.prompt_klauseln ?? []);
-  const gehalten = { wert: eingaben ?? leer(), setze: (f: (e: PruefEingaben) => PruefEingaben) => setEingaben((alt) => f(alt ?? leer())) };
+  const gehalten = { wert: eingaben ?? leer(), setze: (f: (e: PruefEingaben) => PruefEingaben) => setEingaben((alt) => f(alt ?? leer())), gespeichertAls, merkeGespeichert: setGespeichertAls };
   return (
     <details className="mt-3" onToggle={(e) => setOffen(e.currentTarget.open)} data-pruefbereich={k.export.id}>
       <summary className="cursor-pointer text-[12px]" style={{ color: "var(--gp-ink)" }}>
@@ -784,13 +796,15 @@ function Einspielen({ slug, holen, eingespielt }: { slug: string; holen: Holen; 
           </button>
         )}
       </div>
-      {/* Nur der Statustext ist eine Live-Region; Vorschau und Fehler bekommen den Fokus (oberflaeche-10). */}
-      <div aria-live="polite" className="mt-2">
-        {stand.art === "laeuft" && (
-          <p className="text-[11px] break-words" style={{ color: "var(--gp-ink-3)" }} data-medien-laeuft>
-            {stand.text}
-          </p>
-        )}
+      {/* Live-Region nur für Phasenwechsel (Nachtrag d2-oberflaeche-5); der Text mit Prozent steht sichtbar daneben.
+          Vorschau und Fehler bekommen den Fokus (oberflaeche-10). */}
+      {stand.art === "laeuft" && (
+        <p className="mt-2 text-[11px] break-words" style={{ color: "var(--gp-ink-3)" }} data-medien-laeuft>
+          {stand.text}
+        </p>
+      )}
+      <div aria-live="polite" className="sr-only" data-medien-phase>
+        {stand.art === "laeuft" ? phasenText(stand.text) : ""}
       </div>
       <div ref={ergebnis} tabIndex={-1} className="outline-none min-w-0" data-einspiel-ergebnis>
         {stand.art === "fehler" && <Abweisungsanzeige a={stand.abweisung} />}
@@ -873,6 +887,13 @@ function Abgleich({ slug, manifest, holen }: { slug: string; manifest: AnkerMani
   const geaendert = () => {
     verwirfLauf(lauf.current);
     setStand({ art: "bereit" });
+  };
+
+  // Abbrechen während Upload oder Messung (Nachtrag d2-oberflaeche-3), wie beim Einspielen: Der Lauf zählt nicht mehr,
+  // der Upload bricht ab, und POST …/abgleich folgt nicht mehr.
+  const abbrechen = () => {
+    verwirfLauf(lauf.current);
+    setStand({ art: "fehler", abweisung: abgebrochen(HINWEIS_ABBRUCH_ABGLEICH) });
   };
 
   const messen = useCallback(async () => {
@@ -975,8 +996,18 @@ function Abgleich({ slug, manifest, holen }: { slug: string; manifest: AnkerMani
       >
         Abgleich messen
       </button>
-      <div aria-live="polite" className="mt-2">
-        {stand.art === "laeuft" && <p className="text-[11px]" style={{ color: "var(--gp-ink-3)" }}>{stand.text}</p>}
+      {laeuft && (
+        <button type="button" onClick={abbrechen} className="mt-3 ml-2 min-h-11 px-4 py-2 rounded-lg text-xs font-medium bg-surface-elevated text-foreground hover:opacity-80 transition-opacity" data-abgleich-abbrechen>
+          Abbrechen
+        </button>
+      )}
+      {stand.art === "laeuft" && (
+        <p className="mt-2 text-[11px]" style={{ color: "var(--gp-ink-3)" }} data-abgleich-laeuft>
+          {stand.text}
+        </p>
+      )}
+      <div aria-live="polite" className="sr-only" data-abgleich-phase>
+        {stand.art === "laeuft" ? phasenText(stand.text) : ""}
       </div>
       {stand.art === "fehler" && <Abweisungsanzeige a={stand.abweisung} />}
       {stand.art === "fertig" && (

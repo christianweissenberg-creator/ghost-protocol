@@ -27,12 +27,12 @@ import { STUDIO_REGELN } from "@/lib/studio/regeln";
 import type { MessplanStand } from "@/lib/studio/messplan";
 import type {
   AssetKosten,
-  MedienKette,
   ObjektKopf,
   StudioAntwort,
   StudioAsset,
   StudioAssetsTeil,
   StudioKosten,
+  StudioMedienWert,
   StudioMesswert,
   StudioStatus,
 } from "@/lib/studio/typen";
@@ -279,7 +279,19 @@ export function entwurfHinweis(geladenAm: string | null | undefined): string {
 }
 
 /** Medium einer Caption zu einem Video auf der Karte: Export, Hash und das Urteil der Medien-Regel (Server). */
-function MediumZeile({ id, ketten }: { id: number | null; ketten: readonly MedienKette[] }) {
+/**
+ * Was die Karte über die Videos dieses Objekts weiß (Nachtrag d2-oberflaeche-1): null, wenn die Medienliste nicht lesbar
+ * oder gekappt ist; sonst Ketten und Zeilen. So nennt die Zeile „Video“ nie „nicht unter den Videos dieses Objekts“, nur
+ * weil die Liste fehlt, und eine eigene Zeile, die kein Export ist, heißt „kein Export“ wie in der Freigabe-Zeile.
+ */
+export type KartenMedien = Pick<StudioMedienWert, "ketten" | "zeilen"> | null;
+
+/** Medienteil der Antwort → KartenMedien: null bei Lesefehler, ohne Wert oder gekappter Liste. */
+export function kartenMedien(teil: StudioMesswert<StudioMedienWert>): KartenMedien {
+  return teil.status === "fehler" || teil.wert === null || teil.wert.abgeschnitten ? null : { ketten: teil.wert.ketten, zeilen: teil.wert.zeilen };
+}
+
+function MediumZeile({ id, medien }: { id: number | null; medien: KartenMedien }) {
   if (id === null) {
     return (
       <dd className="break-words" style={{ color: FARBE_ROT }} data-karten-medium="unlesbar">
@@ -287,11 +299,19 @@ function MediumZeile({ id, ketten }: { id: number | null; ketten: readonly Medie
       </dd>
     );
   }
-  const k = ketten.find((x) => x.export.id === id);
-  if (k === undefined) {
+  if (medien === null) {
     return (
-      <dd className="break-words" style={{ color: FARBE_BERNSTEIN }} data-karten-medium="fremd">
-        Video #{id} — nicht unter den Videos dieses Objekts (Grund unter „Freigabe“)
+      <dd className="break-words" style={{ color: FARBE_BERNSTEIN }} data-karten-medium="nicht_ermittelt">
+        Video #{id} — Urteil nicht ermittelt (Medienliste nicht lesbar)
+      </dd>
+    );
+  }
+  const k = medien.ketten.find((x) => x.export.id === id);
+  if (k === undefined) {
+    const eigene = medien.zeilen.some((z) => z.id === id);
+    return (
+      <dd className="break-words" style={{ color: FARBE_BERNSTEIN }} data-karten-medium={eigene ? "kein_export" : "fremd"}>
+        Video #{id} — {eigene ? "kein Export dieses Objekts" : "nicht unter den Videos dieses Objekts"} (Grund unter „Freigabe“)
       </dd>
     );
   }
@@ -311,13 +331,13 @@ function AssetKarte({
   kopiere,
   kopierStatus,
   geladenAm,
-  ketten = [],
+  medien = null,
 }: {
   a: StudioAsset;
   kopiere: (key: string, text: string) => void;
   kopierStatus: (key: string) => string;
   geladenAm?: string | null;
-  ketten?: readonly MedienKette[];
+  medien?: KartenMedien;
 }) {
   const status = assetStatus(a.status);
   const kanal = [a.kanal, a.format].filter((t): t is string => typeof t === "string" && t.trim() !== "").map(maskiert);
@@ -385,7 +405,7 @@ function AssetKarte({
         </div>
         <div className="min-w-0">
           <dt className="mono-label">Medium</dt>
-          {lage.medium ? <MediumZeile id={lage.medium.id} ketten={ketten} /> : <dd className="text-text-muted">keines (Text-Asset)</dd>}
+          {lage.medium ? <MediumZeile id={lage.medium.id} medien={medien} /> : <dd className="text-text-muted">keines (Text-Asset)</dd>}
         </div>
         <div className="min-w-0">
           <dt className="mono-label">Erstellt</dt>
@@ -408,14 +428,14 @@ function AssetListe({
   kopiere,
   kopierStatus,
   stand,
-  ketten = [],
+  medien = null,
 }: {
   m: StudioAssetsTeil;
   slug: string;
   kopiere: (key: string, text: string) => void;
   kopierStatus: (key: string) => string;
   stand?: StudioStand;
-  ketten?: readonly MedienKette[];
+  medien?: KartenMedien;
 }) {
   return (
     <section className="mb-8 min-w-0" data-teil="assets" data-status={m.status}>
@@ -441,7 +461,7 @@ function AssetListe({
             </p>
           )}
           {m.wert.map((a) => (
-            <AssetKarte key={a.id} a={a} kopiere={kopiere} kopierStatus={kopierStatus} geladenAm={stand?.geladenAm} ketten={ketten} />
+            <AssetKarte key={a.id} a={a} kopiere={kopiere} kopierStatus={kopierStatus} geladenAm={stand?.geladenAm} medien={medien} />
           ))}
         </div>
       )}
@@ -721,7 +741,7 @@ export function StudioAnsicht({
             kopiere={kopiere}
             kopierStatus={kopierStatus}
             stand={stand}
-            ketten={lesung.antwort.medien.wert?.ketten ?? []}
+            medien={kartenMedien(lesung.antwort.medien)}
           />
         </>
       )}

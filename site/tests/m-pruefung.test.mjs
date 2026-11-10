@@ -198,7 +198,7 @@ test("MP-3 Prüfroute: fremder Hash → 409; Datei nachgehasht — verändert od
   assert.ok(welt.studio.log.filter((l) => l.op === "download" && l.pfad === EXPORT_PFAD).length >= 2, "nachgehasht");
 });
 
-test("MP-4 Prüfroute: Klauseln genau einmal, Verweis bei „geklärt“, kein urteil und kein durch vom Browser, Kürzel, Herkunft, Größe → 400/403/413/415", async () => {
+test("MP-4 Prüfroute: Klauseln genau einmal, Verweis bei „geklärt“, kein urteil und kein durch vom Browser, Kürzel, U+0000 und einzelne Ersatzzeichen in Notiz und Nachweis (Nachtrag d2-oberflaeche-6), Herkunft, Größe → 400/403/413/415", async () => {
   video();
   const faelle = [
     [eingabe({ klauseln: [{ id: "licht", bestanden: true }] }), /fehlt: rahmen/],
@@ -210,6 +210,11 @@ test("MP-4 Prüfroute: Klauseln genau einmal, Verweis bei „geklärt“, kein u
     [{ ...eingabe(), durch: "jemand" }, /durch setzt der Server/],
     [eingabe({ pruefer_kuerzel: "T" }), /pruefer_kuerzel/],
     [eingabe({ anker_abgleich: "ja" }), /anker_abgleich/],
+    // Nachtrag d2-oberflaeche-6: U+0000 oder ein einzelnes Ersatzzeichen → 400 mit Feldname, nicht 500 beim Einfügen.
+    [eingabe({ notiz: "Notiz\u0000mit Null" }), /^notiz: enthält U\+0000 oder ein einzelnes Ersatzzeichen/],
+    [eingabe({ notiz: "Notiz \ud800 allein" }), /^notiz: enthält U\+0000 oder ein einzelnes Ersatzzeichen/],
+    [eingabe({ rechte_nachweis: "Verweis\u0000" }), /^rechte_nachweis: enthält U\+0000 oder ein einzelnes Ersatzzeichen/],
+    [eingabe({ rechte_nachweis: "Verweis \udc00" }), /^rechte_nachweis: enthält U\+0000 oder ein einzelnes Ersatzzeichen/],
   ];
   for (const [koerper, muster] of faelle) {
     const r = await pruefe(3, koerper);
@@ -1255,6 +1260,60 @@ test("MP-22 Prüfansicht (Nachbesserung oberflaeche-4): Videofehler mit eigenem 
   assert.ok(aufrufe.length > vorher, "wieder geöffnet");
   assert.equal(aufrufe.at(-1).gehalten.wert.personen, "nicht_bestanden", "nach dem Wiederöffnen erhalten");
   assert.equal(radio(baum2(), "personen", 1).props.checked, true);
+});
+
+test("MP-30 Prüfbereich (Nachtrag d2-oberflaeche-2): Nach dem Speichern, Schließen und Öffnen bleibt „Prüfprotokoll speichern“ ohne Änderung gesperrt — kein zweites gleiches Protokoll; nach einer Änderung wieder frei", async () => {
+  video();
+  const k = await kette();
+  const lz = hookLaufzeit();
+  const B = ladeStudioBausteine({ ...lz.attrappen, "@/lib/counsel-urteil": counsel, "@/lib/freigabe-regeln": regeln });
+  const gesendet = [];
+  const holen = async (url, init) => {
+    gesendet.push(JSON.parse(init.body));
+    const req = new NextRequest(`http://harness.local${url}`, { method: "POST", headers: { ...init.headers, "sec-fetch-site": "same-origin" }, body: init.body });
+    return pruefRoute.POST(req, { params: Promise.resolve({ objekt: SLUG, id: "3" }) });
+  };
+  const M = ladeMedienPanel({ ...lz.attrappen, "@/lib/counsel-urteil": counsel, "@/lib/freigabe-regeln": regeln }, { anker: ladeTsx("lib/studio/anker.ts", {}), types: ladeTsx("lib/types.ts", {}), hilfen: B.hilfen });
+  lz.setzeWurzel(M.PruefBereich, { k, slug: SLUG, anker: HOF, holen, neuLaden: () => {} });
+  const baum = () => lz.rendere();
+  const oeffne = (offen) => findeKnoten(baum(), (n) => n.type === "details").props.onToggle({ currentTarget: { open: offen } });
+  const waehle = (punkt, i) => {
+    const feld = findeKnoten(baum(), (n) => n.type === "fieldset" && n.props["data-pruefpunkt"] === punkt);
+    const radios = [];
+    (function sammle(n) { if (Array.isArray(n)) n.forEach(sammle); else if (n && typeof n === "object") { if (n.type === "input" && n.props.type === "radio") radios.push(n); sammle(n.kinder); } })(feld);
+    radios[i].props.onChange();
+  };
+  const form = () => findeKnoten(baum(), (n) => n.type === "form");
+  const knopf = () => findeKnoten(baum(), (n) => n.type === "button" && n.props["data-protokoll-speichern"] !== undefined);
+  const hinweis = () => findeKnoten(baum(), (n) => n.props?.["data-erneut-speichern"] !== undefined);
+  oeffne(true);
+  for (const punkt of ["klausel-licht", "klausel-rahmen", "architektur", "personen", "wasser", "hinweis"]) waehle(punkt, 0);
+  findeKnoten(baum(), (n) => n.props?.["data-durchsicht"] !== undefined && n.type === "input").props.onChange({ currentTarget: { checked: true } });
+  findeKnoten(baum(), (n) => n.props?.["data-kuerzel"] !== undefined && n.type === "input").props.onChange({ currentTarget: { value: "TS" } });
+  form().props.onSubmit({ preventDefault() {} });
+  await lz.ruhe();
+  assert.equal(gesendet.length, 1);
+  assert.equal(protokolle().length, 1);
+  // Schließen und Öffnen baut die Ansicht neu auf: gesperrt, mit Hinweis, kein zweiter POST.
+  oeffne(false);
+  baum();
+  oeffne(true);
+  assert.equal(knopf().props["aria-disabled"], true, "nach Schließen und Öffnen gesperrt");
+  assert.ok(hinweis(), "Hinweis „Gespeichert. Ein weiteres Protokoll erst nach einer Änderung“");
+  form().props.onSubmit({ preventDefault() {} });
+  await lz.ruhe();
+  assert.equal(gesendet.length, 1, "kein zweites gleiches Protokoll");
+  assert.equal(protokolle().length, 1);
+  // Nach einer Änderung wieder frei; zurück zur gespeicherten Auswahl wieder gesperrt.
+  waehle("wasser", 1);
+  assert.equal(knopf().props["aria-disabled"], false);
+  waehle("wasser", 0);
+  assert.equal(knopf().props["aria-disabled"], true, "gleich der gespeicherten Anfrage");
+  waehle("wasser", 1);
+  form().props.onSubmit({ preventDefault() {} });
+  await lz.ruhe();
+  assert.equal(gesendet.length, 2);
+  assert.equal(protokolle().length, 2);
 });
 
 test("MP-23 Prüfansicht (Nachbesserung oberflaeche-7): Felder während des Speicherns gesperrt; nach Erfolg kein zweites Protokoll ohne Änderung; jede Änderung (auch eine Klausel) gibt den Knopf frei; Enter in einem Eingabefeld sendet nicht ab", async () => {
