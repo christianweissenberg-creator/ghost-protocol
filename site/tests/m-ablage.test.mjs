@@ -6,7 +6,7 @@
 // steinadel.de eine Attrappe in dieser Datei. Nur synthetische Bilder (sharp) und Videos (MP4-Kopf „ftyp“, sonst
 // Zufallsbytes); keine Anker- oder Probe-Dateien. Das Anker-Manifest ist synthetisch (tests/harness/anker-attrappe.mjs,
 // per registerHooks statt src/lib/studio/anker.ts geladen). Die Umgebungswerte sind Test-Werte dieses Prozesses.
-import { test, beforeEach } from "node:test";
+import { test, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { createHash, randomFillSync } from "node:crypto";
 import { createRequire, registerHooks } from "node:module";
@@ -1101,6 +1101,15 @@ function textVon(k) {
  * Medien-Panel in der Hook-Laufzeit; holen leitet eigene Routen an die echten Handler, alles andere (PUT auf die signierte
  * URL) an die Storage-Attrappe. tor: optionale Sperre vor dem PUT einer Rolle (respektiert das Abbruchsignal).
  */
+/**
+ * Panel-Laufzeiten des laufenden Tests. Nach jedem Test werden sie abgebaut (wie beim Verlassen der Seite): Scheitert
+ * ein Test mitten im Lauf, bricht das den Upload ab, und die 60-s-Frist des Uploads hält den Testprozess nicht offen.
+ */
+const offeneLaufzeiten = [];
+afterEach(() => {
+  for (const lz of offeneLaufzeiten.splice(0)) lz.abbauen();
+});
+
 async function panelLaufzeit() {
   const { jsxRuntime } = await import("./harness/tsx.mjs");
   void jsxRuntime;
@@ -1108,6 +1117,7 @@ async function panelLaufzeit() {
   const regeln = await import("../src/lib/freigabe-regeln.ts");
   const counsel = await import("../src/lib/counsel-urteil.ts");
   const lz = hookLaufzeit();
+  offeneLaufzeiten.push(lz);
   const P = ladeStudioBausteine({ ...lz.attrappen, "@/lib/counsel-urteil": counsel, "@/lib/freigabe-regeln": regeln }).medien;
   const log = [];
   const tore = new Map();
@@ -1354,8 +1364,9 @@ test("M-K6 Upload im Browser (Nachbesserung oberflaeche-2): sendenPerXhr mit XML
   const hatteFenster = Object.hasOwn(globalThis, "window");
   const fensterVorher = globalThis.window;
   globalThis.XMLHttpRequest = XhrAttrappe;
+  let t = null;
   try {
-    const t = await panelLaufzeit();
+    t = await panelLaufzeit();
     const { P } = t;
     const URL_ = "https://storage.invalid/object/upload/sign/medien/eingang/x.mp4?token=t";
     const blob = new Blob([Buffer.alloc(1000)]);
@@ -1441,6 +1452,8 @@ test("M-K6 Upload im Browser (Nachbesserung oberflaeche-2): sendenPerXhr mit XML
     assert.ok(!t.log.some(([m]) => m === "PUT"), "kein PUT über holen, wenn der Browser XMLHttpRequest hat");
     assert.equal(fenster.hoerer.size, 0, "nach dem Lauf keine Nachfrage mehr");
   } finally {
+    // Erst abbauen (bricht einen hängenden Lauf ab und nimmt den beforeunload-Hörer über window ab), dann die Globals zurück.
+    t?.lz.abbauen();
     if (hatte) globalThis.XMLHttpRequest = vorher;
     else delete globalThis.XMLHttpRequest;
     if (hatteFenster) globalThis.window = fensterVorher;
