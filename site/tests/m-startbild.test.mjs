@@ -55,11 +55,58 @@ test("M-S1 PNG-Ausschnitt aus dem Anker → größte Abweichung 0, bestanden; Ve
   assert.deepEqual(e.versionen, versionen);
   assert.match(e.versionen.sharp, /^\d+\.\d+\.\d+/);
   assert.match(e.versionen.vips, /^\d+\.\d+\.\d+/);
-  // Nachbesserung infra-1: nativ oder WebAssembly — hier (lokal) nativ; „emscripten“ in sharp.versions heißt WebAssembly.
+  // Nachbesserung infra-1: nativ oder WebAssembly — hier (lokal) nativ.
   assert.equal(e.versionen.nativ, true);
-  assert.equal(startbild.sharpNativ(sharp.versions), true);
-  assert.equal(startbild.sharpNativ({ vips: "8.18.7", emscripten: "6.0.10", sharp: "0.35.5" }), false);
-  assert.equal(startbild.sharpNativ({ vips: "8.18.7", sharp: "0.35.5" }), true);
+  // Nachtrag d1-e22-rauchtest-3: „emscripten“ in versions ODER ein geladenes Modul unter @img/sharp-…wasm32 heißt
+  // WebAssembly; nativ nur mit geladenem nativem Binary (@img/sharp-<plattform>/….node). Pfade wie im require.cache.
+  const geladen = Object.keys(createRequire(path.join(SITE, "package.json")).cache);
+  assert.ok(geladen.some((k) => /[\\/]@img[\\/]sharp-[^\\/]+[\\/]lib[\\/][^\\/]+\.node$/.test(k)), "lokal ist das native Binary geladen");
+  assert.equal(startbild.sharpNativ(sharp.versions, geladen), true);
+  const NATIV = ["/app/node_modules/@img/sharp-linuxmusl-x64/index.cjs", "/app/node_modules/@img/sharp-linuxmusl-x64/lib/sharp-linuxmusl-x64-0.35.5.node", "/app/node_modules/@img/sharp-libvips-linuxmusl-x64/versions.json"];
+  const WASM = ["/app/node_modules/@img/sharp-wasm32/index.cjs", "/app/node_modules/@img/sharp-wasm32/lib/sharp-wasm32-0.35.5.node.js"];
+  const V = { vips: "8.18.7", sharp: "0.35.5" };
+  assert.equal(startbild.sharpNativ(V, NATIV), true);
+  assert.equal(startbild.sharpNativ({ ...V, emscripten: "4.0.0" }, NATIV), false, "emscripten in versions");
+  assert.equal(startbild.sharpNativ(V, WASM), false, "Fall E: versions.json von sharp-wasm32 fehlt, geladen ist WebAssembly");
+  assert.equal(startbild.sharpNativ(V, [...NATIV, ...WASM]), false, "beides geladen: WebAssembly zählt");
+  assert.equal(startbild.sharpNativ(V, ["/app/node_modules/@img/sharp-freebsd-wasm32/index.cjs"]), false);
+  assert.equal(startbild.sharpNativ(V, []), false, "kein natives Binary geladen");
+  assert.equal(startbild.sharpNativ(V, ["/app/node_modules/@img/sharp-libvips-linuxmusl-x64/versions.json"]), false, "nur libvips, kein Binary");
+  assert.equal(startbild.sharpNativ(V, ["C:\\app\\node_modules\\@img\\sharp-win32-x64\\lib\\sharp-win32-x64-0.35.5.node"]), true, "Windows-Pfade");
+});
+
+test("M-S1b versionen.nativ kommt aus ladeSharp selbst (Nachtrag d1-nachweis-4): sharp-Attrappe mit „emscripten“ → false; ohne „emscripten“, aber mit geladenem @img/sharp-wasm32 → false", async () => {
+  // Eigene Instanz von startbild.ts je Fall (Abfrage-Parameter), deren import("sharp") die Attrappe liefert.
+  const attrappe = (versions) =>
+    `data:text/javascript,${encodeURIComponent(`export default { versions: ${JSON.stringify(versions)}, cache() {}, concurrency() {} };`)}`;
+  const faelle = new Map([
+    ["sharp-attrappe-wasm", attrappe({ vips: "8.18.7", sharp: "0.35.5", emscripten: "4.0.0" })],
+    ["sharp-attrappe-ohne", attrappe({ vips: "8.18.7", sharp: "0.35.5" })],
+  ]);
+  registerHooks({
+    resolve(specifier, context, nextResolve) {
+      if (specifier === "sharp") {
+        for (const [kennung, url] of faelle) if (context.parentURL?.includes(kennung)) return { url, shortCircuit: true };
+      }
+      return nextResolve(specifier, context);
+    },
+  });
+  const mitWasm = await import("../src/lib/studio/startbild.ts?sharp-attrappe-wasm");
+  assert.equal((await mitWasm.ladeSharp()).versionen.nativ, false, "emscripten in versions");
+  // Ohne emscripten: Das echte native Binary steht hier schon im Cache; ein geladenes WebAssembly-Modul zählt trotzdem.
+  const cache = createRequire(path.join(SITE, "package.json")).cache;
+  const WASM_PFAD = path.join(SITE, "node_modules/@img/sharp-wasm32/lib/sharp-wasm32-0.35.5.node.js");
+  const hatte = Object.hasOwn(cache, WASM_PFAD);
+  if (!hatte) cache[WASM_PFAD] = { id: WASM_PFAD, filename: WASM_PFAD, loaded: true, exports: {} };
+  try {
+    const ohne = await import("../src/lib/studio/startbild.ts?sharp-attrappe-ohne");
+    assert.equal((await ohne.ladeSharp()).versionen.nativ, false, "WebAssembly-Modul im Cache");
+  } finally {
+    if (!hatte) delete cache[WASM_PFAD];
+  }
+  // Gegenprobe: dieselbe Attrappe ohne WebAssembly im Cache → nativ (das echte Binary ist geladen).
+  const sauber = await import("../src/lib/studio/startbild.ts?sharp-attrappe-ohne&gegenprobe");
+  assert.equal((await sauber.ladeSharp()).versionen.nativ, true);
 });
 
 test("M-S2 JPEG neu kodiert → über der Toleranz, nicht bestanden, mit Messwerten", async () => {

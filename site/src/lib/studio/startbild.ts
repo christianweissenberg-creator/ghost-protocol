@@ -18,6 +18,7 @@
 //   Thread (cache(false), concurrency(1)); Eingaben über MAX_PIXEL Bildpunkten lehnt sharp ab.
 
 import "server-only";
+import { createRequire } from "node:module";
 import type { SharpConstructor } from "sharp";
 import type { AbgleichErgebnis, Ausschnitt } from "./typen";
 
@@ -29,9 +30,9 @@ export const MAX_PIXEL = 40_000_000;
 type SharpFabrik = SharpConstructor;
 
 /**
- * Versionen für Antwort und Abnahme. nativ = false heißt: sharp ist auf WebAssembly (@img/sharp-wasm32)
- * ausgewichen — sharp 0.35 tut das ohne Warnung, wenn das native Binary fehlt oder nicht lädt (Nachbesserung
- * infra-1). Erkennbar daran, dass sharp.versions dann den Eintrag „emscripten“ trägt.
+ * Versionen für Antwort und Abnahme. nativ = false heißt: sharp läuft nicht mit seinem nativen Binary — sharp 0.35
+ * weicht ohne Warnung auf WebAssembly (@img/sharp-wasm32) aus, wenn das native Binary fehlt oder nicht lädt
+ * (Nachbesserung infra-1). Erkannt wird das an zwei Stellen (sharpNativ).
  */
 export type SharpVersionen = { sharp: string; vips: string; nativ: boolean };
 
@@ -40,9 +41,26 @@ export interface SharpModul {
   versionen: SharpVersionen;
 }
 
-/** true, wenn sharp das native Binary geladen hat (kein „emscripten“ in sharp.versions). */
-export function sharpNativ(versions: object): boolean {
-  return !("emscripten" in versions);
+/**
+ * true, wenn sharp sein natives Binary geladen hat. Zwei Prüfungen (Nachtrag d1-e22-rauchtest-3):
+ * - „emscripten“ in sharp.versions heißt WebAssembly. Der Eintrag stammt aber nur aus @img/sharp-wasm32/versions.json;
+ *   fehlt diese Datei (etwa im Trace), trägt versions ihn nicht, obwohl WebAssembly läuft.
+ * - Deshalb zählt auch das tatsächlich geladene Modul: geladen sind die Pfade im CommonJS-Cache (require.cache). sharp
+ *   lädt sein Binary dorthin, auch über import (dist/sharp.mjs nutzt createRequire). Ein Pfad unter @img/sharp-…wasm32
+ *   heißt WebAssembly; nativ ist sharp nur, wenn ein natives Binary (@img/sharp-<plattform>/….node) geladen ist.
+ * Gemessen in Kopien des Standalone-Ordners (darwin-arm64): ohne natives Paket und ohne versions.json fehlt
+ * „emscripten“, im Cache steht @img/sharp-wasm32/lib/sharp-wasm32-0.35.5.node.js — über require und über import.
+ */
+export function sharpNativ(versions: object, geladen: readonly string[]): boolean {
+  const pfade = geladen.map((p) => p.replaceAll("\\", "/"));
+  const wasm = "emscripten" in versions || pfade.some((p) => p.includes("/@img/sharp-") && p.includes("wasm32"));
+  const nativ = pfade.some((p) => p.includes("/@img/sharp-") && !p.includes("wasm32") && p.endsWith(".node"));
+  return nativ && !wasm;
+}
+
+/** Pfade der geladenen CommonJS-Module (require.cache ist für jede require-Funktion des Prozesses derselbe). */
+function geladeneModule(): string[] {
+  return Object.keys(createRequire(`${process.cwd()}/package.json`).cache);
 }
 
 let modul: Promise<SharpModul> | null = null;
@@ -55,7 +73,7 @@ export function ladeSharp(): Promise<SharpModul> {
         const sharp: SharpFabrik = m.default;
         sharp.cache(false);
         sharp.concurrency(1);
-        return { sharp, versionen: { sharp: sharp.versions.sharp, vips: sharp.versions.vips, nativ: sharpNativ(sharp.versions) } };
+        return { sharp, versionen: { sharp: sharp.versions.sharp, vips: sharp.versions.vips, nativ: sharpNativ(sharp.versions, geladeneModule()) } };
       })
       .catch((e: unknown) => {
         modul = null;
