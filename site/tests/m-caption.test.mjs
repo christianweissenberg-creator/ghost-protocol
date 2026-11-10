@@ -283,6 +283,8 @@ test("M-C4 Caption-Lauf: medium_id in metadata, SCRIBE-Auftrag mit Auftragsart u
   const z = zeile(r.body.contentId);
   const roh = PUBLISHER_ROH(auftrag("publisher"));
   assert.equal(pflichtzeilen(roh), 0, "PUBLISHER schrieb die Pflichtzeile nicht");
+  // Nachbesserung caption9-4: Auch der PUBLISHER-Auftrag nennt die Pflichtzeile wörtlich, als letzte Zeile des finalen Contents.
+  assert.ok(auftrag("publisher").includes(`- Finaler Content (mit deinen Korrekturen); als letzte Zeile des finalen Contents diese Pflichtzeile wörtlich, als eigene Zeile, ohne Formatierung:\n  ${PFLICHTZEILE}\n`), auftrag("publisher").slice(0, 400));
   const erwartet = `${roh.trimEnd()}\n\n${PFLICHTZEILE}`;
   assert.equal(r.body.steps[3].output, erwartet, "Pflichtzeile als letzte Zeile nach einer Leerzeile");
   assert.equal(z.metadata.steps[3].output, erwartet);
@@ -313,7 +315,7 @@ test("M-C4 Caption-Lauf: medium_id in metadata, SCRIBE-Auftrag mit Auftragsart u
   assert.equal(z.status, "zur_freigabe");
   assert.equal(z.metadata.medium_id, EXPORT_ID);
   assert.equal(typeof z.metadata.medium_id, "number");
-  assert.deepEqual(z.metadata.pflichtzeile, { wortlaut: PFLICHTZEILE, von_pipeline_ergaenzt: true });
+  assert.deepEqual(z.metadata.pflichtzeile, { wortlaut: PFLICHTZEILE, von_pipeline_ergaenzt: true, ersetzt: null });
   assert.equal(z.metadata.lauf_id, "lauf-caption-0001");
   assert.deepEqual(r.body.warnungen, []);
 });
@@ -342,17 +344,37 @@ test("M-C5 Pflichtzeile schon da → keine Verdopplung; abweichender Wortlaut, Z
     assert.equal(r.body.steps[3].output, roh);
     assert.equal(pflichtzeilen(z.body), 1, "keine Verdopplung");
     assert.ok(auftrag("counsel", 1).includes(`ENDFASSUNG (PUBLISHER):\n${roh}\n\nOBJEKTDATEN`));
-    assert.deepEqual(z.metadata.pflichtzeile, { wortlaut: PFLICHTZEILE, von_pipeline_ergaenzt: false });
+    assert.deepEqual(z.metadata.pflichtzeile, { wortlaut: PFLICHTZEILE, von_pipeline_ergaenzt: false, ersetzt: null });
     assert.equal(videoFreigabe(z).freigebbar, true);
   }
-  // Abweichender Wortlaut zählt nicht: Die wörtliche Zeile wird ergänzt, die abweichende bleibt stehen (der Text ist PUBLISHERs)
+  // Nahe Varianten (Nachbesserung caption9-4): Schlusspunkt, Fettdruck, Großschrift, geschützter Bindestrich, geschütztes
+  // oder doppeltes Leerzeichen, Emoji davor → durch die wörtliche Zeile ERSETZT, nicht verdoppelt; die ersetzte Zeile
+  // steht in metadata.pflichtzeile.ersetzt. Vorhanden heißt weiter nur wörtlich (die Freigabe-Regel bleibt streng).
+  for (const nah of [
+    `${PFLICHTZEILE}.`,
+    `**${PFLICHTZEILE}**`,
+    PFLICHTZEILE.toUpperCase(),
+    PFLICHTZEILE.replace("KI-generierte", "KI\u2011generierte"),
+    PFLICHTZEILE.replace("kein Foto", "kein\u00a0Foto"),
+    PFLICHTZEILE.replace("kein Foto", "kein  Foto"),
+    `🎬 ${PFLICHTZEILE}`,
+  ]) {
+    const pub = (task) => `Finaler Content: ${linkAusAuftrag(task)}\n${nah}\nCross-Promotion-Tweet: mehr im Hauptpost.`;
+    const { r, z } = await lauf(pub);
+    const erwartet = pub(auftrag("publisher")).replace(nah, PFLICHTZEILE);
+    assert.equal(z.body, erwartet, nah);
+    assert.equal(r.body.steps[3].output, erwartet, nah);
+    assert.equal(pflichtzeilen(z.body), 1, nah);
+    assert.ok(!z.body.includes(`${nah}\n`) || nah === PFLICHTZEILE, `${nah}: Variante ersetzt`);
+    assert.deepEqual(z.metadata.pflichtzeile, { wortlaut: PFLICHTZEILE, von_pipeline_ergaenzt: true, ersetzt: nah }, nah);
+    assert.equal(videoFreigabe(z).freigebbar, true, nah);
+  }
+  assert.equal(regeln.enthaeltPflichtzeile(`${PFLICHTZEILE}.`, PFLICHTZEILE), false, "die Freigabe-Regel bleibt wörtlich");
+  // Anderer Wortlaut zählt nicht: Die wörtliche Zeile wird ergänzt, die abweichende bleibt stehen (der Text ist PUBLISHERs)
   for (const abweichend of [
     "Bild-/Videomaterial: KI-generierte Visualisierung – kein Foto der Bestandsimmobilie",
-    "Bild-/Videomaterial: KI-generierte Visualisierung, kein Foto der Bestandsimmobilie.",
     "Bild- und Videomaterial: KI-generierte Visualisierung, kein Foto der Bestandsimmobilie",
-    `*${PFLICHTZEILE}*`,
     `Hinweis: ${PFLICHTZEILE}`,
-    PFLICHTZEILE.toUpperCase(),
   ]) {
     const pub = (task) => `Finaler Content: ${linkAusAuftrag(task)}\n${abweichend}`;
     const { r, z } = await lauf(pub);
@@ -361,7 +383,7 @@ test("M-C5 Pflichtzeile schon da → keine Verdopplung; abweichender Wortlaut, Z
     assert.equal(r.body.steps[3].output, erwartet, abweichend);
     assert.equal(pflichtzeilen(z.body), 1, abweichend);
     assert.ok(auftrag("counsel", 1).includes(`\n${PFLICHTZEILE}\n\nOBJEKTDATEN`), `${abweichend}: Endprüfung mit der wörtlichen Zeile`);
-    assert.deepEqual(z.metadata.pflichtzeile, { wortlaut: PFLICHTZEILE, von_pipeline_ergaenzt: true }, abweichend);
+    assert.deepEqual(z.metadata.pflichtzeile, { wortlaut: PFLICHTZEILE, von_pipeline_ergaenzt: true, ersetzt: null }, abweichend);
     assert.equal(videoFreigabe(z).freigebbar, true, abweichend);
   }
 });
@@ -393,7 +415,7 @@ test("M-C6 Reihenfolge: Mindestlänge auf PUBLISHERs eigenem Text (die Pflichtze
   assert.deepEqual([regel.body.fehler.stufe, regel.body.fehler.grund], ["publisher", "Kurzlink-Prüfung nicht bestanden (E12)"]);
   const zr = zeile(regel.body.contentId);
   assert.equal(zr.metadata.steps[3].output, `${pub(auftrag("publisher"))}\n\n${PFLICHTZEILE}`);
-  assert.deepEqual(zr.metadata.pflichtzeile, { wortlaut: PFLICHTZEILE, von_pipeline_ergaenzt: true });
+  assert.deepEqual(zr.metadata.pflichtzeile, { wortlaut: PFLICHTZEILE, von_pipeline_ergaenzt: true, ersetzt: null });
   assert.equal(zr.body, null, "kein Freigabetext");
 
   // Namensschutz: ebenso nach der Ergänzung (der Name nur zusammengesetzt, wie in p-paket-b-pipeline)

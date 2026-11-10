@@ -8,7 +8,7 @@ import {
   enthaeltGeschuetztenNamen,
   geprueftenTextAusSchritten,
   maskiereGeschuetzteNamen,
-  mitPflichtzeile,
+  pflichtzeileEinsetzen,
 } from "@/lib/freigabe-regeln";
 import { ABFRAGE_TIMEOUT_MS, bereinigeFehler, leseProtokollEintraege, pruefeAnfrageHerkunft } from "@/lib/status-server";
 import { STEINADEL_REGELPAKET } from "@/lib/steinadel-regelpaket";
@@ -71,7 +71,7 @@ const BASE_URL = process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000";
 // - metadata.medium_id ist die Zahl. Der SCRIBE-Auftrag nennt die Auftragsart „Caption zu einem Video, Pflichtzeile
 //   KI-Hinweis“ und die Pflichtzeile (KI_PFLICHTZEILE_CAPTION, lib/studio/ki-hinweis.ts) als eigene Zeile (CAPTION_AUFTRAG).
 // - Fehlt die Pflichtzeile in der PUBLISHER-Fassung, ergänzt die Pipeline sie im PUBLISHER-Text selbst (steps[3].output,
-//   mitPflichtzeile aus lib/freigabe-regeln.ts) — nach der Mindestlänge (die Zeile allein ist kein Content), vor Namensschutz,
+//   pflichtzeileEinsetzen aus lib/freigabe-regeln.ts; eine nahe Variante wird ersetzt) — nach der Mindestlänge (die Zeile allein ist kein Content), vor Namensschutz,
 //   Textregeln und Endprüfung. Grund: R2 gibt nur den wörtlich geprüften PUBLISHER-Text frei (geprueftenTextAusSchritten);
 //   eine erst an body angehängte Zeile sperrte die Freigabe. So prüft COUNSEL genau den Text mit Pflichtzeile, und body ist
 //   dieser Text. metadata.pflichtzeile belegt den Wortlaut und ob die Pipeline ergänzt hat.
@@ -594,7 +594,7 @@ function istMediumId(wert: unknown): wert is number {
 /**
  * Auftragsart im SCRIBE-Auftrag für die Caption zu einem Video (Paket C, Schritt 9; Spezifikation §6.3 und Z. 1262).
  * Die Pflichtzeile steht allein in ihrer Zeile, damit SCRIBE sie Zeichen für Zeichen übernehmen kann. Fehlt sie in der
- * PUBLISHER-Fassung, ergänzt die Pipeline sie vor der Endprüfung (mitPflichtzeile).
+ * PUBLISHER-Fassung, ergänzt die Pipeline sie vor der Endprüfung (pflichtzeileEinsetzen; eine nahe Variante wird ersetzt).
  */
 const CAPTION_AUFTRAG =
   "AUFTRAGSART: Caption zu einem Video, Pflichtzeile KI-Hinweis\n" +
@@ -1953,7 +1953,7 @@ AUFGABEN:
 5. Cross-Promotion: Wie kann dieser Content auf den anderen Plattformen angeteasert werden?
 
 Liefere:
-- Finaler Content (mit deinen Korrekturen)
+- Finaler Content (mit deinen Korrekturen)${mediumId !== null ? `; als letzte Zeile des finalen Contents diese Pflichtzeile wörtlich, als eigene Zeile, ohne Formatierung:\n  ${KI_PFLICHTZEILE_CAPTION}` : ""}
 - Metadaten (Title, Description, Tags, Hashtags)
 - Publishing-Zeitpunkt (Tag + Uhrzeit, DACH-optimiert)
 - Cross-Promotion-Posts (1 Tweet, 1 Newsletter-Teaser)${kurzlink ? " — ohne Link, mit Verweis auf den Hauptpost" : ""}
@@ -1990,18 +1990,20 @@ Modellrechnung-Disclaimer wörtlich.${datierungsHinweisPublisher(datierung)}${ob
     }
 
     // Paket C, Schritt 9: Caption zu einem Video — fehlt die Pflichtzeile, ergänzt die Pipeline sie im PUBLISHER-Text
-    // selbst (steps[3].output) als letzte Zeile (mitPflichtzeile). Erst nach der Mindestlänge, denn die Zeile allein ist
+    // selbst (steps[3].output) als letzte Zeile (pflichtzeileEinsetzen). Erst nach der Mindestlänge, denn die Zeile allein ist
     // kein Content; vor Namensschutz, Textregeln und Endprüfung, damit COUNSEL genau den Text mit Pflichtzeile prüft und
     // body dieser Text ist. R2 (geprueftenTextAusSchritten) gibt nur den wörtlich geprüften PUBLISHER-Text frei; eine
     // erst an body angehängte Zeile sperrte die Freigabe. Steht die Zeile schon da, bleibt der Text, wie er ist.
+    // Nachbesserung caption9-4: Eine nahe Variante (Schlusspunkt, anderer Bindestrich, Fettdruck …) wird durch die
+    // wörtliche Zeile ersetzt statt verdoppelt; ersetzt hält die ersetzte Zeile fest (der Text war PUBLISHERs).
     if (mediumId !== null) {
-      const mitZeile = mitPflichtzeile(freigabeText, KI_PFLICHTZEILE_CAPTION);
-      const ergaenzt = mitZeile !== freigabeText;
+      const p = pflichtzeileEinsetzen(freigabeText, KI_PFLICHTZEILE_CAPTION);
+      const ergaenzt = p.art !== "vorhanden";
       if (ergaenzt) {
-        steps[3].output = mitZeile;
-        freigabeText = mitZeile;
+        steps[3].output = p.text;
+        freigabeText = p.text;
       }
-      basisMetadata = { ...basisMetadata, pflichtzeile: { wortlaut: KI_PFLICHTZEILE_CAPTION, von_pipeline_ergaenzt: ergaenzt } };
+      basisMetadata = { ...basisMetadata, pflichtzeile: { wortlaut: KI_PFLICHTZEILE_CAPTION, von_pipeline_ergaenzt: ergaenzt, ersetzt: p.ersetzt } };
     }
 
     // R24 Namensschutz: Ein Freigabetext mit geschütztem Namen geht nie auf "zur_freigabe".

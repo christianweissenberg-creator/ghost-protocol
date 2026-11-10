@@ -225,11 +225,47 @@ export function enthaeltPflichtzeile(text: string | null | undefined, pflichtzei
   return text.split(/\r?\n/).some((zeile) => zeile.trim() === soll);
 }
 
-/** Text mit Pflichtzeile: unverändert, wenn sie schon als eigene Zeile dasteht; sonst als letzte Zeile nach einer Leerzeile. */
-export function mitPflichtzeile(text: string, pflichtzeile: string): string {
-  if (enthaeltPflichtzeile(text, pflichtzeile)) return text;
+/**
+ * Vergleichsform für nahe Varianten der Pflichtzeile (Nachbesserung caption9-4): NFKC, Bindestriche und Leerraum
+ * vereinheitlicht, ohne Markdown-Zeichen, ohne Symbole am Anfang (etwa ein Emoji) und ohne Schlusspunkt, klein.
+ * Nur zum Ersetzen in der Pipeline — vorhanden ist die Zeile weiter nur wörtlich (enthaeltPflichtzeile).
+ */
+function nahForm(zeile: string): string {
+  return zeile
+    .normalize("NFKC")
+    .replace(/[\u2010-\u2015\u2212]/g, "-")
+    .replace(/[\s\u00a0\u2028\u2029]+/gu, " ")
+    .replace(/[*_`~]/g, "")
+    .replace(/^[^\p{L}\p{N}]+/u, "")
+    .replace(/[\s.!…]+$/u, "")
+    .trim()
+    .toLowerCase();
+}
+
+/**
+ * Pflichtzeile einsetzen: vorhanden (wörtlich als eigene Zeile) → unverändert; eine nahe Variante (Schlusspunkt,
+ * anderer Bindestrich, geschütztes Leerzeichen, Fettdruck, Emoji davor, Großschrift) → durch die wörtliche Zeile
+ * ersetzt, statt eine zweite Hinweiszeile anzuhängen; sonst als letzte Zeile nach einer Leerzeile angehängt.
+ */
+export function pflichtzeileEinsetzen(text: string, pflichtzeile: string): { text: string; art: "vorhanden" | "ersetzt" | "angehaengt"; ersetzt: string | null } {
+  const soll = pflichtzeile.trim();
+  if (enthaeltPflichtzeile(text, soll)) return { text, art: "vorhanden", ersetzt: null };
+  const teile = text.split(/(\r?\n)/);
+  const ziel = nahForm(soll);
+  for (let i = 0; i < teile.length; i += 2) {
+    if (teile[i].trim() !== "" && nahForm(teile[i]) === ziel) {
+      const alt = teile[i];
+      teile[i] = soll;
+      return { text: teile.join(""), art: "ersetzt", ersetzt: alt };
+    }
+  }
   const rumpf = text.replace(/\s+$/u, "");
-  return rumpf === "" ? pflichtzeile.trim() : `${rumpf}\n\n${pflichtzeile.trim()}`;
+  return { text: rumpf === "" ? soll : `${rumpf}\n\n${soll}`, art: "angehaengt", ersetzt: null };
+}
+
+/** Text mit Pflichtzeile (pflichtzeileEinsetzen): vorhanden, ersetzt oder angehängt. */
+export function mitPflichtzeile(text: string, pflichtzeile: string): string {
+  return pflichtzeileEinsetzen(text, pflichtzeile).text;
 }
 
 /**
