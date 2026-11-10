@@ -1,5 +1,6 @@
-// Objekt-Studio: Vertrag von GET /api/studio/[objekt] (Schritt 2, 08.11.2026). Nur Typen —
-// Route und Studio-Seite teilen sie, im Browser entsteht daraus kein Code.
+// Objekt-Studio: Vertrag von GET /api/studio/[objekt] (Schritt 2, 08.11.2026), seit Schritt 7 (10.11.2026)
+// auch der Medien-Routen unter /api/studio/[objekt]/medien. Nur Typen — Routen und Studio-Seite teilen sie,
+// im Browser entsteht daraus kein Code.
 //
 // Grundregel wie lib/status-types.ts: Jede Zahl ist ein Messwert mit wert, status, quelle und
 // gemessen_am. Jeder Teil der Antwort hat einen eigenen Status; ein Lesefehler (Supabase oder
@@ -9,6 +10,7 @@
 
 import type { BelegEintrag } from "@/components/studio/beleg-hilfen";
 import type { AnkerHashStatus, CoverStatus } from "@/lib/studio/anker";
+import type { MessplanStand } from "@/lib/studio/messplan";
 import type { CounselUrteil, MessStatus } from "@/lib/status-types";
 
 export type StudioStatus = MessStatus | "noch_nicht_gebaut";
@@ -126,8 +128,137 @@ export interface StudioAntwort {
   objekt: StudioMesswert<ObjektKopf>;
   assets: StudioAssetsTeil;
   kosten_usd: StudioMesswert<StudioKosten>;
-  kosten_credits: StudioMesswert<null>;
-  messung: StudioMesswert<null>;
+  /** Seit Schritt 7: Higgsfield-Credits aus studio_medium, getrennt von USD. */
+  kosten_credits: StudioMesswert<StudioCredits>;
+  /** Seit Schritt 7: Messplan aus studio_messplan (Einträge erst ab Schritt 11). */
+  messung: StudioMesswert<MessplanStand>;
+  /** Seit Schritt 7: Medien-Zeilen (studio_medium) des Objekts, je Video als Kette. */
+  medien: StudioMedienTeil;
+}
+
+// ── Medien (Schritt 7, 10.11.2026) ────────────────────────────────────────────────────────────────
+// Zeilen aus studio_medium (nur anhängbar; Ändern und Löschen sperrt die Datenbank) und die Ketten
+// Export → Original → Startbild. Hash und Größe misst der Server selbst, ebenso Maße und Abgleich des
+// Startbilds; Maße, Bildrate und Dauer der Videos stammen aus dem Beleg der erzeugenden Sitzung (ffprobe).
+
+export type MedienRolle = "startbild" | "original" | "export";
+/** Rollen der Upload-URLs: die drei Dateien eines Videos und ein Bild nur für den Abgleich (ohne Zeile). */
+export type UploadRolle = MedienRolle | "abgleich";
+export type MediumArt = "video" | "bild";
+export type MediumMime = "video/mp4" | "image/jpeg" | "image/png";
+export type AbgleichUrteil = "bestanden" | "nicht_bestanden";
+
+/** Ausschnitt-Rezept: Rechteck in Pixeln der Anker-Datei; skalierung in Paket C nur 1. */
+export interface Ausschnitt {
+  x: number;
+  y: number;
+  breite: number;
+  hoehe: number;
+  skalierung: 1;
+}
+
+export interface PromptKlausel {
+  id: string;
+  text: string;
+}
+
+/** Eine Zeile aus studio_medium, wie GET /api/studio/[objekt] sie liest. */
+export interface StudioMedium {
+  id: number;
+  objekt_slug: string;
+  art: MediumArt;
+  fassung: MedienRolle;
+  startbild_id: number | null;
+  abgeleitet_von: number | null;
+  speicher_pfad: string;
+  sha256: string;
+  bytes: number;
+  mime: MediumMime;
+  breite: number | null;
+  hoehe: number | null;
+  fps: number | null;
+  dauer_s: number | null;
+  aigc_kennzeichen: boolean | null;
+  schnitt_von_s: number | null;
+  schnitt_bis_s: number | null;
+  anker_id: string;
+  anker_sha256: string;
+  ausschnitt: Ausschnitt | null;
+  startbild_abgleich: AbgleichUrteil | null;
+  startbild_abweichung_max: number | null;
+  erzeuger: string | null;
+  modell: string | null;
+  job_id: string | null;
+  parameter: Record<string, unknown>;
+  prompt: string | null;
+  prompt_klauseln: PromptKlausel[];
+  ki_hinweis_text: string | null;
+  kosten_vorschau_credits: number | null;
+  kosten_credits: number | null;
+  kosten_usd: number | null;
+  kosten_quelle: string | null;
+  /** DB-Uhr beim Einfügen (Trigger), ISO. */
+  eingespielt_am: string;
+}
+
+/** Ein Video: der Export mit seinem Original und dessen Startbild; fehlende Glieder stehen in luecken. */
+export interface MedienKette {
+  export: StudioMedium;
+  original: StudioMedium | null;
+  startbild: StudioMedium | null;
+  /** Was an der Kette fehlt oder nicht passt; leer = vollständig. */
+  luecken: string[];
+}
+
+export interface StudioMedienWert {
+  /** Alle Zeilen des Objekts, nach id. */
+  zeilen: StudioMedium[];
+  /** Je Export eine Kette, neueste zuerst. */
+  ketten: MedienKette[];
+  /** ids der Zeilen, die in keiner Kette stehen (etwa ein Original ohne Export nach einem Teilstand). */
+  einzeln: number[];
+  /** Medienliste beim Lesen gekappt: zeilen ist unvollständig (die Credit-Summe ist dann eine Untergrenze). */
+  abgeschnitten: boolean;
+}
+
+export type StudioMedienTeil = StudioMesswert<StudioMedienWert>;
+
+/** Higgsfield-Credits je Objekt: Summe der Originale, Deckel (E18) und Rest — nie mit USD gemischt. */
+export interface StudioCredits {
+  /** Summe kosten_credits der Originale; null, wenn kein Original eine Angabe trägt. */
+  summe: number | null;
+  /** Deckel für Stufe 2; null, solange nicht entschieden. */
+  deckel: number | null;
+  /** deckel − summe; null ohne Summe oder ohne Deckel. Angezeigt, nicht erzwungen. */
+  rest: number | null;
+  originale: number;
+  originale_ohne_angabe: number;
+}
+
+/** Speicher des Server-Prozesses um einen sharp- bzw. Hash-Job (Node: rss in Byte, maxRSS in KiB). */
+export interface SpeicherMessung {
+  rss_vorher_b: number;
+  rss_nachher_b: number;
+  /** process.resourceUsage().maxRSS: Spitze des ganzen Prozesses seit dem Start, in KiB. */
+  max_rss_kib: number;
+}
+
+/** Ergebnis des Startbild-Abgleichs (lib/studio/startbild.ts). */
+export interface AbgleichErgebnis {
+  urteil: AbgleichUrteil;
+  /** Größte Abweichung je Kanal (0–255); null, wenn nicht verglichen (Maße passen nicht). */
+  abweichung_max: number | null;
+  /** Mittlere Abweichung über alle Kanalwerte; null wie abweichung_max. */
+  mittel: number | null;
+  /** Anteil der Kanalwerte über der Toleranz (0–1); null wie abweichung_max. */
+  anteil_ueber_toleranz: number | null;
+  toleranz: number;
+  /** Grund für "nicht_bestanden" ohne Vergleich; sonst null. */
+  grund: string | null;
+  startbild: { breite: number; hoehe: number };
+  ausschnitt: Ausschnitt;
+  anker: { id: string; sha256: string; breite: number; hoehe: number };
+  versionen: { sharp: string; vips: string };
 }
 
 // ── GET /api/studio/[objekt]/anker (Schritt 6, 10.11.2026) ──────────────────────────────────────
@@ -201,10 +332,31 @@ export interface AnkerRoutenAntwort extends AnkerAntwort {
   stand: AnkerStand;
 }
 
-/** Abweisung der ganzen Anfrage: 400 eingabe, 403/415 herkunft (nur die Anker-Route), 404 nicht_im_studio, 500 programmfehler. */
-export type StudioAbweisungsArt = "eingabe" | "herkunft" | "nicht_im_studio" | "programmfehler";
+/**
+ * Abweisung der ganzen Anfrage: 400 eingabe, 403/415 herkunft, 404 nicht_im_studio, 500 programmfehler.
+ * Seit Schritt 7 (Medien-Routen) dazu: 404 nicht_gefunden (Datei oder Zeile), 409 zustand (Hash, Vorschau,
+ * Sperre, vorhandene Zeile), 413 zu_gross, 415 dateityp (Signatur oder MIME passt nicht), 500 schreibfehler,
+ * 502 quelle (Storage, Supabase oder Anker nicht lesbar).
+ */
+export type StudioAbweisungsArt =
+  | "eingabe"
+  | "herkunft"
+  | "nicht_im_studio"
+  | "programmfehler"
+  | "nicht_gefunden"
+  | "zustand"
+  | "zu_gross"
+  | "dateityp"
+  | "schreibfehler"
+  | "quelle";
 
 export interface StudioFehlerAntwort {
   fehler: string;
   fehler_art: StudioAbweisungsArt;
+  /** 409 bei abweichender Zeile oder veralteter Vorschau: die abweichenden Felder. */
+  felder?: string[];
+  /** 409 „vorhanden“: die ids der drei bestehenden Zeilen. */
+  vorhanden?: { startbild: number; original: number; export: number };
+  /** 409 bei belegter Sperre: Art und Beginn des laufenden Jobs (ISO). */
+  laeuft?: { art: string; seit: string };
 }

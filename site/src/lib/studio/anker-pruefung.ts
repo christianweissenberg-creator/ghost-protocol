@@ -11,7 +11,10 @@
 //   der Abruf dort ab; sie kann dann nicht die Manifest-Datei sein ("geaendert"). Angefordert wird die Datei
 //   ohne Kodierung (Accept-Encoding: identity); eine komprimierte Antwort wird nicht gelesen — sonst zählte das
 //   Limit nur entpackte Bytes, und ein Strom, der zu nichts entpackt, liefe bis zum Zeitlimit (Prüfung 10.11.2026).
-// - Nichts wird abgelegt: Der Hash entsteht beim Lesen, die Bytes werden verworfen.
+// - Nichts wird abgelegt: Der Hash entsteht beim Lesen, die Bytes werden verworfen. Nur ladeAnkerDatei (seit
+//   Schritt 7, 10.11.2026) behält sie im Speicher, für den Startbild-Abgleich einer einzelnen Anfrage — und nur,
+//   wenn die Datei unverändert ist. Ein zwischengespeichertes Ergebnis (lib/studio/anker-speicher.ts) wird dafür
+//   nie verwendet: Es hält keine Bytes, und der Abgleich braucht die live geladene, eben geprüfte Datei.
 // - Kein Takt: Geprüft wird nur auf Anfrage, und auch dann höchstens einmal je 15 min beim Seitenaufbau
 //   bzw. einmal je 60 s mit „Alle prüfen“ (Zwischenspeicher in lib/studio/anker-speicher.ts).
 // - Die Adresse aus urls.cover wird nur verglichen, nie abgerufen.
@@ -81,9 +84,29 @@ function ergebnis(
  * HTTP-Fehler, Weiterleitung und Abbruch beim Lesen werden zum Status der Datei, nie zur Ausnahme.
  */
 export async function pruefeAnkerDatei(e: AnkerEintrag): Promise<AnkerHashErgebnis> {
+  return (await ladeUndPruefe(e, false)).ergebnis;
+}
+
+/** Ergebnis der Hash-Prüfung und, nur bei "unveraendert", die gelesenen Bytes der Datei. */
+export interface AnkerLadung {
+  ergebnis: AnkerHashErgebnis;
+  bytes: Buffer | null;
+}
+
+/**
+ * Wie pruefeAnkerDatei, behält aber die Bytes der Datei im Speicher (Startbild-Abgleich, Schritt 7): dieselben
+ * Regeln (nur Manifest-Adresse, keine Weiterleitung, ohne Kodierung, Größenlimit = Manifest-Bytes, Zeitlimit).
+ * bytes ist nur gesetzt, wenn Hash und Größe gleich dem Manifest sind.
+ */
+export function ladeAnkerDatei(e: AnkerEintrag): Promise<AnkerLadung> {
+  return ladeUndPruefe(e, true);
+}
+
+async function ladeUndPruefe(e: AnkerEintrag, behalten: boolean): Promise<AnkerLadung> {
+  const ohne = (r: AnkerHashErgebnis): AnkerLadung => ({ ergebnis: r, bytes: null });
   // gemessen_am ist immer der Zeitpunkt des Ergebnisses (Prüfung 10.11.2026: vorher bei Netzfehlern der Versuchsbeginn).
   if (!istManifestUrl(e.url)) {
-    return ergebnis(e, "nicht_erreichbar", { hinweis: "Adresse liegt nicht unter https://steinadel.de/objekte/ — nicht abgerufen" });
+    return ohne(ergebnis(e, "nicht_erreichbar", { hinweis: "Adresse liegt nicht unter https://steinadel.de/objekte/ — nicht abgerufen" }));
   }
   let res: Response;
   try {
@@ -94,7 +117,7 @@ export async function pruefeAnkerDatei(e: AnkerEintrag): Promise<AnkerHashErgebn
       signal: AbortSignal.timeout(ANKER_TIMEOUT_MS),
     });
   } catch (err) {
-    return ergebnis(e, "nicht_erreichbar", { hinweis: abrufGrund(err) });
+    return ohne(ergebnis(e, "nicht_erreichbar", { hinweis: abrufGrund(err) }));
   }
   if (res.status !== 200) {
     // Verbindung freigeben, ohne den Inhalt zu lesen.
@@ -104,22 +127,27 @@ export async function pruefeAnkerDatei(e: AnkerEintrag): Promise<AnkerHashErgebn
     // Status 0. Beides heißt hier "nicht erreichbar", das Ziel wird nie abgerufen.
     const weiter = res.type === "opaqueredirect" || (res.status >= 300 && res.status < 400);
     const code = res.status === 0 ? null : res.status;
-    return ergebnis(e, "nicht_erreichbar", {
-      http_status: code,
-      hinweis: weiter ? `Weiterleitung${code === null ? "" : ` (HTTP ${code})`} — nicht gefolgt` : `HTTP ${res.status}`,
-    });
+    return ohne(
+      ergebnis(e, "nicht_erreichbar", {
+        http_status: code,
+        hinweis: weiter ? `Weiterleitung${code === null ? "" : ` (HTTP ${code})`} — nicht gefolgt` : `HTTP ${res.status}`,
+      }),
+    );
   }
   const kodierung = (res.headers.get("content-encoding") ?? "").trim().toLowerCase();
   if (kodierung !== "" && kodierung !== "identity") {
     void res.body?.cancel().catch(() => undefined);
     const name = /^[\w.+-]{1,30}$/.test(kodierung) ? kodierung : "unbekannt";
-    return ergebnis(e, "nicht_erreichbar", {
-      http_status: 200,
-      hinweis: `Antwort mit Kodierung „${name}“, angefordert war die Datei ohne Kodierung — nicht gelesen`,
-    });
+    return ohne(
+      ergebnis(e, "nicht_erreichbar", {
+        http_status: 200,
+        hinweis: `Antwort mit Kodierung „${name}“, angefordert war die Datei ohne Kodierung — nicht gelesen`,
+      }),
+    );
   }
   const typ = mimeTyp(res.headers.get("content-type"));
   const hash = createHash("sha256");
+  const stuecke: Uint8Array[] = [];
   let gelesen = 0;
   const leser = res.body?.getReader();
   try {
@@ -129,28 +157,36 @@ export async function pruefeAnkerDatei(e: AnkerEintrag): Promise<AnkerHashErgebn
       gelesen += value.byteLength;
       if (gelesen > e.bytes) {
         void leser.cancel().catch(() => undefined);
-        return ergebnis(e, "geaendert", {
-          http_status: 200,
-          hinweis: `Live-Datei länger als die Manifest-Datei (${zahl(e.bytes)} B); Abruf dort abgebrochen`,
-        });
+        return ohne(
+          ergebnis(e, "geaendert", {
+            http_status: 200,
+            hinweis: `Live-Datei länger als die Manifest-Datei (${zahl(e.bytes)} B); Abruf dort abgebrochen`,
+          }),
+        );
       }
       hash.update(value);
+      if (behalten) stuecke.push(value);
     }
   } catch (err) {
     // Nur read() wirft hier; der Strom ist dann schon im Fehlerzustand, ein Abbruch erübrigt sich.
-    return ergebnis(e, "nicht_erreichbar", { http_status: 200, hinweis: `Abbruch beim Lesen: ${abrufGrund(err)}` });
+    return ohne(ergebnis(e, "nicht_erreichbar", { http_status: 200, hinweis: `Abbruch beim Lesen: ${abrufGrund(err)}` }));
   }
   const live = hash.digest("hex");
   if (live === e.sha256 && gelesen === e.bytes) {
-    return ergebnis(e, "unveraendert", { sha256_live: live, bytes_live: gelesen, http_status: 200 });
+    return {
+      ergebnis: ergebnis(e, "unveraendert", { sha256_live: live, bytes_live: gelesen, http_status: 200 }),
+      bytes: behalten ? Buffer.concat(stuecke, gelesen) : null,
+    };
   }
   const groesse = gelesen === e.bytes ? "gleiche Größe, anderer Inhalt" : `${zahl(gelesen)} B statt ${zahl(e.bytes)} B`;
-  return ergebnis(e, "geaendert", {
-    sha256_live: live,
-    bytes_live: gelesen,
-    http_status: 200,
-    hinweis: typ !== null && typ !== "image/jpeg" ? `${groesse}; Antwort vom Typ ${typ}` : groesse,
-  });
+  return ohne(
+    ergebnis(e, "geaendert", {
+      sha256_live: live,
+      bytes_live: gelesen,
+      http_status: 200,
+      hinweis: typ !== null && typ !== "image/jpeg" ? `${groesse}; Antwort vom Typ ${typ}` : groesse,
+    }),
+  );
 }
 
 /**

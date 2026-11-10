@@ -47,7 +47,10 @@ function meldeEinmal(text: string, warnung = false): void {
 }
 
 // Server-side client with service role key (for API routes only)
-export function createServiceClient() {
+// optionen.fetch (Objekt-Studio Schritt 7, 10.11.2026): eigenes fetch für alle Anfragen dieses Clients, etwa mit einer
+// Frist für Storage-Aufrufe, die storage-js ohne Signal schickt (lib/studio/medien-ablage.ts, fetchMitFrist). Ohne
+// Angabe wie bisher.
+export function createServiceClient(optionen: { fetch?: typeof fetch } = {}) {
   const roh = process.env.SUPABASE_SERVICE_KEY;
   const serviceKey = typeof roh === "string" ? roh.replace(RAND_LEERRAUM, "") : "";
   if (!serviceKey) {
@@ -67,5 +70,5 @@ export function createServiceClient() {
   if (serviceKey !== roh) {
     meldeEinmal("Leerraum am Rand entfernt (wie fetch) — bitte in der Umgebung bereinigen", true);
   }
-  return createClient(supabaseUrl, serviceKey);
+  return optionen.fetch ? createClient(supabaseUrl, serviceKey, { global: { fetch: optionen.fetch } }) : createClient(supabaseUrl, serviceKey);
 }

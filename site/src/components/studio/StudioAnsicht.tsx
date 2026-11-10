@@ -1,12 +1,15 @@
-// Ansicht des Objekt-Studios (Schritt 2, 08.11.2026) — nur lesend.
+// Ansicht des Objekt-Studios (Schritt 2, 08.11.2026).
 //
 // Zeigt die Antwort von GET /api/studio/[objekt]: Objektkopf aus dem Steinadel-Export, Kennzahlen
 // (Assets, Claude-Kosten in USD), die Asset-Liste mit derselben Beleg-Kette wie /content und die
 // Regeln, die mitlaufen. Seit Schritt 6 (10.11.2026) dazu das Anker-Panel (components/studio/
-// AnkerPanel.tsx) mit eigener Prüfung über GET /api/studio/[objekt]/anker. Bereiche späterer
-// Bauschritte stehen als "noch nicht gebaut (Schritt N)" da — ohne Zahl. Kein Knopf erzeugt, prüft mit
-// Kosten oder gibt frei: Freigegeben wird im Content-Tab; die Beleg-Kette kopiert auf Wunsch den
-// CTA-Link (wie auf /content), „Alle prüfen“ im Anker-Panel prüft die Anker neu (ohne bezahlte Aufrufe).
+// AnkerPanel.tsx) mit eigener Prüfung über GET /api/studio/[objekt]/anker. Seit Schritt 7 (10.11.2026)
+// Kacheln für Higgsfield-Credits (getrennt von USD) und Messplan sowie das Medien-Panel
+// (components/studio/MedienPanel.tsx): Videos je Kette und „Video einspielen“ mit Prüflauf und Bestätigung.
+// Kein Knopf erzeugt, prüft mit Kosten oder gibt frei: Freigegeben wird im Content-Tab; die Beleg-Kette
+// kopiert auf Wunsch den CTA-Link (wie auf /content), „Alle prüfen“ im Anker-Panel prüft die Anker neu
+// (ohne bezahlte Aufrufe). Die Stand-Zeile nennt, wann die Daten geladen wurden; „neu laden“ liest sie
+// einmal neu (kein Takt, siehe app/studio/[objekt]/page.tsx).
 // Jeder Text aus Export und Datenbank erscheint maskiert (der Server maskiert schon, die Ansicht
 // noch einmal). Jede Zahl trägt im title Quelle und Messzeitpunkt.
 // Zeitangaben des Studios stehen in Europe/Berlin mit Zonenangabe (wie die Zählung des Servers in
@@ -18,8 +21,9 @@ import type { ReactNode } from "react";
 import { objekteFehlerAnzeige, objektFehlerText } from "@/lib/hooks-status";
 import type { ObjekteFehlerArt } from "@/lib/hooks-status";
 import { berlinDatumZeit, formatiereUsd4, formatiereUsdUntergrenze } from "@/lib/types";
-import { STUDIO_BAUSCHRITTE, nochNichtGebautText } from "@/lib/studio/objekte";
+import { nochNichtGebautText } from "@/lib/studio/objekte";
 import { STUDIO_REGELN } from "@/lib/studio/regeln";
+import type { MessplanStand } from "@/lib/studio/messplan";
 import type {
   AssetKosten,
   ObjektKopf,
@@ -32,6 +36,7 @@ import type {
 } from "@/lib/studio/typen";
 import { AnkerPanel } from "@/components/studio/AnkerPanel";
 import { BelegKette } from "@/components/studio/BelegKette";
+import { MedienPanel, creditsText } from "@/components/studio/MedienPanel";
 import {
   FARBE_BERNSTEIN,
   FARBE_GRUEN,
@@ -49,7 +54,14 @@ export type StudioLesung =
   | { art: "abgewiesen"; httpStatus: number | null; text: string }
   | { art: "daten"; antwort: StudioAntwort };
 
-const TEILE = ["objekt", "assets", "kosten_usd", "kosten_credits", "messung"] as const;
+const TEILE = ["objekt", "assets", "kosten_usd", "kosten_credits", "messung", "medien"] as const;
+
+/** Stand der angezeigten Daten (Seite): wann geladen, ob gerade neu geladen wird, ob das letzte Neuladen scheiterte. */
+export interface StudioStand {
+  geladenAm: string | null;
+  laedt: boolean;
+  fehler: string | null;
+}
 
 /** Hat jeder Teil die Form eines Messwerts (Objekt mit status als Text)? */
 function istStudioAntwort(daten: Record<string, unknown>): boolean {
@@ -174,19 +186,6 @@ function Kachel({
   );
 }
 
-function NichtGebaut({ titel, schritt, text, children }: { titel: string; schritt: number; text: string; children?: ReactNode }) {
-  return (
-    <div className="card-ghost p-4 min-w-0" data-noch-nicht-gebaut={schritt}>
-      <p className="text-[10px] text-text-muted uppercase tracking-widest mb-2">{titel}</p>
-      <p className="text-sm" style={{ color: "var(--gp-ink-3)" }}>
-        {nochNichtGebautText(schritt)}
-      </p>
-      <p className="text-[11px] text-text-muted mt-1 break-words">{text}</p>
-      {children}
-    </div>
-  );
-}
-
 function exportFehlerKopf(m: StudioMesswert<ObjektKopf>): { kopf: string; titel: string; farbe: string } {
   if (m.fehler_art === "nicht_im_export") {
     return { kopf: "OBJEKT NICHT IM EXPORT", titel: "Der Steinadel-Export wurde gelesen, enthält dieses Objekt aber nicht.", farbe: FARBE_ROT };
@@ -268,14 +267,25 @@ function ObjektKopfKarte({ m, slug }: { m: StudioMesswert<ObjektKopf>; slug: str
   );
 }
 
+/**
+ * Hinweis an einer Entwurf-Zeile: Ein Lauf legt die Zeile als Entwurf an und füllt sie erst später; die Karte zeigt
+ * den Stand beim Laden, nicht den laufenden. Ohne diesen Hinweis sah „gesperrt: … (kein Text)“ wie ein Befund aus.
+ */
+export function entwurfHinweis(geladenAm: string | null | undefined): string {
+  const zeit = geladenAm ? ` von ${zeitBerlin(geladenAm, "ohne Zeitpunkt")}` : " beim Laden der Seite";
+  return `Entwurf: Ein Lauf kann diese Zeile noch füllen — angezeigt ist der Stand${zeit}; „neu laden“ zeigt den aktuellen.`;
+}
+
 function AssetKarte({
   a,
   kopiere,
   kopierStatus,
+  geladenAm,
 }: {
   a: StudioAsset;
   kopiere: (key: string, text: string) => void;
   kopierStatus: (key: string) => string;
+  geladenAm?: string | null;
 }) {
   const status = assetStatus(a.status);
   const kanal = [a.kanal, a.format].filter((t): t is string => typeof t === "string" && t.trim() !== "").map(maskiert);
@@ -325,6 +335,11 @@ function AssetKarte({
               {bezug}
             </dd>
           )}
+          {a.beleg.status === "entwurf" && (
+            <dd className="text-[10px] break-words" style={{ color: FARBE_BERNSTEIN }} data-entwurf-hinweis>
+              {entwurfHinweis(geladenAm)}
+            </dd>
+          )}
         </div>
         <div className="min-w-0" title={teilTitel(a.kosten_usd)}>
           <dt className="mono-label">Kosten (Claude, USD)</dt>
@@ -356,11 +371,13 @@ function AssetListe({
   slug,
   kopiere,
   kopierStatus,
+  stand,
 }: {
   m: StudioAssetsTeil;
   slug: string;
   kopiere: (key: string, text: string) => void;
   kopierStatus: (key: string) => string;
+  stand?: StudioStand;
 }) {
   return (
     <section className="mb-8 min-w-0" data-teil="assets" data-status={m.status}>
@@ -386,7 +403,7 @@ function AssetListe({
             </p>
           )}
           {m.wert.map((a) => (
-            <AssetKarte key={a.id} a={a} kopiere={kopiere} kopierStatus={kopierStatus} />
+            <AssetKarte key={a.id} a={a} kopiere={kopiere} kopierStatus={kopierStatus} geladenAm={stand?.geladenAm} />
           ))}
         </div>
       )}
@@ -444,20 +461,21 @@ function Kennzahlen({ antwort }: { antwort: StudioAntwort }) {
         <Kachel
           teil="kosten_credits"
           titel="Higgsfield-Credits"
-          wert={ungebautText(credits, STUDIO_BAUSCHRITTE.credits)}
-          unterzeile={`geplante Quelle: ${maskiert(credits.quelle)}`}
+          wert={creditsText(credits).wert}
+          unterzeile={<span data-credits-unter>{creditsText(credits).unter}</span>}
           status={credits.status}
           title={teilTitel(credits)}
         />
         <Kachel
           teil="messung"
           titel="Messplan"
-          wert={ungebautText(messung, STUDIO_BAUSCHRITTE.messplan)}
-          unterzeile={`geplante Quelle: ${maskiert(messung.quelle)}`}
+          wert={messplanText(messung).wert}
+          unterzeile={<span data-messplan-unter>{messplanText(messung).unter}</span>}
           status={messung.status}
           title={teilTitel(messung)}
         />
       </div>
+      <MessplanListe m={messung} />
       {/* Vorbehalte der Kostenschätzung sichtbar (Schätzung, alte Preistabelle, Untergrenze), nicht nur im title — wie unter der Kosten-Kachel des Dashboards. */}
       {kostenLesbar && kosten.hinweis && (
         <p
@@ -472,10 +490,88 @@ function Kennzahlen({ antwort }: { antwort: StudioAntwort }) {
   );
 }
 
-/** Teil ohne Wert in Schritt 2: "noch nicht gebaut (Schritt N)"; jeder andere Stand nur als Text, nie als Zahl. */
-function ungebautText(m: StudioMesswert<null>, schritt: number): string {
-  if (m.status === "noch_nicht_gebaut") return nochNichtGebautText(m.schritt ?? schritt);
-  return m.status === "fehler" ? "nicht lesbar" : "nicht gemessen";
+/**
+ * Messplan als Kachel-Text: „nicht angelegt“ (Tabelle fehlt), „noch kein Eintrag“ (Schritt 11), sonst die Zahl der
+ * Einträge — nie 0 als Platzhalter und eine fehlende Tabelle nie als Fehler.
+ */
+export function messplanText(m: StudioMesswert<MessplanStand>): { wert: string; unter: string } {
+  const w = m.wert;
+  if (m.status === "noch_nicht_gebaut") return { wert: nochNichtGebautText(m.schritt ?? 11), unter: maskiert(m.quelle) };
+  if (m.status === "fehler" || w === null) return { wert: "nicht lesbar", unter: maskiert(m.hinweis ?? "Lesefehler") };
+  if (w.art === "nicht_angelegt") return { wert: "nicht angelegt", unter: `Tabelle studio_messplan fehlt (${maskiert(w.code)})` };
+  if (w.art === "leer") return { wert: "noch kein Eintrag", unter: "Einträge kommen mit Schritt 11" };
+  const start = w.fensterstart === null ? "Fensterstart offen" : `Fensterstart ${zeitBerlin(w.fensterstart, "unlesbar")}`;
+  return { wert: `${w.zeilen.length} Einträge`, unter: `${start}${w.abweichungen > 0 ? ` · ${w.abweichungen} Abweichung(en)` : ""}` };
+}
+
+const MESSPLAN_LAGE: Record<string, { text: string; farbe: string }> = {
+  gilt: { text: "gilt", farbe: FARBE_GRUEN },
+  abgeloest: { text: "abgelöst", farbe: "var(--gp-ink-3)" },
+  abweichung: { text: "Abweichung — nach dem Fensterstart festgeschrieben, gilt nicht", farbe: FARBE_ROT },
+};
+
+/** Einträge des Messplans mit ihrer Lage; Abweichungen rot. Nur, wenn es Einträge gibt. */
+function MessplanListe({ m }: { m: StudioMesswert<MessplanStand> }) {
+  const w = m.wert;
+  if (w === null || w.art !== "eintraege") return null;
+  return (
+    <details className="card-ghost p-4 mt-3 min-w-0" data-messplan-liste>
+      <summary className="cursor-pointer text-[11px] text-text-muted">Messplan-Einträge ({w.zeilen.length})</summary>
+      <ul className="space-y-2 mt-2">
+        {w.zeilen.map((z) => {
+          const lage = MESSPLAN_LAGE[z.lage] ?? { text: maskiert(z.lage), farbe: FARBE_BERNSTEIN };
+          const werte = maskiert(JSON.stringify(z.werte));
+          return (
+            <li key={z.id} className="text-[11px] min-w-0 break-words" data-messplan-zeile={z.id} data-lage={z.lage}>
+              <span className="font-[family-name:var(--font-jbmono)]">{maskiert(z.eintrag)}</span> ·{" "}
+              <span style={{ color: lage.farbe }}>{lage.text}</span> · festgeschrieben {zeitBerlin(z.festgeschrieben_am, "ohne Zeitpunkt")}
+              {z.von || z.bis ? ` · ${zeitBerlin(z.von, "offen")} – ${zeitBerlin(z.bis, "offen")}` : ""}
+              <span className="block text-[10px] text-text-muted">
+                Quelle: {maskiert(z.quelle)}
+                {z.gemessen_am ? ` · gemessen ${zeitBerlin(z.gemessen_am, "")}` : ""} · Werte: {werte.length > 300 ? `${werte.slice(0, 299)}…` : werte}
+              </span>
+            </li>
+          );
+        })}
+      </ul>
+    </details>
+  );
+}
+
+/** „neu laden“: eine Lesung je Klick; während einer Lesung aria-disabled (Klick ignoriert, Fokus bleibt). */
+function NeuLadenKnopf({ laedt, neuLaden }: { laedt: boolean; neuLaden: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={() => {
+        if (!laedt) neuLaden();
+      }}
+      aria-disabled={laedt}
+      className="min-h-11 px-3 py-1.5 rounded-lg text-xs font-medium bg-surface-elevated text-foreground hover:opacity-80 transition-opacity aria-disabled:opacity-40 aria-disabled:cursor-not-allowed"
+      data-neu-laden
+    >
+      neu laden
+    </button>
+  );
+}
+
+/** Stand-Zeile: wann die angezeigten Daten geladen wurden, „neu laden“ und ein gescheitertes Neuladen. */
+function StandZeile({ stand, neuLaden }: { stand: StudioStand; neuLaden?: () => void }) {
+  return (
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mb-6 text-[11px] min-w-0" data-stand-zeile data-laedt={stand.laedt ? "ja" : "nein"} aria-live="polite">
+      <span className="break-words" style={{ color: "var(--gp-ink-2)" }}>
+        {stand.laedt ? "Lädt neu … angezeigt ist der Stand von " : "Stand: geladen "}
+        <span data-geladen-am>{zeitBerlin(stand.geladenAm, "ohne Zeitpunkt")}</span>
+        {" "}· Daten werden nicht von selbst aktualisiert
+      </span>
+      {neuLaden && <NeuLadenKnopf laedt={stand.laedt} neuLaden={neuLaden} />}
+      {stand.fehler && (
+        <span className="basis-full break-words" style={{ color: FARBE_ROT }} role="alert" data-neu-laden-fehler>
+          Neu laden gescheitert: {maskiert(stand.fehler)} — angezeigt ist der Stand von {zeitBerlin(stand.geladenAm, "ohne Zeitpunkt")}.
+        </span>
+      )}
+    </div>
+  );
 }
 
 function RegelListe() {
@@ -498,16 +594,24 @@ function RegelListe() {
   );
 }
 
+const OHNE_NEULADEN = () => {};
+
 export function StudioAnsicht({
   slug,
   lesung,
   kopiere,
   kopierStatus,
+  stand,
+  neuLaden,
 }: {
   slug: string;
   lesung: StudioLesung;
   kopiere: (key: string, text: string) => void;
   kopierStatus: (key: string) => string;
+  /** Stand der angezeigten Daten; ohne Angabe keine Stand-Zeile. */
+  stand?: StudioStand;
+  /** Eine neue Lesung anstoßen (Seite); ohne Angabe (statische Ansicht) kein Knopf „neu laden“. */
+  neuLaden?: () => void;
 }) {
   return (
     <div className="boot p-4 sm:p-6 lg:p-10 max-w-[1280px] min-w-0">
@@ -516,13 +620,14 @@ export function StudioAnsicht({
           <span className="gp-index">05 / OBJEKT-STUDIO</span>
           <span className="gp-index-rule" />
         </div>
-        <p className="gp-kicker">Steinadel · ein Objekt · nur lesend</p>
+        <p className="gp-kicker">Steinadel · ein Objekt · liest und verbucht Medien</p>
         <h1 className="gp-wordmark">
           Objekt-<em>Studio</em>
         </h1>
         <p className="gp-sub">
-          Liest den Steinadel-Export, die Content-Läufe und die Anker-Dateien zu diesem Objekt. Das Studio erzeugt und
-          postet nichts; es prüft nur die Anker gegen ihr Manifest. Freigegeben wird im Content-Tab.
+          Liest den Steinadel-Export, die Content-Läufe, die Anker-Dateien und die Medien zu diesem Objekt. Das Studio
+          erzeugt und postet nichts; es prüft die Anker gegen ihr Manifest und spielt Videos mit Beleg ein. Freigegeben
+          wird im Content-Tab.
         </p>
       </div>
 
@@ -554,28 +659,24 @@ export function StudioAnsicht({
           <p className="text-[12px] break-words" style={{ color: "var(--gp-ink-2)" }}>
             {maskiert(lesung.text)}
           </p>
+          {/* Scheitert schon die erste Lesung, gibt es keinen alten Stand: Der Knopf liest einmal neu, ohne den Tab
+              neu zu laden. */}
+          {neuLaden && (
+            <div className="pt-2">
+              <NeuLadenKnopf laedt={false} neuLaden={neuLaden} />
+            </div>
+          )}
         </div>
       )}
 
       {lesung.art === "daten" && (
         <>
+          {stand && <StandZeile stand={stand} neuLaden={neuLaden} />}
           <ObjektKopfKarte m={lesung.antwort.objekt} slug={lesung.antwort.objekt_slug} />
           <Kennzahlen antwort={lesung.antwort} />
           <AnkerPanel slug={lesung.antwort.objekt_slug} />
-          <div className="mb-8">
-            <NichtGebaut
-              titel="Video / Medien"
-              schritt={STUDIO_BAUSCHRITTE.medien}
-              text="Startbild, Original und Export je Video mit Beleg und Prüfprotokoll."
-            >
-              {/* Nur der Hinweis auf den Erzeugungsweg: Das Studio ruft Higgsfield nie selbst auf. */}
-              <p className="text-[11px] mt-2 break-words" style={{ color: "var(--gp-ink-2)" }} data-erzeugungsweg>
-                Higgsfield im Studio: aktiver Erzeugungsweg ist die Connector-Sitzung (Higgsfield-Connector in einer
-                Claude-Sitzung). Das Studio ruft Higgsfield nicht auf.
-              </p>
-            </NichtGebaut>
-          </div>
-          <AssetListe m={lesung.antwort.assets} slug={lesung.antwort.objekt_slug} kopiere={kopiere} kopierStatus={kopierStatus} />
+          <MedienPanel slug={lesung.antwort.objekt_slug} medien={lesung.antwort.medien} credits={lesung.antwort.kosten_credits} neuLaden={neuLaden ?? OHNE_NEULADEN} />
+          <AssetListe m={lesung.antwort.assets} slug={lesung.antwort.objekt_slug} kopiere={kopiere} kopierStatus={kopierStatus} stand={stand} />
         </>
       )}
 

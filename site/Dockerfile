@@ -24,6 +24,10 @@ RUN addgroup --system --gid 1001 nodejs && \
 COPY --from=builder /app/public ./public
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
+# Rauchtest (Objekt-Studio Schritt 7): Der Startbild-Abgleich braucht sharp im Laufzeit-Image (musl-Binary aus
+# dem Lock). Lädt es hier nicht, scheitert der Build sichtbar — nicht erst die erste Anfrage. Beide Wege (require
+# und import), die Versionen stehen im Build-Log.
+RUN node -e "require('sharp'); import('sharp').then((m) => console.log('sharp', m.default.versions.sharp, 'libvips', m.default.versions.vips))"
 USER nextjs
 EXPOSE 3000
 ENV PORT=3000

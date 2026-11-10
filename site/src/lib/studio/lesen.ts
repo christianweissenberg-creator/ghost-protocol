@@ -15,16 +15,26 @@ import { geprueftenTextAusSchritten, maskiereGeschuetzteNamen, pruefeFreigabe } 
 import { PREIS_STAND_AB } from "../kosten";
 import { STATUS_WARTEND, bereinigeFehler, isoOderNull, istObjekt, mitternachtBerlin, textOderNull, verbinde } from "../status-server";
 import type { Seitenergebnis } from "../status-server";
-import { DATIERUNG_AUSNAHMEN, STUDIO_BAUSCHRITTE, nochNichtGebautText } from "./objekte";
+import { pruefeAusschnitt } from "./medien";
+import { DATIERUNG_AUSNAHMEN, nochNichtGebautText } from "./objekte";
 import type { StudioObjekt } from "./objekte";
 import type {
+  AbgleichUrteil,
   AssetKosten,
+  MedienKette,
+  MedienRolle,
+  MediumArt,
+  MediumMime,
   ObjektDatierung,
   ObjektKopf,
+  PromptKlausel,
   StudioAsset,
   StudioAssetsTeil,
+  StudioCredits,
   StudioFehlerArt,
   StudioKosten,
+  StudioMedienTeil,
+  StudioMedium,
   StudioMesswert,
 } from "./typen";
 import type { ContentMetadata } from "@/components/studio/beleg-hilfen";
@@ -32,8 +42,13 @@ import type { ContentMetadata } from "@/components/studio/beleg-hilfen";
 export const QUELLE_EXPORT = "Steinadel-Export über /api/objekte";
 export const QUELLE_KOSTEN =
   "content.metadata.steps[].cost — je Stufe gespeicherte Schätzung der activate-Route (Tokens × Preistabelle zum Laufzeitpunkt)";
-export const QUELLE_CREDITS = "Higgsfield-Credits je Medium";
-export const QUELLE_MESSPLAN = "Messplan des Studios";
+export const QUELLE_CREDITS = "Supabase · studio_medium.kosten_credits der Originale (Beleg der erzeugenden Sitzung)";
+
+/**
+ * Deckel für Higgsfield-Credits in Stufe 2 (Entscheidung E18 des Inhabers, 10.11.2026): 100 Credits, die Probe
+ * vom 05.11.2026 zählt mit. Angezeigt, nicht erzwungen — in Weg 2a erzeugt eine Claude-Sitzung, nicht dieser Server.
+ */
+export const CREDIT_DECKEL: number | null = 100;
 
 /** Spalten der Asset-Abfrage: was Karte und Beleg-Kette lesen (metadata ganz, wie /content). */
 export const ASSET_SPALTEN = "id, title, platform, content_type, status, created_at, updated_at, body, review_notes, metadata";
@@ -57,14 +72,6 @@ export function teilFehler<T>(quelle: string, versuchAm: string, art: StudioFehl
 /** Noch nicht gebauter Teil: ohne Zahl und ohne Messzeitpunkt, mit dem Bauschritt. */
 export function nochNichtGebaut(quelle: string, schritt: number): StudioMesswert<null> {
   return { wert: null, status: "noch_nicht_gebaut", quelle, gemessen_am: null, hinweis: nochNichtGebautText(schritt), schritt };
-}
-
-export function creditsTeil(): StudioMesswert<null> {
-  return nochNichtGebaut(QUELLE_CREDITS, STUDIO_BAUSCHRITTE.credits);
-}
-
-export function messungTeil(): StudioMesswert<null> {
-  return nochNichtGebaut(QUELLE_MESSPLAN, STUDIO_BAUSCHRITTE.messplan);
 }
 
 // ── Objektkopf aus dem Steinadel-Export ─────────────────────────────────────────────────────────
@@ -382,6 +389,213 @@ export function kostenAusAssets(assets: StudioAssetsTeil): StudioMesswert<Studio
     status: luecke ? "warnung" : "ok",
     quelle: QUELLE_KOSTEN,
     gemessen_am: assets.gemessen_am,
+    ...(hinweis ? { hinweis } : {}),
+  };
+}
+
+// ── Medien und Credits aus studio_medium (Schritt 7, 10.11.2026) ─────────────────────────────────
+
+export const QUELLE_MEDIEN = "Supabase · studio_medium";
+
+/** Alle Spalten von studio_medium außer den beiden berechneten Ziel-Spalten der Fremdschlüssel. */
+export const MEDIUM_SPALTEN =
+  "id, objekt_slug, art, fassung, startbild_id, abgeleitet_von, speicher_pfad, sha256, bytes, mime, breite, hoehe, fps, dauer_s, aigc_kennzeichen, schnitt_von_s, schnitt_bis_s, anker_id, anker_sha256, ausschnitt, startbild_abgleich, startbild_abweichung_max, erzeuger, modell, job_id, parameter, prompt, prompt_klauseln, ki_hinweis_text, kosten_vorschau_credits, kosten_credits, kosten_usd, kosten_quelle, eingespielt_am";
+
+const ROLLEN: readonly MedienRolle[] = ["startbild", "original", "export"];
+const MIMES: readonly MediumMime[] = ["video/mp4", "image/jpeg", "image/png"];
+
+function idOderNull(x: unknown, feld: string, id: number): number | null {
+  if (x === null || x === undefined) return null;
+  const n = typeof x === "number" ? x : typeof x === "string" && /^\d{1,15}$/.test(x) ? Number(x) : Number.NaN;
+  if (!Number.isSafeInteger(n) || n <= 0) throw new StudioLeseFehler(`Medium ${id}: ${feld} unlesbar`);
+  return n;
+}
+
+function zahlFeld(x: unknown, feld: string, id: number): number | null {
+  if (x === null || x === undefined) return null;
+  const n = typeof x === "number" ? x : typeof x === "string" && /^-?\d+(\.\d+)?$/.test(x.trim()) ? Number(x) : Number.NaN;
+  if (!Number.isFinite(n)) throw new StudioLeseFehler(`Medium ${id}: ${feld} unlesbar`);
+  return n;
+}
+
+function textFeld(x: unknown, feld: string, id: number): string | null {
+  if (x === null || x === undefined) return null;
+  if (typeof x !== "string") throw new StudioLeseFehler(`Medium ${id}: ${feld} unlesbar`);
+  return x;
+}
+
+/** Eine Zeile aus studio_medium; wirft StudioLeseFehler, wenn ein Feld nicht die Form der Tabelle hat. */
+export function leseMediumZeile(z: unknown): StudioMedium {
+  if (!istObjekt(z)) throw new StudioLeseFehler("unerwartete Zeilenform");
+  const id = idOderNull(z.id, "id", 0);
+  if (id === null) throw new StudioLeseFehler("Medium ohne lesbare id");
+  const pflicht = (feld: string): string => {
+    const t = textFeld(z[feld], feld, id);
+    if (t === null) throw new StudioLeseFehler(`Medium ${id}: ${feld} fehlt`);
+    return t;
+  };
+  const art = pflicht("art");
+  const fassung = pflicht("fassung");
+  const mime = pflicht("mime");
+  if (art !== "video" && art !== "bild") throw new StudioLeseFehler(`Medium ${id}: art unlesbar`);
+  if (!(ROLLEN as readonly string[]).includes(fassung)) throw new StudioLeseFehler(`Medium ${id}: fassung unlesbar`);
+  if (!(MIMES as readonly string[]).includes(mime)) throw new StudioLeseFehler(`Medium ${id}: mime unlesbar`);
+  const bytes = zahlFeld(z.bytes, "bytes", id);
+  if (bytes === null || !Number.isSafeInteger(bytes) || bytes <= 0) throw new StudioLeseFehler(`Medium ${id}: bytes unlesbar`);
+  const sha256 = pflicht("sha256");
+  const ankerSha = pflicht("anker_sha256");
+  if (!/^[0-9a-f]{64}$/.test(sha256) || !/^[0-9a-f]{64}$/.test(ankerSha)) throw new StudioLeseFehler(`Medium ${id}: SHA-256 unlesbar`);
+  const eingespielt = isoOderNull(z.eingespielt_am);
+  if (eingespielt === null) throw new StudioLeseFehler(`Medium ${id}: eingespielt_am unlesbar`);
+  let ausschnitt: StudioMedium["ausschnitt"] = null;
+  if (z.ausschnitt !== null && z.ausschnitt !== undefined) {
+    const a = pruefeAusschnitt(z.ausschnitt);
+    if (!a.ok) throw new StudioLeseFehler(`Medium ${id}: ausschnitt unlesbar`);
+    ausschnitt = a.wert;
+  }
+  const abgleich = textFeld(z.startbild_abgleich, "startbild_abgleich", id);
+  if (abgleich !== null && abgleich !== "bestanden" && abgleich !== "nicht_bestanden") throw new StudioLeseFehler(`Medium ${id}: startbild_abgleich unlesbar`);
+  if (!istObjekt(z.parameter)) throw new StudioLeseFehler(`Medium ${id}: parameter unlesbar`);
+  if (!Array.isArray(z.prompt_klauseln)) throw new StudioLeseFehler(`Medium ${id}: prompt_klauseln unlesbar`);
+  const klauseln: PromptKlausel[] = (z.prompt_klauseln as unknown[]).map((k) => {
+    if (!istObjekt(k) || typeof k.id !== "string" || typeof k.text !== "string") throw new StudioLeseFehler(`Medium ${id}: prompt_klauseln unlesbar`);
+    return { id: k.id, text: k.text };
+  });
+  const aigc = z.aigc_kennzeichen;
+  if (aigc !== null && aigc !== undefined && typeof aigc !== "boolean") throw new StudioLeseFehler(`Medium ${id}: aigc_kennzeichen unlesbar`);
+  return {
+    id,
+    objekt_slug: pflicht("objekt_slug"),
+    art: art as MediumArt,
+    fassung: fassung as MedienRolle,
+    startbild_id: idOderNull(z.startbild_id, "startbild_id", id),
+    abgeleitet_von: idOderNull(z.abgeleitet_von, "abgeleitet_von", id),
+    speicher_pfad: pflicht("speicher_pfad"),
+    sha256,
+    bytes,
+    mime: mime as MediumMime,
+    breite: zahlFeld(z.breite, "breite", id),
+    hoehe: zahlFeld(z.hoehe, "hoehe", id),
+    fps: zahlFeld(z.fps, "fps", id),
+    dauer_s: zahlFeld(z.dauer_s, "dauer_s", id),
+    aigc_kennzeichen: typeof aigc === "boolean" ? aigc : null,
+    schnitt_von_s: zahlFeld(z.schnitt_von_s, "schnitt_von_s", id),
+    schnitt_bis_s: zahlFeld(z.schnitt_bis_s, "schnitt_bis_s", id),
+    anker_id: pflicht("anker_id"),
+    anker_sha256: ankerSha,
+    ausschnitt,
+    startbild_abgleich: abgleich as AbgleichUrteil | null,
+    startbild_abweichung_max: zahlFeld(z.startbild_abweichung_max, "startbild_abweichung_max", id),
+    erzeuger: textFeld(z.erzeuger, "erzeuger", id),
+    modell: textFeld(z.modell, "modell", id),
+    job_id: textFeld(z.job_id, "job_id", id),
+    parameter: z.parameter,
+    prompt: textFeld(z.prompt, "prompt", id),
+    prompt_klauseln: klauseln,
+    ki_hinweis_text: textFeld(z.ki_hinweis_text, "ki_hinweis_text", id),
+    kosten_vorschau_credits: zahlFeld(z.kosten_vorschau_credits, "kosten_vorschau_credits", id),
+    kosten_credits: zahlFeld(z.kosten_credits, "kosten_credits", id),
+    kosten_usd: zahlFeld(z.kosten_usd, "kosten_usd", id),
+    kosten_quelle: textFeld(z.kosten_quelle, "kosten_quelle", id),
+    eingespielt_am: eingespielt,
+  };
+}
+
+/** Je Export eine Kette Export → Original → Startbild (neueste zuerst); was fehlt, steht in luecken. */
+export function medienKetten(zeilen: readonly StudioMedium[]): { ketten: MedienKette[]; einzeln: number[] } {
+  const jeId = new Map(zeilen.map((z) => [z.id, z]));
+  const inKette = new Set<number>();
+  const ketten: MedienKette[] = [];
+  for (const ex of [...zeilen].filter((z) => z.fassung === "export").sort((a, b) => b.id - a.id)) {
+    const luecken: string[] = [];
+    inKette.add(ex.id);
+    const og = ex.abgeleitet_von === null ? null : (jeId.get(ex.abgeleitet_von) ?? null);
+    const original = og !== null && og.fassung === "original" && og.objekt_slug === ex.objekt_slug ? og : null;
+    if (original === null) luecken.push(ex.abgeleitet_von === null ? "Export ohne Verweis auf ein Original" : `Original ${ex.abgeleitet_von} nicht gefunden`);
+    let startbild: StudioMedium | null = null;
+    if (original !== null) {
+      inKette.add(original.id);
+      const sb = original.startbild_id === null ? null : (jeId.get(original.startbild_id) ?? null);
+      startbild = sb !== null && sb.fassung === "startbild" && sb.objekt_slug === original.objekt_slug ? sb : null;
+      if (startbild === null) luecken.push(original.startbild_id === null ? "Original ohne Verweis auf ein Startbild" : `Startbild ${original.startbild_id} nicht gefunden`);
+      else inKette.add(startbild.id);
+    }
+    ketten.push({ export: ex, original, startbild, luecken });
+  }
+  return { ketten, einzeln: zeilen.filter((z) => !inKette.has(z.id)).map((z) => z.id) };
+}
+
+export function medienFehler(versuchAm: string, art: StudioFehlerArt, grund: string): StudioMedienTeil {
+  return teilFehler(QUELLE_MEDIEN, versuchAm, art, grund);
+}
+
+/** Medien-Teil aus den gelesenen Zeilen; eine unlesbare Zeile macht den ganzen Teil zu "fehler". */
+export function medienAusZeilen(roh: readonly unknown[], gemessenAm: string, abgeschnitten = false): StudioMedienTeil {
+  let zeilen: StudioMedium[];
+  try {
+    zeilen = roh.map(leseMediumZeile).sort((a, b) => a.id - b.id);
+  } catch (e) {
+    if (e instanceof StudioLeseFehler) return medienFehler(gemessenAm, "supabase", `Zeile nicht lesbar: ${e.message}`);
+    throw e;
+  }
+  const { ketten, einzeln } = medienKetten(zeilen);
+  const hinweis = verbinde(
+    abgeschnitten ? `nur ${zeilen.length} Zeilen geladen` : null,
+    einzeln.length > 0 ? `${einzeln.length} Zeile(n) in keiner vollständigen Kette (Teilstand eines Einspielens?)` : null,
+    ketten.some((k) => k.luecken.length > 0) ? "Kette mit Lücken" : null,
+  );
+  return {
+    wert: { zeilen, ketten, einzeln, abgeschnitten },
+    status: hinweis ? "warnung" : "ok",
+    quelle: QUELLE_MEDIEN,
+    gemessen_am: gemessenAm,
+    ...(hinweis ? { hinweis } : {}),
+  };
+}
+
+function creditText(n: number): string {
+  return n.toLocaleString("de-DE", { maximumFractionDigits: 4 });
+}
+
+/**
+ * Higgsfield-Credits je Objekt: Summe kosten_credits über die Originale — nur Originale tragen Kosten (CHECK
+ * studio_medium_kosten_nur_original). Trägt eine andere Zeile doch Kosten, zählt sie nicht und der Teil warnt.
+ * USD (Weg 2b) erscheinen hier nie. Ohne Original keine Summe: „0 Credits“ wäre ein Platzhalter.
+ */
+export function creditsAusMedien(medien: StudioMedienTeil, deckel: number | null = CREDIT_DECKEL): StudioMesswert<StudioCredits> {
+  if (medien.status === "fehler" || medien.wert === null) {
+    return {
+      wert: null,
+      status: "fehler",
+      quelle: QUELLE_CREDITS,
+      gemessen_am: medien.gemessen_am,
+      hinweis: `Medien nicht lesbar: ${medien.hinweis ?? "ohne Grund"}`,
+      fehler_art: medien.fehler_art ?? "unbekannt",
+    };
+  }
+  const originale = medien.wert.zeilen.filter((z) => z.fassung === "original");
+  const mit = originale.filter((z) => z.kosten_credits !== null);
+  const fremd = medien.wert.zeilen.filter((z) => z.fassung !== "original" && (z.kosten_credits !== null || z.kosten_vorschau_credits !== null));
+  const mitUsd = originale.filter((z) => z.kosten_usd !== null).length;
+  const summe = mit.length > 0 ? Math.round(mit.reduce((s, z) => s + (z.kosten_credits as number), 0) * 1e6) / 1e6 : null;
+  const rest = summe !== null && deckel !== null ? Math.round((deckel - summe) * 1e6) / 1e6 : null;
+  const ohne = originale.length - mit.length;
+  // Gekappte Medienliste (Review-Befund 2c): Originale können fehlen, die Summe ist dann eine Untergrenze.
+  const gekappt = medien.wert.abgeschnitten === true;
+  const hinweis = verbinde(
+    gekappt ? "Medienliste gekappt — Summe ist Untergrenze, Rest Obergrenze" : null,
+    originale.length === 0 && !gekappt ? "noch kein Video eingespielt" : null,
+    ohne > 0 ? `${ohne} Original(e) ohne Credit-Angabe (Summe ist Untergrenze)` : null,
+    fremd.length > 0 ? `${fremd.length} Zeile(n) außer Originalen mit Credits — nicht summiert` : null,
+    mitUsd > 0 ? `${mitUsd} Original(e) mit USD-Kosten (Weg 2b) — nicht in den Credits` : null,
+    deckel === null ? "Deckel nicht entschieden (E18)" : `Deckel ${creditText(deckel)} Credits für Stufe 2 (E18), angezeigt, nicht erzwungen`,
+  );
+  const luecke = ohne > 0 || fremd.length > 0 || mitUsd > 0 || gekappt;
+  return {
+    wert: { summe, deckel, rest, originale: originale.length, originale_ohne_angabe: ohne },
+    status: summe === null ? "nicht_gemessen" : luecke ? "warnung" : "ok",
+    quelle: QUELLE_CREDITS,
+    gemessen_am: summe === null ? null : medien.gemessen_am,
     ...(hinweis ? { hinweis } : {}),
   };
 }

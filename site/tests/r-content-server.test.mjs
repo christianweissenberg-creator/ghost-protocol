@@ -1120,7 +1120,10 @@ test("R6 Browser-Client ohne Rechte auf content (Simulation): Er bekommt für co
   const html = renderToStaticMarkup(React.createElement(V.StudioAnsicht, { slug: SLUG, lesung, kopiere: () => {}, kopierStatus: () => "Kopieren" }));
   const assets = [...html.matchAll(/data-asset="(\d+)"/g)].map((m) => Number(m[1])).sort((a, b) => a - b);
   assert.deepEqual(assets, [1, 2, 3, 4, 5, 6, 7]);
-  assert.ok(anfragen.every((a) => a === "content:service"), anfragen.join(", "));
+  // Jede Datenbank-Anfrage kam vom Server mit dem Service-Schlüssel; seit Schritt 7 liest das Studio dazu
+  // studio_medium und studio_messplan — der Browser liest keine Tabelle.
+  assert.ok(anfragen.includes("content:service"), anfragen.join(", "));
+  assert.ok(anfragen.every((a) => a.endsWith(":service")), anfragen.join(", "));
 });
 
 // ═══ Teil M: Mutationsprüfung (09.11.2026) ═══
