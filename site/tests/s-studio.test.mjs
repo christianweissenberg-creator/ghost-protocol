@@ -628,13 +628,18 @@ test("S-C3 Abnahme Seite: Kosten als USD-Schätzung mit 'n Läufe ohne Kostenang
   assert.ok(t2.includes("keine Stufen gespeichert (metadata.steps fehlt)"));
 });
 
-test("S-C4 Seite: Anker, Video/Medien, Credits und Messplan 'noch nicht gebaut (Schritt N)' — ohne Zahl, kein 0-Platzhalter", async () => {
+test("S-C4 Seite: Video/Medien, Credits und Messplan 'noch nicht gebaut (Schritt N)' — ohne Zahl, kein 0-Platzhalter; Anker seit Schritt 6 gebaut", async () => {
   standardWelt();
   const html = await studioHtml((await hole()).body);
   const t = sichtbar(html);
-  for (const [titel, schritt] of [["Anker-Material", 6], ["Video / Medien", 7], ["Higgsfield-Credits", 7], ["Messplan", 11]]) {
+  for (const [titel, schritt] of [["Video / Medien", 7], ["Higgsfield-Credits", 7], ["Messplan", 11]]) {
     assert.ok(t.includes(`${titel} noch nicht gebaut (Schritt ${schritt})`), `${titel}: ${t.slice(0, 2500)}`);
   }
+  // Schritt 6 (10.11.2026): Das Anker-Panel steht da, ohne Ergebnis im statischen Markup "wird geprüft …".
+  assert.ok(!t.includes("Anker-Material noch nicht gebaut"), "Anker nicht mehr als 'noch nicht gebaut'");
+  assert.equal((html.match(/data-anker-panel/g) ?? []).length, 1);
+  assert.ok(t.includes("Anker-Material · 11"), t.slice(0, 3000));
+  assert.equal((html.match(/data-hash="laedt"/g) ?? []).length, 11);
   for (const teil of ["kosten_credits", "messung"]) {
     const kachel = new RegExp(`data-teil="${teil}"[^>]*>.*?</div></div>`, "s").exec(html)?.[0] ?? "";
     assert.ok(kachel, teil);
@@ -686,10 +691,14 @@ test("S-C7 Seite: keine Knöpfe, die etwas auslösen; Regeln mit Fundstellen, da
   gemessenerStand();
   const html = await studioHtml((await hole()).body);
   const t = sichtbar(html);
-  // Einzige Knöpfe: "Kopieren" des CTA-Links in den Beleg-Ketten (wie /content), keiner sonst.
+  // Knöpfe: "Kopieren" des CTA-Links in den Beleg-Ketten (wie /content) und seit Schritt 6 genau ein
+  // "Alle prüfen" im Anker-Panel (prüft die Anker neu, ohne bezahlte Aufrufe) — keiner sonst.
   const knoepfe = [...html.matchAll(/<button[^>]*>(.*?)<\/button>/g)].map((m) => m[1]);
-  assert.ok(knoepfe.every((k) => k === "Kopieren"), knoepfe.join(" | "));
-  for (const verboten of ["Neues Asset", "Alle prüfen", "Text erzeugen", ">Freigeben</button>", "Video einspielen"]) {
+  assert.equal(knoepfe.filter((k) => k === "Alle prüfen").length, 1, knoepfe.join(" | "));
+  assert.ok(knoepfe.every((k) => k === "Kopieren" || k === "Alle prüfen"), knoepfe.join(" | "));
+  const panel = /<section[^>]*data-anker-panel[^>]*>.*?<\/section>/s.exec(html)?.[0] ?? "";
+  assert.match(panel, /<button[^>]*data-alle-pruefen[^>]*>Alle prüfen<\/button>/);
+  for (const verboten of ["Neues Asset", "Text erzeugen", ">Freigeben</button>", "Video einspielen"]) {
     const i = html.indexOf(verboten);
     assert.ok(i < 0, `${verboten}: ${html.slice(Math.max(0, i - 300), i + 40)}`);
   }
@@ -849,8 +858,17 @@ function aufloesen(von, spez) {
 }
 
 test("S-E1 Regel 5: Studio-Seite, /expose und Sidebar erreichen weder Server-Module noch Prompts; nur die Route liest lesen.ts", () => {
-  const verboten = ["src/lib/status-server.ts", "src/lib/studio/lesen.ts", "src/lib/agent-prompts.ts", "src/lib/steinadel-regelpaket.ts", "src/lib/supabase.ts"].map((d) => path.join(SITE, d));
-  for (const start of ["src/app/studio/[objekt]/page.tsx", "src/app/expose/page.tsx", "src/components/layout/Sidebar.tsx", "src/components/studio/StudioAnsicht.tsx"]) {
+  // Seit Schritt 6 (10.11.2026) auch Anker-Prüfung und Export-Abruf: Beide laufen nur auf dem Server.
+  const verboten = [
+    "src/lib/status-server.ts",
+    "src/lib/studio/lesen.ts",
+    "src/lib/studio/anker-pruefung.ts",
+    "src/lib/studio/export-abruf.ts",
+    "src/lib/agent-prompts.ts",
+    "src/lib/steinadel-regelpaket.ts",
+    "src/lib/supabase.ts",
+  ].map((d) => path.join(SITE, d));
+  for (const start of ["src/app/studio/[objekt]/page.tsx", "src/app/expose/page.tsx", "src/components/layout/Sidebar.tsx", "src/components/studio/StudioAnsicht.tsx", "src/components/studio/AnkerPanel.tsx"]) {
     const gesehen = new Set();
     const offen = [path.join(SITE, start)];
     while (offen.length) {
@@ -1133,15 +1151,16 @@ test("S-N13 (SPEZ-5) Higgsfield im Studio: nur der Hinweis auf den aktiven Erzeu
     t.includes("Higgsfield im Studio: aktiver Erzeugungsweg ist die Connector-Sitzung (Higgsfield-Connector in einer Claude-Sitzung). Das Studio ruft Higgsfield nicht auf."),
     t.slice(0, 3000),
   );
+  // Neben "Kopieren" nur "Alle prüfen" im Anker-Panel (Schritt 6) — kein Knopf, der Higgsfield aufruft.
   const knoepfe = [...html.matchAll(/<button[^>]*>(.*?)<\/button>/g)].map((m) => m[1]);
-  assert.ok(knoepfe.every((k) => k === "Kopieren"), knoepfe.join(" | "));
+  assert.ok(knoepfe.every((k) => k === "Kopieren" || k === "Alle prüfen"), knoepfe.join(" | "));
 });
 
-test("S-N14 (SPEZ-6) Regeln: Anker-, Startbild- und Rechte-Regel stehen da — als 'noch nicht gebaut (Schritt N)', nicht als laufende Prüfung", async () => {
+test("S-N14 (SPEZ-6) Regeln: Startbild- und Rechte-Regel 'noch nicht gebaut (Schritt N)'; die Anker-Regel prüft seit Schritt 6 der Server", async () => {
   const { STUDIO_REGELN } = await regelnStudio();
   standardWelt();
   const t = sichtbar(await studioHtml((await hole()).body));
-  for (const [muster, schritt] of [[/^Anker-Bilder/, 6], [/Startbild/, 7], [/Nutzungsrechte/, 8]]) {
+  for (const [muster, schritt] of [[/Startbild/, 7], [/Nutzungsrechte/, 8]]) {
     const treffer = STUDIO_REGELN.filter((r) => muster.test(r.regel));
     assert.equal(treffer.length, 1, String(muster));
     const r = treffer[0];
@@ -1149,6 +1168,15 @@ test("S-N14 (SPEZ-6) Regeln: Anker-, Startbild- und Rechte-Regel stehen da — a
     assert.doesNotMatch(r.fundstelle, INTERNE_VERWEISE);
     assert.ok(t.includes(`${r.regel} Fundstelle: ${r.fundstelle} · Prüfung: noch nicht gebaut (Schritt ${schritt})`), r.regel);
   }
+  // Schritt 6 (10.11.2026): Die Anker-Regel nennt ihre Fundstellen im Repo und die Prüfung des Servers.
+  const anker = STUDIO_REGELN.filter((r) => /^Anker-Bilder/.test(r.regel));
+  assert.equal(anker.length, 1);
+  assert.match(anker[0].fundstelle, /site\/src\/lib\/studio\/anker\.ts/);
+  assert.match(anker[0].fundstelle, /site\/src\/lib\/studio\/anker-pruefung\.ts/);
+  assert.match(anker[0].pruefung, /^Code, serverseitig: SHA-256 jeder Live-Datei gegen das Manifest und urls\.cover im Export/);
+  assert.ok(!/noch nicht gebaut/.test(anker[0].pruefung));
+  assert.ok(t.includes(`${anker[0].regel} Fundstelle: ${anker[0].fundstelle} · Prüfung: ${anker[0].pruefung}`));
+  for (const datei of ["src/lib/studio/anker.ts", "src/lib/studio/anker-pruefung.ts"]) readFileSync(path.join(SITE, datei));
   // "darunter": Der Bauträger bleibt die letzte Regel.
   assert.equal(STUDIO_REGELN[STUDIO_REGELN.length - 1].regel, "Bauträger öffentlich nicht namentlich nennen.");
 });

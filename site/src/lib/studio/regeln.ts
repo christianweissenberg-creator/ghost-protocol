@@ -1,8 +1,9 @@
 // Objekt-Studio: "Regeln, die mitlaufen" (Schritt 2, 08.11.2026) — statische Liste für die
 // Studio-Seite. Jede Regel nennt, wo sie steht (Datei im Repo oder Commit) und wie sie durchgesetzt
 // wird. Nur öffentlich zitierbare Fundstellen; wo es keine gibt, steht das dabei. Regeln, deren
-// Prüfung erst ein späterer Bauschritt bringt (Anker, Startbild, Rechte), stehen mit
-// "noch nicht gebaut (Schritt N)" da — nie als laufende Prüfung.
+// Prüfung erst ein späterer Bauschritt bringt (Startbild, Rechte), stehen mit
+// "noch nicht gebaut (Schritt N)" da — nie als laufende Prüfung. Die Anker-Regel prüft seit
+// Schritt 6 (10.11.2026) der Server.
 
 import { MIN_FREIGABE_ZEICHEN } from "@/lib/freigabe-regeln";
 import { STUDIO_BAUSCHRITTE, nochNichtGebautText } from "./objekte";
@@ -67,9 +68,11 @@ export const STUDIO_REGELN: readonly StudioRegel[] = [
     pruefung: "Code, in jeder Antwort und Anzeige des Studios",
   },
   {
+    // Seit Schritt 6 (10.11.2026) gebaut: Manifest als Code-Konstante, Prüfung auf dem Server.
     regel: "Anker-Bilder nur aus dem Anker-Manifest und mit unverändertem Datei-Hash; ein Anker heißt Visualisierung, nie Foto.",
-    fundstelle: OHNE_FUNDSTELLE,
-    pruefung: nochNichtGebautText(STUDIO_BAUSCHRITTE.anker),
+    fundstelle: "site/src/lib/studio/anker.ts (ANKER_MANIFESTE); site/src/lib/studio/anker-pruefung.ts (pruefeAnker)",
+    pruefung:
+      "Code, serverseitig: SHA-256 jeder Live-Datei gegen das Manifest und urls.cover im Export — beim Laden des Studios und mit „Alle prüfen“",
   },
   {
     regel: "Ein Video startet nur aus einem Ausschnitt eines Ankers; das Startbild wird gegen diesen Ausschnitt abgeglichen.",

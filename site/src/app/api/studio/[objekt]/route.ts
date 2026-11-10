@@ -1,26 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServiceClient, istKonfigurationsFehler } from "@/lib/supabase";
-import {
-  ABFRAGE_TIMEOUT_MS,
-  KEIN_CACHE,
-  bereinigeFehler,
-  istZeitueberschreitung,
-  ladeSeitenweise,
-} from "@/lib/status-server";
+import { ABFRAGE_TIMEOUT_MS, KEIN_CACHE, bereinigeFehler, ladeSeitenweise } from "@/lib/status-server";
 import type { Seitenergebnis } from "@/lib/status-server";
+import { leseExport } from "@/lib/studio/export-abruf";
 import { pruefeStudioSlug } from "@/lib/studio/objekte";
 import type { StudioObjekt } from "@/lib/studio/objekte";
 import {
   ASSET_SPALTEN,
-  QUELLE_EXPORT,
   assetsAusLesung,
   assetsFehler,
   creditsTeil,
-  exportFehlerAusAntwort,
   kopfAusExport,
   kostenAusAssets,
   messungTeil,
-  teilFehler,
 } from "@/lib/studio/lesen";
 import type {
   ObjektKopf,
@@ -36,7 +28,8 @@ import type {
 // Liefert für ein Objekt der Allow-List (lib/studio/objekte.ts) fünf Teile mit je eigenem Status:
 // - objekt: Kopf aus dem Steinadel-Export. Abgerufen über /api/objekte mit der Sitzung der Anfrage
 //   (wie die Pipeline, fetchObjekt in api/content/pipeline/route.ts) — der Zugang zum Export bleibt
-//   in /api/objekte.
+//   in /api/objekte. Der Abruf steht seit Schritt 6 (10.11.2026) in lib/studio/export-abruf.ts,
+//   unverändert; den Export liest auch die Anker-Prüfung (GET /api/studio/[objekt]/anker).
 // - assets: content-Zeilen mit metadata.objekt_slug = Slug, mit Zählung der Abfrage; je Asset das
 //   abgeleitete COUNSEL-Urteil, der Sperrgrund (pruefeFreigabe, wie /api/freigaben), die Kosten und
 //   die Daten der Beleg-Kette.
@@ -52,10 +45,6 @@ import type {
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-const BASE_URL = process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000";
-// Über dem Zeitlimit von /api/objekte (15 s), damit dessen eigene Fehlerantwort ankommt — gleicher
-// Wert wie OBJEKT_TIMEOUT_MS der Pipeline.
-const EXPORT_TIMEOUT_MS = 20_000;
 /** Höchstzahl geladener Assets; mehr Zeilen machen den Teil zur "warnung" (Untergrenze), nie still kürzer. */
 const ASSETS_HOECHSTENS = 500;
 
@@ -65,34 +54,8 @@ function abweisung(status: 400 | 404 | 500, fehler: string, art: StudioAbweisung
 }
 
 async function ladeObjektKopf(slug: StudioObjekt, cookie: string): Promise<StudioMesswert<ObjektKopf>> {
-  const versuchAm = new Date().toISOString();
-  let res: Response;
-  try {
-    res = await fetch(`${BASE_URL}/api/objekte`, {
-      headers: { Cookie: cookie },
-      cache: "no-store",
-      signal: AbortSignal.timeout(EXPORT_TIMEOUT_MS),
-    });
-  } catch (e) {
-    const grund = istZeitueberschreitung(e) ? `Zeitüberschreitung (${EXPORT_TIMEOUT_MS / 1000} s)` : bereinigeFehler(e);
-    return teilFehler(QUELLE_EXPORT, versuchAm, "nicht_erreichbar", grund);
-  }
-  const abgerufenAm = new Date().toISOString();
-  let daten: unknown = null;
-  try {
-    daten = await res.json();
-  } catch (e) {
-    // Unlesbares JSON (SyntaxError) zählt wie eine Antwort ohne Inhalt; jeder andere Fehler beim
-    // Lesen ist ein Abbruch (Zeitlimit, abgerissene Verbindung) — wie in api/objekte/route.ts.
-    const kaputtesJson = e instanceof SyntaxError || (e instanceof Error && e.name === "SyntaxError");
-    if (!kaputtesJson) {
-      const grund = istZeitueberschreitung(e) ? `Zeitüberschreitung (${EXPORT_TIMEOUT_MS / 1000} s)` : bereinigeFehler(e);
-      return teilFehler(QUELLE_EXPORT, abgerufenAm, "nicht_erreichbar", grund);
-    }
-    if (res.ok) return teilFehler(QUELLE_EXPORT, abgerufenAm, "quelle_fehler", "Antwort von /api/objekte nicht lesbar");
-  }
-  if (!res.ok) return exportFehlerAusAntwort(res.status, daten, abgerufenAm);
-  return kopfAusExport(daten, slug, abgerufenAm);
+  const lesung = await leseExport(cookie);
+  return lesung.art === "daten" ? kopfAusExport(lesung.daten, slug, lesung.abgerufenAm) : lesung.teil;
 }
 
 async function ladeAssets(slug: StudioObjekt): Promise<StudioAssetsTeil> {

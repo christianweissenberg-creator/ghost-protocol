@@ -6,7 +6,9 @@
 // Studio haben, entscheidet die Route (Allow-List in lib/studio/objekte.ts: sonst 404 "Objekt
 // nicht im Studio", 400 bei falscher Form) — die Seite zeigt deren Fehlertext. Den Export-Zugang
 // und die Datenbank sieht der Browser nicht: beides liest nur der Server.
-// Kein Knopf löst etwas aus; einzig die Beleg-Kette kopiert auf Wunsch den CTA-Link (wie /content).
+// Kein Knopf erzeugt oder gibt frei; die Beleg-Kette kopiert auf Wunsch den CTA-Link (wie /content).
+// Seit Schritt 6 (10.11.2026) fragt das Anker-Panel in der Ansicht seine Prüfung selbst ab
+// (GET /api/studio/<slug>/anker, beim Aufbau und mit „Alle prüfen“); diese Seite bleibt unverändert.
 
 import { useCallback, useEffect, useState } from "react";
 import { useParams } from "next/navigation";

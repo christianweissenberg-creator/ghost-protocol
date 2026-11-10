@@ -15,13 +15,34 @@ export const HILFEN = "@/components/studio/beleg-hilfen";
 export const KETTE = "@/components/studio/BelegKette";
 export const KNOPF = "@/components/studio/FreigabeKnopf";
 
-/** Lädt beleg-hilfen.ts, BelegKette.tsx und FreigabeKnopf.tsx mit den Attrappen der Seite. */
+export const ANKER_PANEL = "@/components/studio/AnkerPanel";
+
+/**
+ * Lädt beleg-hilfen.ts, BelegKette.tsx und FreigabeKnopf.tsx mit den Attrappen der Seite, seit Schritt 6
+ * (10.11.2026) auch AnkerPanel.tsx — StudioAnsicht importiert es. lib/studio/anker.ts und lib/types.ts
+ * haben keine Laufzeit-Importe und werden hier selbst geladen.
+ */
 export function ladeStudioBausteine(attrappen) {
   const hilfen = ladeTsx("components/studio/beleg-hilfen.ts", attrappen);
   const mitHilfen = { ...attrappen, [HILFEN]: hilfen };
   const kette = ladeTsx("components/studio/BelegKette.tsx", mitHilfen);
   const knopf = ladeTsx("components/studio/FreigabeKnopf.tsx", mitHilfen);
-  return { hilfen, kette, knopf, module: { [HILFEN]: hilfen, [KETTE]: kette, [KNOPF]: knopf } };
+  const panel = ladeAnkerPanel(attrappen, { anker: ladeTsx("lib/studio/anker.ts", {}), types: ladeTsx("lib/types.ts", {}), hilfen });
+  return { hilfen, kette, knopf, panel, module: { [HILFEN]: hilfen, [KETTE]: kette, [KNOPF]: knopf, [ANKER_PANEL]: panel } };
+}
+
+/**
+ * Lädt components/studio/AnkerPanel.tsx (Objekt-Studio Schritt 6, 10.11.2026) mit den Attrappen der Seite
+ * (React) und den echten Modulen: anker = lib/studio/anker.ts, types = lib/types.ts, hilfen = die
+ * Beleg-Hilfen aus ladeStudioBausteine. Kopie für Mutationstests: Z_TSX_COMPONENTS_STUDIO_ANKERPANEL.
+ */
+export function ladeAnkerPanel(attrappen, { anker, types, hilfen }) {
+  return ladeTsx("components/studio/AnkerPanel.tsx", {
+    ...attrappen,
+    "@/lib/studio/anker": anker,
+    "@/lib/types": types,
+    [HILFEN]: hilfen,
+  });
 }
 
 /** Hook-Laufzeit: Zustand je Aufrufreihenfolge, Callbacks, Memos und Effekte mit Abhängigkeiten. */

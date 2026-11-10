@@ -8,6 +8,7 @@
 // ohne Zahl, nie 0 als Platzhalter.
 
 import type { BelegEintrag } from "@/components/studio/beleg-hilfen";
+import type { AnkerHashStatus, CoverStatus } from "@/lib/studio/anker";
 import type { CounselUrteil, MessStatus } from "@/lib/status-types";
 
 export type StudioStatus = MessStatus | "noch_nicht_gebaut";
@@ -127,6 +128,58 @@ export interface StudioAntwort {
   kosten_usd: StudioMesswert<StudioKosten>;
   kosten_credits: StudioMesswert<null>;
   messung: StudioMesswert<null>;
+}
+
+// ── GET /api/studio/[objekt]/anker (Schritt 6, 10.11.2026) ──────────────────────────────────────
+// Hash-Prüfung der Manifest-Dateien (lib/studio/anker.ts) gegen die live ausgelieferten Dateien und
+// Abgleich von urls.cover im Steinadel-Export. Jedes Ergebnis trägt seinen Zeitpunkt; ein Fehler bei einer
+// Datei steht als deren Status da, nie als 0 oder als fehlende Zeile.
+
+/** Ergebnis der Hash-Prüfung einer Manifest-Datei. */
+export interface AnkerHashErgebnis {
+  id: string;
+  status: AnkerHashStatus;
+  /** SHA-256 laut Manifest. */
+  sha256_soll: string;
+  /** SHA-256 der vollständig gelesenen Live-Datei; null, wenn nicht gelesen oder am Größenlimit abgebrochen. */
+  sha256_live: string | null;
+  /** Byte-Zahl laut Manifest (zugleich Leselimit). */
+  bytes_soll: number;
+  /** Byte-Zahl der vollständig gelesenen Live-Datei; null wie sha256_live. */
+  bytes_live: number | null;
+  /** HTTP-Status der Live-Adresse; null ohne Antwort (Netzfehler, Zeitlimit, nicht abgerufen). */
+  http_status: number | null;
+  /** Zeitpunkt des Ergebnisses (ISO). */
+  gemessen_am: string;
+  /** Grund bei "geaendert" und "nicht_erreichbar", Zusatz bei "unveraendert"; null = keiner. */
+  hinweis: string | null;
+}
+
+/** Abgleich von urls.cover im Export mit der Adresse des Cover-Ankers. */
+export interface CoverErgebnis {
+  status: CoverStatus;
+  /** id des Cover-Ankers laut Manifest. */
+  anker_id: string;
+  /** Adresse des Cover-Ankers laut Manifest. */
+  soll: string;
+  /** urls.cover als Ursprung und Pfad, maskiert und gekürzt; null, wenn leer, kein Text oder keine Web-Adresse. */
+  ist: string | null;
+  quelle: string;
+  /** Zeitpunkt des Export-Abrufs bzw. seines Versuchs (ISO). */
+  gemessen_am: string;
+  hinweis: string | null;
+  /** Nur bei "nicht_lesbar": Ursache wie beim Objektkopf. */
+  fehler_art?: StudioFehlerArt;
+}
+
+export interface AnkerAntwort {
+  objekt_slug: string;
+  erzeugt_am: string;
+  /** Messzeitpunkt der Manifest-Hashes. */
+  manifest_gemessen_am: string;
+  /** Je Manifest-Eintrag genau ein Ergebnis, in der Reihenfolge des Manifests. */
+  anker: AnkerHashErgebnis[];
+  export_cover: CoverErgebnis;
 }
 
 /** Abweisung der ganzen Anfrage: 400 eingabe, 404 nicht_im_studio, 500 programmfehler. */
