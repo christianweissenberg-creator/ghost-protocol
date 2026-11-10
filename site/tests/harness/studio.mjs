@@ -71,16 +71,17 @@ export function ladeMedienPanel(attrappen, { anker, types, hilfen, pruef, text }
     "@/lib/types": types,
     [HILFEN]: hilfen,
     [PRUEF_ANSICHT]: pruef ?? ladePruefAnsicht(attrappen, { hilfen }),
-    [TEXT_ERZEUGEN]: text ?? ladeTextErzeugen(attrappen, { hilfen }),
+    [TEXT_ERZEUGEN]: text ?? ladeTextErzeugen(attrappen, { hilfen, types }),
   });
 }
 
 /**
- * Lädt components/studio/TextErzeugen.tsx (Nachbesserung Paket C, Auftrag C) mit den Attrappen der Seite (React) und den
- * Beleg-Hilfen. Kopie für Mutationstests: Z_TSX_COMPONENTS_STUDIO_TEXTERZEUGEN.
+ * Lädt components/studio/TextErzeugen.tsx (Nachbesserung Paket C, Auftrag C) mit den Attrappen der Seite (React), den
+ * Beleg-Hilfen und lib/types.ts (Zeit in Europe/Berlin; ohne Angabe frisch geladen, es hat nur Typ-Importe). Kopie für
+ * Mutationstests: Z_TSX_COMPONENTS_STUDIO_TEXTERZEUGEN.
  */
-export function ladeTextErzeugen(attrappen, { hilfen }) {
-  return ladeTsx("components/studio/TextErzeugen.tsx", { ...attrappen, [HILFEN]: hilfen });
+export function ladeTextErzeugen(attrappen, { hilfen, types }) {
+  return ladeTsx("components/studio/TextErzeugen.tsx", { ...attrappen, [HILFEN]: hilfen, "@/lib/types": types ?? ladeTsx("lib/types.ts", {}) });
 }
 
 /**

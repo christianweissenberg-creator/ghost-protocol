@@ -6,9 +6,10 @@
 // AnkerPanel.tsx) mit eigener Prüfung über GET /api/studio/[objekt]/anker. Seit Schritt 7 (10.11.2026)
 // Kacheln für Higgsfield-Credits (getrennt von USD) und Messplan sowie das Medien-Panel
 // (components/studio/MedienPanel.tsx): Videos je Kette und „Video einspielen“ mit Prüflauf und Bestätigung.
-// Kein Knopf erzeugt, prüft mit Kosten oder gibt frei: Freigegeben wird im Content-Tab; die Beleg-Kette
-// kopiert auf Wunsch den CTA-Link (wie auf /content), „Alle prüfen“ im Anker-Panel prüft die Anker neu
-// (ohne bezahlte Aufrufe). Die Stand-Zeile nennt, wann die Daten geladen wurden; „neu laden“ liest sie
+// Kein Knopf postet oder gibt frei: Freigegeben wird im Content-Tab; die Beleg-Kette kopiert auf Wunsch den
+// CTA-Link (wie auf /content), „Alle prüfen“ im Anker-Panel prüft die Anker neu (ohne bezahlte Aufrufe). Einen
+// bezahlten Lauf startet nur „Text erzeugen“ im Medien-Panel, nach Bestätigung (Caption zu einem Video, Pipeline mit
+// Claude; Nachtrag d2-text-erzeugen-6). Die Stand-Zeile nennt, wann die Daten geladen wurden; „neu laden“ liest sie
 // einmal neu (kein Takt, siehe app/studio/[objekt]/page.tsx).
 // Jeder Text aus Export und Datenbank erscheint maskiert (der Server maskiert schon, die Ansicht
 // noch einmal). Jede Zahl trägt im title Quelle und Messzeitpunkt.
@@ -663,8 +664,9 @@ export function StudioAnsicht({
         </h1>
         <p className="gp-sub">
           Liest den Steinadel-Export, die Content-Läufe, die Anker-Dateien und die Medien zu diesem Objekt. Das Studio
-          erzeugt und postet nichts; es prüft die Anker gegen ihr Manifest und spielt Videos mit Beleg ein. Freigegeben
-          wird im Content-Tab.
+          postet nichts; es prüft die Anker gegen ihr Manifest und spielt Videos mit Beleg ein. „Text erzeugen“ startet
+          nach Bestätigung einen bezahlten Pipeline-Lauf (Claude) für die Caption zu einem Video. Freigegeben wird im
+          Content-Tab.
         </p>
       </div>
 

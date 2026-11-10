@@ -1053,7 +1053,7 @@ export function MedienPanel({
                       <FreigabeUrteil k={k} />
                       <PruefBereich k={k} slug={slug} anker={manifest?.eintraege.find((e) => e.id === k.export.anker_id) ?? null} holen={holen} neuLaden={neuLaden} />
                       {/* Caption zu diesem Video (Nachbesserung Paket C, Auftrag C; Ablauf Video-Asset, Schritt 5). */}
-                      <TextErzeugen slug={slug} medium={{ id: k.export.id, sha256: k.export.sha256 }} holen={holen} fertig={neuLaden} />
+                      <TextErzeugen slug={slug} medium={{ id: k.export.id, sha256: k.export.sha256 }} sperre={k.urteil} holen={holen} fertig={neuLaden} />
                     </>
                   }
                 />

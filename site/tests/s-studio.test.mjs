@@ -709,10 +709,14 @@ test("S-C7 Seite: keine Knöpfe, die ohne Bestätigung etwas auslösen; Regeln m
   assert.ok(knoepfe.every((k) => ERLAUBTE_KNOEPFE.includes(k)), knoepfe.join(" | "));
   const panel = /<section[^>]*data-anker-panel[^>]*>.*?<\/section>/s.exec(html)?.[0] ?? "";
   assert.match(panel, /<button[^>]*data-alle-pruefen[^>]*>Alle prüfen<\/button>/);
-  for (const verboten of ["Neues Asset", "Text erzeugen", "bezahlten Lauf starten", ">Freigeben</button>", ">So einspielen</button>"]) {
+  // Ohne Video kein „Text erzeugen“-Knopf und keine Karte dazu. Der Untertitel nennt den Knopf (Nachtrag d2-text-erzeugen-6),
+  // deshalb sucht der Wächter den Knopf und sein Attribut, nicht jedes Vorkommen des Worts.
+  for (const verboten of ["Neues Asset", "data-text-erzeugen", ">Text erzeugen …</button>", "bezahlten Lauf starten", ">Freigeben</button>", ">So einspielen</button>"]) {
     const i = html.indexOf(verboten);
     assert.ok(i < 0, `${verboten}: ${html.slice(Math.max(0, i - 300), i + 40)}`);
   }
+  assert.ok(!html.includes("erzeugt und postet nichts"), "alter Untertitel");
+  assert.match(html, /Das Studio\s+postet nichts;.*„Text erzeugen“ startet\s+nach Bestätigung einen bezahlten Pipeline-Lauf \(Claude\)/s);
   // Mit einem Video: genau ein "Text erzeugen …" — im Medien-Panel, bei diesem Video; keine Bestätigung im Markup.
   zuruecksetzen();
   gemessenerStand();

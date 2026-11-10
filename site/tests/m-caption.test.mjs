@@ -585,7 +585,7 @@ test("M-C8 „Text erzeugen“: erst die Bestätigung mit „bezahlter Lauf (Cla
  * „Text erzeugen“ gegen die echte Pipeline-Route (Agenten-Attrappe, nichts Bezahltes): Laufzeit, gesendete Körper und
  * Schalter für eine verlorene Antwort und ein Tor, das die Antwort anhält (im finally öffnen).
  */
-async function textErzeugenLaufzeit({ medium = { id: EXPORT_ID, sha256: "3".repeat(64) }, sperre } = {}) {
+async function textErzeugenLaufzeit({ medium = { id: EXPORT_ID, sha256: "3".repeat(64) }, sperre, speicher = null } = {}) {
   const { hookLaufzeit, ladeTextErzeugen, ladeStudioBausteine } = await import("./harness/studio.mjs");
   const lz = hookLaufzeit();
   const B = ladeStudioBausteine({ ...lz.attrappen, "@/lib/counsel-urteil": counselModul, "@/lib/freigabe-regeln": regeln });
@@ -600,7 +600,7 @@ async function textErzeugenLaufzeit({ medium = { id: EXPORT_ID, sha256: "3".repe
     if (s.verloren) throw new TypeError("Verbindung nach dem Senden abgebrochen");
     return res;
   };
-  lz.setzeWurzel(T.TextErzeugen, { slug: SLUG, medium, holen, fertig: () => (s.fertig += 1), ...(sperre === undefined ? {} : { sperre }) });
+  lz.setzeWurzel(T.TextErzeugen, { slug: SLUG, medium, holen, fertig: () => (s.fertig += 1), speicher, ...(sperre === undefined ? {} : { sperre }) });
   const alle = (k, pred, aus = []) => {
     if (Array.isArray(k)) for (const c of k) alle(c, pred, aus);
     else if (k && typeof k === "object") {
@@ -660,6 +660,102 @@ test("M-C10 „Text erzeugen“, Wiederholung (Nachtrag d2-text-erzeugen-1): Ant
   for (const art of ["nicht_gestartet", "abgewiesen", "abgebrochen"]) assert.equal(r.T.ausgangBeiWiederholung({ art, contentId: 1, text: "x" }, true).art, "unbekannt", art);
 });
 
+/** Speicher-Attrappe wie sessionStorage (getItem, setItem, removeItem). */
+function speicherAttrappe() {
+  const m = new Map();
+  return { m, getItem: (k) => (m.has(k) ? m.get(k) : null), setItem: (k, v) => m.set(k, String(v)), removeItem: (k) => m.delete(k) };
+}
+
+test("M-C12 „Text erzeugen“ bei gesperrtem Video (Nachtrag d2-text-erzeugen-3): Der Knopf bleibt, die Bestätigung nennt die Gründe der Medien-Regel — „Video gesperrt: … — Caption nicht freigebbar, solange das gilt“; bei freigebbarem Video keine solche Zeile", async () => {
+  const gesperrt = await textErzeugenLaufzeit({ sperre: { freigebbar: false, gruende: ["Rechte laut Prüfprotokoll nicht geklärt", "Startbild-Abgleich nicht bestanden (größte Abweichung 7)"] } });
+  assert.equal(gesperrt.text(gesperrt.element("data-text-erzeugen-knopf")), "Text erzeugen …", "der Knopf bleibt");
+  gesperrt.element("data-text-erzeugen-knopf").props.onClick();
+  assert.equal(gesperrt.text(gesperrt.element("data-text-erzeugen-sperre")), "Video gesperrt: Rechte laut Prüfprotokoll nicht geklärt · Startbild-Abgleich nicht bestanden (größte Abweichung 7) — Caption nicht freigebbar, solange das gilt.");
+  assert.deepEqual([gesperrt.s.gesendet.length, welt.aktivierungen.length], [0, 0], "die Bestätigung sendet nichts");
+  const frei = await textErzeugenLaufzeit({ sperre: { freigebbar: true, gruende: [] } });
+  frei.element("data-text-erzeugen-knopf").props.onClick();
+  assert.equal(frei.element("data-text-erzeugen-sperre"), null);
+  assert.ok(frei.element("data-text-erzeugen-bestaetigung"));
+});
+
+test("M-C13 „Text erzeugen“, offene Lauf-ID im Tab-Speicher (Nachtrag d2-text-erzeugen-4): während des Laufs und nach unbekanntem Ausgang steht die ID je Video im Speicher; nach Neuladen nennt die Karte den Lauf ohne bekannten Ausgang und „Erneut senden …“ schickt dieselbe ID → 409; nach bekanntem Ausgang ist der Eintrag weg", async () => {
+  exportMit(RITTERGUT);
+  medien();
+  agenten();
+  const speicher = speicherAttrappe();
+  const schluessel = `gp-text-erzeugen:${SLUG}:${EXPORT_ID}`;
+  const eins = await textErzeugenLaufzeit({ speicher });
+  assert.equal(eins.T.speicherSchluessel(SLUG, EXPORT_ID), schluessel);
+  // Während des Laufs: „laeuft“ im Speicher (das Tor hält die Antwort an).
+  let auf;
+  eins.s.tor = { warte: new Promise((r) => (auf = r)) };
+  try {
+    eins.element("data-text-erzeugen-knopf").props.onClick();
+    eins.element("data-text-erzeugen-start").props.onClick();
+    await eins.lz.ruhe(5);
+    assert.equal(JSON.parse(speicher.m.get(schluessel)).art, "laeuft");
+    assert.equal(JSON.parse(speicher.m.get(schluessel)).laufId, eins.s.gesendet[0].lauf_id);
+    eins.s.verloren = true;
+  } finally {
+    eins.s.tor = null;
+    auf();
+  }
+  await eins.lz.ruhe(40);
+  eins.s.verloren = false;
+  const id = eins.s.gesendet[0].lauf_id;
+  assert.deepEqual({ ...JSON.parse(speicher.m.get(schluessel)), seit: "…" }, { laufId: id, art: "unbekannt", seit: "…" });
+  // Neuladen: eine neue Karte mit demselben Speicher.
+  const zwei = await textErzeugenLaufzeit({ speicher });
+  zwei.lz.rendere();
+  const gemerkt = zwei.text(zwei.element("data-text-erzeugen-gemerkt"));
+  assert.match(gemerkt, new RegExp(`^Caption-Lauf zu diesem Video ohne bekannten Ausgang \\(in diesem Tab gestartet am \\d{2}\\.\\d{2}\\.\\d{4} \\d{2}:\\d{2}:\\d{2} \\(Europe/Berlin\\), Lauf-ID ${id.slice(0, 8)}…\\) — er kann noch laufen\\.`));
+  assert.equal(zwei.text(zwei.element("data-text-erzeugen-knopf")), "Erneut senden …");
+  zwei.element("data-text-erzeugen-knopf").props.onClick();
+  assert.match(zwei.text(zwei.element("data-text-erzeugen-bestaetigung")), /\(dieselbe wie beim Versuch mit unbekanntem Ausgang\)/);
+  zwei.element("data-text-erzeugen-start").props.onClick();
+  await zwei.lz.ruhe(40);
+  assert.equal(zwei.s.gesendet[0].lauf_id, id, "dieselbe Lauf-ID nach dem Neuladen");
+  assert.equal(zwei.ausgang().props["data-text-erzeugen-ausgang"], "existiert");
+  assert.equal(welt.aktivierungen.length, 6, "kein zweiter bezahlter Lauf");
+  assert.equal(speicher.m.has(schluessel), false, "nach bekanntem Ausgang ist der Eintrag weg");
+  // Unlesbarer oder fremder Eintrag: kein offener Lauf.
+  for (const roh of ["{kaputt", JSON.stringify({ laufId: "kurz", art: "unbekannt" }), JSON.stringify({ laufId: id, art: "fertig" })]) {
+    speicher.m.set(schluessel, roh);
+    assert.equal(eins.T.leseOffenenLauf(speicher, schluessel), null, roh);
+  }
+  // Ohne Speicher (Server, gesperrte Website-Daten) bleibt es bei der Karte.
+  assert.equal(eins.T.leseOffenenLauf(null, schluessel), null);
+});
+
+test("M-C14 „Text erzeugen“ während des Laufs (Nachtrag d2-text-erzeugen-5): kein Knopf, beide Felder gesperrt, „Pipeline läuft …“ sichtbar, nichts zweites gesendet — bis die Antwort da ist", async () => {
+  exportMit(RITTERGUT);
+  medien();
+  agenten();
+  const r = await textErzeugenLaufzeit();
+  let auf;
+  r.s.tor = { warte: new Promise((ja) => (auf = ja)) };
+  try {
+    r.element("data-text-erzeugen-knopf").props.onClick();
+    r.element("data-text-erzeugen-start").props.onClick();
+    await r.lz.ruhe(5);
+    assert.equal(r.s.gesendet.length, 1);
+    assert.equal(r.element("data-text-erzeugen-knopf"), null, "kein Knopf während des Laufs");
+    assert.equal(r.element("data-text-erzeugen-start"), null, "keine Bestätigung während des Laufs");
+    assert.equal(r.element("data-caption-kanal").props.disabled, true);
+    assert.equal(r.element("data-caption-kategorie").props.disabled, true);
+    assert.match(r.text(r.element("data-text-erzeugen-laeuft")), /^Pipeline läuft … \(bis zu 6 Stufen; kann einige Minuten dauern\) · Lauf-ID [0-9a-f]{8}…$/);
+    await r.lz.ruhe(5);
+    assert.equal(r.s.gesendet.length, 1, "nichts zweites gesendet");
+  } finally {
+    r.s.tor = null;
+    auf();
+  }
+  await r.lz.ruhe(40);
+  assert.equal(r.ausgang().props["data-text-erzeugen-ausgang"], "ergebnis");
+  assert.equal(r.element("data-caption-kanal").props.disabled, false, "nach dem Lauf wieder frei");
+  assert.equal(r.text(r.element("data-text-erzeugen-knopf")), "Text erzeugen …");
+});
+
 test("M-C9 laufAusgang: Antworten der Pipeline eingeordnet wie auf /content (Ergebnis, 409, 4xx, 5xx mit und ohne Zeile, unlesbar, Netz)", async () => {
   const { hookLaufzeit, ladeTextErzeugen, ladeStudioBausteine } = await import("./harness/studio.mjs");
   const lz = hookLaufzeit();
@@ -675,6 +771,16 @@ test("M-C9 laufAusgang: Antworten der Pipeline eingeordnet wie auf /content (Erg
   assert.equal(a(502, null).art, "unbekannt");
   assert.equal(a(200, { ok: true }).art, "unbekannt");
   assert.equal(a(null, { fehler: "Netzfehler: fetch failed" }).art, "unbekannt");
+  // Nachtrag d2-text-erzeugen-7: wie /content — 5xx mit lesbaren Schritten als Ergebnis mit Kosten, Fehlertext auch aus error,
+  // Untergrenze abgerundet.
+  const stufen = [{ agent: "researcher", status: "done", cost: 0.01 }, { agent: "scribe", status: "done", cost: 0.02 }];
+  const mitFehler = a(500, { status: "complete", steps: stufen, contentId: 100, fehler: "Status zur_freigabe nicht gespeichert", summary: { total_cost_usd: 0.03 } });
+  assert.deepEqual(mitFehler, { art: "ergebnis", status: "fehler", contentId: 100, text: "Lauf mit Fehler beendet (HTTP 500, Caption #100): Status zur_freigabe nicht gespeichert · geschätzt $0.0300" });
+  assert.equal(a(401, { error: "Nicht angemeldet" }).text, "Lauf abgewiesen (HTTP 401): Nicht angemeldet");
+  assert.equal(a(200, { status: "complete", steps: stufen, contentId: 12, summary: { total_cost_usd: 0.16569, kosten_unvollstaendig: true } }).text, "Lauf beendet: Caption #12 — zur Freigabe im Stapel · geschätzt mindestens $0.1656 · unvollständig");
+  assert.equal(a(200, { status: "complete", steps: [...stufen, { agent: "counsel", status: "done" }], contentId: 12, summary: { total_cost_usd: 0.03 } }).text, "Lauf beendet: Caption #12 — zur Freigabe im Stapel · geschätzt mindestens $0.0300 · 1 Stufe ohne Angabe");
+  assert.equal(T.mindestensText(0.00005), "mehr als $0 (gemeldet unter $0.0001)");
+  assert.equal(T.mindestensText(0.16569), "mindestens $0.1656");
   assert.equal(T.neueLaufId({ randomUUID: () => "kurz" }), null, "Lauf-ID nach Vertrag, sonst kein Lauf");
   assert.match(T.neueLaufId(), /^[0-9a-f-]{36}$/);
   assert.deepEqual(T.laufKoerper(SLUG, 3, "tiktok|tiktok_short", "business_automation", "id-0000001"), { platform: "tiktok", format: "tiktok_short", category: "business_automation", objekt_slug: SLUG, medium_id: 3, lauf_id: "id-0000001" });

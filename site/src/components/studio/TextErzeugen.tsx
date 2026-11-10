@@ -13,10 +13,19 @@
 //   (ausgangBeiWiederholung, wie auf /content, Nachtrag d2-text-erzeugen-1): Scheitert der erneute Versuch mit der offenen
 //   ID selbst (nicht gestartet, abgewiesen, abgebrochen), sagt das nichts über den früheren Versuch; die ID bleibt.
 // - Nach einem Ausgang mit Zeile lädt das Studio neu (fertig), die Caption erscheint als Asset-Karte.
+// - Sperrt die Medien-Regel das Video, nennt die Bestätigung die Gründe (Nachtrag d2-text-erzeugen-3): Die Caption ist dann
+//   nicht freigebbar, solange das gilt. Der Knopf bleibt, weil die Abnahme genau diesen Fall braucht.
+// - Die offene Lauf-ID je Video steht in sessionStorage (Nachtrag d2-text-erzeugen-4): Nach Neuladen oder Zurück im selben
+//   Tab sendet „Erneut senden …“ dieselbe ID (der Server antwortet 409, wenn der Lauf schon läuft), und die Karte nennt
+//   den Lauf ohne bekannten Ausgang. Gelesen wird erst nach dem Einhängen (sonst wiche das erste Bild vom Server-HTML ab).
+//   Ein zweiter Tab hat einen eigenen sessionStorage; dort hilft nur der Stapel. Eine Doppelsperre am Server (409 bei einer
+//   Zeile zu medium_id, Kanal und Format in entwurf/counsel_geprueft) gibt es bewusst nicht: Ein abgebrochener Lauf ließe
+//   seine Zeile dort stehen und hielte jede weitere Caption zu diesem Video und Kanal fest, bis jemand sie umstellt.
 // Keine Zahl ohne Quelle: Gemessene Kosten je Lauf gibt es vorab nicht; die Antwort nennt die geschätzten Kosten des Laufs.
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { FARBE_BERNSTEIN, FARBE_GRUEN, FARBE_ROT, istObjekt, maskiert } from "@/components/studio/beleg-hilfen";
+import { berlinDatumZeit } from "@/lib/types";
 
 export type Holen = (url: string, init?: RequestInit) => Promise<Response>;
 
@@ -72,10 +81,43 @@ function eintragsNummer(d: Record<string, unknown> | null): number | null {
   return null;
 }
 
+/**
+ * Untergrenze wie mindestensText auf /content (Nachtrag d2-text-erzeugen-7): abgerundet statt gerundet, damit „mindestens“
+ * nie über der gemeldeten Summe liegt; unter $0.0001 „mehr als $0“.
+ */
+export function mindestensText(summe: number): string {
+  if (summe > 0 && summe < 0.0001) return "mehr als $0 (gemeldet unter $0.0001)";
+  return `mindestens $${(Math.floor(summe * 10_000 + 1e-6) / 10_000).toFixed(4)}`;
+}
+
+/**
+ * Geschätzte Kosten aus der Antwort (summary.total_cost_usd, sonst Summe der Stufen); wie laufKostenText auf /content eine
+ * Untergrenze, wenn eine gelaufene Stufe ohne Angabe ist oder die Route die Kosten unvollständig nennt.
+ */
 function kostenText(d: Record<string, unknown>): string {
   const s = istObjekt(d.summary) ? d.summary : null;
-  const usd = s && typeof s.total_cost_usd === "number" ? s.total_cost_usd : null;
-  return usd === null ? "Kosten nicht gemeldet" : `geschätzt $${usd.toFixed(4)}${s && s.kosten_unvollstaendig ? " (mindestens; unvollständig)" : ""}`;
+  const stufen = (Array.isArray(d.steps) ? d.steps : []).filter(istObjekt).filter((x) => x.status !== "pending");
+  const mitKosten = stufen.filter((x) => typeof x.cost === "number");
+  const gemeldet = s && typeof s.total_cost_usd === "number" ? s.total_cost_usd : null;
+  if (gemeldet === null && mitKosten.length === 0) return "Kosten nicht gemeldet";
+  const summe = gemeldet ?? mitKosten.reduce((a, x) => a + (x.cost as number), 0);
+  const ohne = stufen.length - mitKosten.length;
+  if (ohne > 0) return `geschätzt ${mindestensText(summe)} · ${ohne} ${ohne === 1 ? "Stufe" : "Stufen"} ohne Angabe`;
+  if (s?.kosten_unvollstaendig) return `geschätzt ${mindestensText(summe)} · unvollständig`;
+  return `geschätzt $${summe.toFixed(4)}`;
+}
+
+/** Fehlertext einer Antwort: fehler (Route), sonst error (Middleware, etwa 401); null ohne Text. Wie serverText auf /content. */
+function serverText(d: Record<string, unknown> | null): string | null {
+  if (!d) return null;
+  if (typeof d.fehler === "string" && d.fehler.trim()) return d.fehler;
+  if (typeof d.error === "string" && d.error.trim()) return d.error;
+  return null;
+}
+
+/** Eine Lauf-Antwort mit Schritten (wie istLaufErgebnis auf /content). */
+function istLaufErgebnis(d: Record<string, unknown>): boolean {
+  return typeof d.status === "string" && Array.isArray(d.steps) && d.steps.every((x) => istObjekt(x) && typeof x.agent === "string" && typeof x.status === "string");
 }
 
 const STATUS_TEXT: Readonly<Record<string, string>> = {
@@ -97,12 +139,15 @@ export function laufAusgang(status: number | null, daten: unknown): LaufAusgang 
     }
     return { art: "unbekannt", contentId: nummer, text: `${AUSGANG_UNBEKANNT} · Antwort (HTTP ${status}) nicht lesbar` };
   }
-  const fehler = d && typeof d.fehler === "string" && d.fehler.trim() ? d.fehler : null;
+  const fehler = serverText(d);
   if (d && status === 409) {
     return { art: "existiert", contentId: nummer, text: maskiert(`Lauf existiert bereits${nummer === null ? "" : ` (#${nummer})`} — kein zweiter Lauf gestartet${fehler ? ` · ${fehler}` : ""}`) };
   }
   if (d && status >= 400 && status < 500) return { art: "abgewiesen", text: maskiert(`Lauf abgewiesen (HTTP ${status}): ${fehler ?? "ohne Fehlertext"}`) };
   if (d && fehler !== null) {
+    // Eine 5xx mit lesbaren Schritten (etwa „Status zur_freigabe nicht gespeichert“ nach allen bezahlten Stufen) ist ein
+    // Ergebnis mit Kosten, wie auf /content (Nachtrag d2-text-erzeugen-7) — nicht nur „abgebrochen“.
+    if (istLaufErgebnis(d)) return { art: "ergebnis", status: "fehler", contentId: nummer, text: maskiert(`Lauf mit Fehler beendet (HTTP ${status}${nummer === null ? "" : `, Caption #${nummer}`}): ${fehler} · ${kostenText(d)}`) };
     if (nummer !== null || d.status === "fehler") return { art: "abgebrochen", contentId: nummer, text: maskiert(`Lauf abgebrochen (HTTP ${status}${nummer === null ? "" : `, Caption #${nummer}`}): ${fehler}`) };
     return { art: "nicht_gestartet", text: maskiert(`Lauf nicht gestartet (HTTP ${status}): ${fehler}`) };
   }
@@ -134,16 +179,64 @@ export async function sendeCaptionLauf(holen: Holen, koerper: ReturnType<typeof 
   }
 }
 
+/** Was sessionStorage hier braucht; in Tests eine Attrappe. */
+export type Speicher = Pick<Storage, "getItem" | "setItem" | "removeItem">;
+
+/** Offener Lauf je Video im Speicher: Lauf-ID, ob er gerade gesendet wird oder sein Ausgang unbekannt ist, und seit wann. */
+export type OffenerLauf = { laufId: string; art: "laeuft" | "unbekannt"; seit: string };
+
+/** Schlüssel des offenen Laufs je Objekt und Video. */
+export function speicherSchluessel(slug: string, mediumId: number): string {
+  return `gp-text-erzeugen:${slug}:${mediumId}`;
+}
+
+/** sessionStorage des Browsers; null ohne (Server, gesperrte Website-Daten). */
+function browserSpeicher(): Speicher | null {
+  try {
+    return typeof sessionStorage === "undefined" ? null : sessionStorage;
+  } catch {
+    return null;
+  }
+}
+
+/** Offenen Lauf lesen; null, wenn keiner da oder der Eintrag unlesbar ist. Wirft nie. */
+export function leseOffenenLauf(speicher: Speicher | null, schluessel: string): OffenerLauf | null {
+  try {
+    const roh: unknown = JSON.parse(speicher?.getItem(schluessel) ?? "null");
+    if (!istObjekt(roh) || typeof roh.laufId !== "string" || !LAUF_ID_MUSTER.test(roh.laufId)) return null;
+    if (roh.art !== "laeuft" && roh.art !== "unbekannt") return null;
+    return { laufId: roh.laufId, art: roh.art, seit: typeof roh.seit === "string" ? roh.seit : "" };
+  } catch {
+    return null;
+  }
+}
+
+/** Offenen Lauf schreiben (null: entfernen). Scheitert der Speicher, bleibt es beim Zustand der Karte. */
+function merkeOffenenLauf(speicher: Speicher | null, schluessel: string, lauf: OffenerLauf | null): void {
+  try {
+    if (lauf === null) speicher?.removeItem(schluessel);
+    else speicher?.setItem(schluessel, JSON.stringify(lauf));
+  } catch {
+    // Speicher voll oder gesperrt: Die Karte hält die ID trotzdem bis zum Neuladen.
+  }
+}
+
 export function TextErzeugen({
   slug,
   medium,
   holen,
   fertig,
+  sperre = null,
+  speicher,
 }: {
   slug: string;
   medium: { id: number; sha256: string };
   holen: Holen;
   fertig: () => void;
+  /** Urteil der Medien-Regel zu diesem Video (Server); gesperrt → Gründe in der Bestätigung. */
+  sperre?: { freigebbar: boolean; gruende: readonly string[] } | null;
+  /** Speicher der offenen Lauf-ID (Standard: sessionStorage; Tests: Attrappe). */
+  speicher?: Speicher | null;
 }) {
   const [wahl, setWahl] = useState<string>(CAPTION_WAHL[0].wert);
   const [kategorie, setKategorie] = useState<string>(KATEGORIEN[0].wert);
@@ -152,6 +245,16 @@ export function TextErzeugen({
   const [offeneLaufId, setOffeneLaufId] = useState<string | null>(null);
   // Ein Klick, ein Lauf: Ein zweiter Klick, bevor die Ansicht neu gezeichnet ist, sendet nichts.
   const sendet = useRef(false);
+  // Offener Lauf aus dem Speicher dieses Tabs (Neuladen, Zurück): erst nach dem Einhängen gelesen.
+  const [gemerkt, setGemerkt] = useState<OffenerLauf | null>(null);
+  const schluessel = speicherSchluessel(slug, medium.id);
+  const ablage = speicher === undefined ? browserSpeicher() : speicher;
+  useEffect(() => {
+    const o = leseOffenenLauf(ablage, schluessel);
+    if (o === null) return;
+    setGemerkt(o);
+    setOffeneLaufId((jetzt) => jetzt ?? o.laufId);
+  }, [ablage, schluessel]);
   const gesperrt = stand.art === "bestaetigen" || stand.art === "laeuft";
   const w = CAPTION_WAHL.find((x) => x.wert === wahl) ?? CAPTION_WAHL[0];
   const k = KATEGORIEN.find((x) => x.wert === kategorie) ?? KATEGORIEN[0];
@@ -175,10 +278,15 @@ export function TextErzeugen({
     try {
       setStand({ art: "laeuft", laufId });
       setOffeneLaufId(laufId);
+      const seit = new Date().toISOString();
+      merkeOffenenLauf(ablage, schluessel, { laufId, art: "laeuft", seit });
       const ausgang = ausgangBeiWiederholung(await sendeCaptionLauf(holen, laufKoerper(slug, medium.id, wahl, kategorie, laufId)), wiederholung);
       setStand({ art: "ausgang", ausgang });
       // Nach einem bekannten Ausgang ist die ID verbraucht; nach einem unbekannten bleibt sie für den nächsten Versuch.
-      setOffeneLaufId(ausgang.art === "unbekannt" ? laufId : null);
+      const offen = ausgang.art === "unbekannt";
+      setOffeneLaufId(offen ? laufId : null);
+      merkeOffenenLauf(ablage, schluessel, offen ? { laufId, art: "unbekannt", seit } : null);
+      setGemerkt(null);
       if ("contentId" in ausgang && ausgang.contentId !== null) fertig();
     } finally {
       sendet.current = false;
@@ -212,6 +320,13 @@ export function TextErzeugen({
           </select>
         </label>
       </div>
+      {gemerkt !== null && stand.art === "zu" && offeneLaufId === gemerkt.laufId && (
+        <p className="mt-2 break-words" style={{ color: FARBE_BERNSTEIN }} data-text-erzeugen-gemerkt={gemerkt.art}>
+          Caption-Lauf zu diesem Video ohne bekannten Ausgang (in diesem Tab gestartet
+          {berlinDatumZeit(gemerkt.seit) === null ? "" : ` am ${berlinDatumZeit(gemerkt.seit)} (Europe/Berlin)`}, Lauf-ID {gemerkt.laufId.slice(0, 8)}…) — er kann noch laufen.
+          „Erneut senden …“ schickt dieselbe Lauf-ID; läuft er schon, antwortet der Server 409 statt einen zweiten Lauf zu starten.
+        </p>
+      )}
       {stand.art !== "bestaetigen" && stand.art !== "laeuft" && (
         <button
           type="button"
@@ -227,6 +342,11 @@ export function TextErzeugen({
           <p className="font-semibold" style={{ color: FARBE_BERNSTEIN }}>
             Bezahlter Lauf (Claude): bis zu 6 Stufen — RESEARCHER, SCRIBE, COUNSEL, PUBLISHER, COUNSEL 2, AMPLIFIER.
           </p>
+          {sperre !== null && !sperre.freigebbar && (
+            <p className="mt-1" style={{ color: FARBE_ROT }} data-text-erzeugen-sperre>
+              Video gesperrt: {sperre.gruende.length > 0 ? sperre.gruende.map((g) => maskiert(g)).join(" · ") : "Medien-Regel sperrt"} — Caption nicht freigebbar, solange das gilt.
+            </p>
+          )}
           <p className="mt-1 text-text-muted">
             Gemessene Kosten je Lauf gibt es vorab nicht (die Antwort nennt die geschätzten Kosten des Laufs). Gesendet wird genau:
           </p>
