@@ -483,6 +483,9 @@ async function stapelEintrag(id = "50") {
   return { eintrag: [...s.wartend, ...s.haengend].find((e) => e.id === id) ?? null, abfrage: res.headers.get("x-freigaben-abfrage"), s };
 }
 
+/** Werte eines in()-Filters aus der Abfrage (wie welt.log sie festhält), als Zahlen; undefined ohne diesen Filter. */
+const inListe = (query, feld) => [...query.matchAll(/(?:^|&)(\w+)=in\.\(([^)]*)\)/g)].find((m) => m[1] === feld)?.[2].split(",").map(Number);
+
 /** Caption-Metadaten wie caption(), mit eigener id und medium_id. */
 const captionMeta = (medium_id) => ({ objekt_slug: SLUG, steps: [{ agent: "researcher", output: "r" }, { agent: "scribe", output: CAPTION }], medium_id });
 
@@ -498,10 +501,12 @@ test("MP-19 Stapel fail-closed (Nachbesserung mutanten-2, caption9-2): fremdes O
     video();
     await pruefe(3, eingabe());
     caption(metadata);
-    const { eintrag } = await stapelEintrag();
+    const { eintrag, karte } = await dreiStellen();
     assert.equal(eintrag.freigabe_sperre, grund, JSON.stringify(metadata));
     assert.equal(eintrag.medium.freigebbar, false);
     assert.deepEqual(eintrag.medium.gruende, [grund]);
+    // Die Studio-Karte zeigt nur Zeilen dieses Objekts (die Zeile von villa-x prüft MP-20 über das andere Objekt).
+    if (metadata.objekt_slug === undefined) assert.equal(karte.freigabe_sperre, grund, `Studio-Karte ${JSON.stringify(metadata)} (Nachtrag d1-nachweis-2)`);
     const server = await freigeben(50);
     assert.deepEqual([server.status, server.body.fehler], [409, grund], "derselbe Grund beim Freigeben");
   }
@@ -525,7 +530,13 @@ test("MP-19 Stapel fail-closed (Nachbesserung mutanten-2, caption9-2): fremdes O
   assert.equal(s.wartend.find((e) => e.id === "225").freigabe_sperre, "Urteil der Medien-Regel nicht ermittelt");
   assert.deepEqual(s.wartend.find((e) => e.id === "225").medium.gruende, ["Urteil der Medien-Regel nicht ermittelt"]);
   assert.equal(s.wartend.find((e) => e.id === "200").freigabe_sperre, "Medium 101 nicht gefunden");
-  assert.equal(welt.log.filter((l) => l.tabelle === "studio_medium").length, 25, "höchstens 25 Videos je Anfrage gelesen");
+  // Sammelabfrage (Nachtrag d1-regression-1): eine Abfrage für alle Videos — keines gefunden, also keine Originale und
+  // keine Startbilder —, mit genau den 25 kleinsten ids; die Protokolle je gelesenem Video, keines für das 26.
+  const medienAbfragen = welt.log.filter((l) => l.tabelle === "studio_medium");
+  assert.equal(medienAbfragen.length, 1, "eine Sammelabfrage");
+  assert.deepEqual(inListe(medienAbfragen[0].query, "id"), Array.from({ length: 25 }, (_, i) => 101 + i), "höchstens 25 Videos je Anfrage gelesen");
+  const protokolle = welt.log.filter((l) => l.tabelle === "studio_pruefung" && !/(?:^|&)limit=1(?:&|$)/.test(l.query));
+  assert.deepEqual(protokolle.map((l) => Number(/(?:^|&)medium_id=eq\.(\d+)/.exec(l.query)?.[1])).sort((x, y) => x - y), Array.from({ length: 25 }, (_, i) => 101 + i));
 });
 
 test("MP-20 Studio-Karte fail-closed (Nachbesserung mutanten-3, caption9-2): Medienteil nicht lesbar → nicht ermittelt; fremdes Objekt, unbekannt, kein Export — Karte, Stapel und Freigeben nennen denselben Grund; Nachlesen gescheitert → nicht ermittelt", async () => {
@@ -567,7 +578,9 @@ test("MP-20 Studio-Karte fail-closed (Nachbesserung mutanten-3, caption9-2): Med
   }
 });
 
-test("MP-21 Stapel-Zwischenstand (Nachbesserung caption9-1): ein einmaliger Lesefehler eines Videos wird nicht gemerkt — die nächste Anfrage liest voll und nennt den richtigen Grund; die Medienkennung ist beantwortet, bevor die erste Medien-Zeile gelesen wird", async () => {
+test("MP-21 Stapel-Zwischenstand (Nachbesserung caption9-1, Nachtrag d1-regression-2): der Lesefehler eines Videos gilt höchstens 2 min — bis dahin aus dem Zwischenstand mit demselben Grund, danach liest die nächste Anfrage voll und nennt den richtigen Grund; die Medienkennung ist beantwortet, bevor die erste Medien-Zeile gelesen wird", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: Date.parse("2026-11-10T15:00:00.000Z") });
+  const FEHLERSTAND = freigabenCache.FREIGABEN_FEHLERSTAND_MS;
   freigabenCache.setzeFreigabenZurueck();
   video();
   await pruefe(3, eingabe({ rechte_status: "offen", rechte_nachweis: null }));
@@ -585,12 +598,18 @@ test("MP-21 Stapel-Zwischenstand (Nachbesserung caption9-1): ein einmaliger Lese
   } finally {
     welt.stoerung = null;
   }
+  t.mock.timers.tick(FEHLERSTAND - 1);
   const zwei = await stapelEintrag();
-  assert.equal(zwei.abfrage, "voll", "der Lesefehler stand nicht im Zwischenstand");
-  assert.equal(zwei.eintrag.freigabe_sperre, "Rechte laut Prüfprotokoll nicht geklärt");
+  assert.equal(zwei.abfrage, "unveraendert", "der Fehlerstand gilt bis knapp 2 min");
+  assert.match(zwei.eintrag.freigabe_sperre, /^Medium 3 nicht lesbar: Verbindung abgebrochen \(einmalig\)/);
+  t.mock.timers.tick(1);
   const drei = await stapelEintrag();
-  assert.equal(drei.abfrage, "unveraendert", "jetzt gemerkt");
+  assert.equal(drei.abfrage, "voll", "nach 2 min liest die Route voll");
   assert.equal(drei.eintrag.freigabe_sperre, "Rechte laut Prüfprotokoll nicht geklärt");
+  t.mock.timers.tick(FEHLERSTAND);
+  const vier = await stapelEintrag();
+  assert.equal(vier.abfrage, "unveraendert", "ohne Lesefehler gilt der Stand wieder bis zu 30 min");
+  assert.equal(vier.eintrag.freigabe_sperre, "Rechte laut Prüfprotokoll nicht geklärt");
   // Reihenfolge: erst die Kennung (beantwortet), dann die Medien-Zeilen — die Kennung ist nie jünger als die Daten.
   freigabenCache.setzeFreigabenZurueck();
   const reihe = [];
@@ -600,8 +619,8 @@ test("MP-21 Stapel-Zwischenstand (Nachbesserung caption9-1): ein einmaliger Lese
       reihe.push("kennung:start");
       await new Promise((r) => setTimeout(r, 25));
       reihe.push("kennung:ende");
-    } else if (a.tabelle === "studio_medium") {
-      reihe.push("medium");
+    } else if (a.tabelle === "studio_medium" || a.tabelle === "studio_pruefung") {
+      reihe.push(a.tabelle);
     }
   };
   try {
@@ -610,7 +629,165 @@ test("MP-21 Stapel-Zwischenstand (Nachbesserung caption9-1): ein einmaliger Lese
     welt.vorAntwort = null;
   }
   const ende = reihe.indexOf("kennung:ende");
-  assert.ok(ende >= 0 && ende < reihe.indexOf("medium"), reihe.join(" → "));
+  assert.ok(ende >= 0 && ende < reihe.indexOf("studio_medium") && ende < reihe.indexOf("studio_pruefung"), reihe.join(" → "));
+});
+
+/** Zwei weitere Videos neben video(): Ketten 11 → 12 → 13 und 21 → 22 → 23, je mit einem Prüfprotokoll wie das von 3. */
+function weitereVideos() {
+  const [sb, og, ex] = welt.tabellen.studio_medium;
+  const proto = protokolle()[0];
+  for (const basis of [10, 20]) {
+    const h = (n) => (basis + n).toString(16).padStart(2, "0").repeat(32); // eindeutig je id, 64 Hex-Zeichen
+    welt.tabellen.studio_medium.push(
+      { ...sb, id: basis + 1, sha256: h(1), speicher_pfad: `${SLUG}/${h(1)}.png` },
+      { ...og, id: basis + 2, sha256: h(2), speicher_pfad: `${SLUG}/${h(2)}.mp4`, startbild_id: basis + 1 },
+      { ...ex, id: basis + 3, sha256: h(3), speicher_pfad: `${SLUG}/${h(3)}.mp4`, abgeleitet_von: basis + 2 },
+    );
+    welt.tabellen.studio_pruefung.push({ ...proto, id: proto.id + basis, medium_id: basis + 3, medium_sha256: h(3) });
+  }
+  for (const [id, medium_id] of [[51, 13], [52, 23]]) {
+    legeAn({ id, title: `Caption ${id}`, status: "zur_freigabe", body: CAPTION, review_notes: "Befunde: keine.\nURTEIL: FREIGABE-EMPFEHLUNG", metadata: captionMeta(medium_id) });
+  }
+}
+
+test("MP-24 Stapel liest Videos in Sammelabfragen (Nachtrag d1-regression-1, d1-nachweis-6, d1-regression-3): Kennung, drei Rundreisen für die Ketten (gleich wie viele Videos) und die Protokolle je Video — jede Abfrage mit eigenem Zeitlimit von 8 s wie bei Karte und Freigeben, keine mit dem Signal der content-Abfrage; Urteile wie auf der Studio-Karte", async (t) => {
+  const { ABFRAGE_TIMEOUT_MS } = await lade("src/lib/status-server.ts");
+  const erzeugt = new Map();
+  const original = AbortSignal.timeout;
+  t.mock.method(AbortSignal, "timeout", (ms) => {
+    const signal = original.call(AbortSignal, ms);
+    erzeugt.set(signal, ms);
+    return signal;
+  });
+  /** Eine volle Stapel-Abfrage; je Supabase-Anfrage Tabelle, Abfrage und Signal. */
+  async function messen() {
+    freigabenCache.setzeFreigabenZurueck();
+    const gesehen = [];
+    welt.vorAntwort = async (a) => {
+      if (a.art === "supabase") gesehen.push({ tabelle: a.tabelle, query: decodeURIComponent(a.url.search.slice(1)), signal: a.signal, abgebrochen: a.signal?.aborted ?? null });
+    };
+    try {
+      const { s, abfrage } = await stapelEintrag();
+      assert.equal(abfrage, "voll");
+      return { s, gesehen };
+    } finally {
+      welt.vorAntwort = null;
+    }
+  }
+  const pruefen = ({ gesehen }, exporte) => {
+    const content = gesehen.filter((g) => g.tabelle === "content");
+    const studio = gesehen.filter((g) => g.tabelle.startsWith("studio_"));
+    const kennung = studio.filter((g) => g.tabelle === "studio_pruefung" && /(?:^|&)limit=1(?:&|$)/.test(g.query));
+    const medien = studio.filter((g) => g.tabelle === "studio_medium");
+    const protokolleJe = studio.filter((g) => g.tabelle === "studio_pruefung" && !kennung.includes(g));
+    assert.equal(content.length, 2);
+    assert.equal(new Set(content.map((g) => g.signal)).size, 1, "volles content-Paar: ein Signal");
+    assert.equal(kennung.length, 1, "eine Kennung");
+    assert.equal(medien.length, 3, "drei Rundreisen für die Ketten, gleich wie viele Videos");
+    assert.deepEqual(medien.map((g) => inListe(g.query, "id")), [exporte, exporte.map((e) => e - 1), exporte.map((e) => e - 2)], "Medien, Originale, Startbilder");
+    assert.deepEqual(protokolleJe.map((g) => Number(/(?:^|&)medium_id=eq\.(\d+)/.exec(g.query)?.[1])).sort((x, y) => x - y), exporte, "Protokolle je Video");
+    for (const g of studio) {
+      assert.equal(erzeugt.get(g.signal), ABFRAGE_TIMEOUT_MS, `eigenes Zeitlimit von 8 s: ${g.tabelle} ${g.query}`);
+      assert.equal(g.abgebrochen, false);
+      assert.ok(!content.some((c) => c.signal === g.signal), "nie das Signal der content-Abfrage");
+    }
+    assert.equal(new Set(studio.map((g) => g.signal)).size, studio.length, "jede Abfrage ihr eigenes Signal (Kennung eingeschlossen)");
+  };
+  // Ein Video.
+  video();
+  await pruefe(3, eingabe({ rechte_status: "offen", rechte_nachweis: null }));
+  caption();
+  pruefen(await messen(), [3]);
+  // Drei Videos: dieselbe Zahl an Rundreisen; jedes Urteil wie auf der Studio-Karte.
+  weitereVideos();
+  const drei = await messen();
+  pruefen(drei, [3, 13, 23]);
+  const studio = await (await studioRoute.GET(new NextRequest(`http://harness.local/api/studio/${SLUG}`, { headers: { cookie: "gp-auth=test" } }), { params: Promise.resolve({ objekt: SLUG }) })).json();
+  for (const id of ["50", "51", "52"]) {
+    const eintrag = drei.s.wartend.find((e) => e.id === id);
+    const karte = studio.assets.wert.find((a) => String(a.id) === id);
+    assert.equal(eintrag.freigabe_sperre, "Rechte laut Prüfprotokoll nicht geklärt", id);
+    assert.equal(karte.freigabe_sperre, eintrag.freigabe_sperre, `Karte ${id}`);
+  }
+});
+
+test("MP-26 leseKetten (Nachtrag d1-regression-1): je Medium dieselbe Kette wie leseKette einzeln — auch mit Original aus einem anderen Objekt, falscher Fassung, fehlenden oder unlesbaren Zeilen, geteiltem Original und unbekannter id; eine gescheiterte Rundreise trifft nur die Ketten, die sie brauchen", async () => {
+  const urteil = await lade("src/lib/studio/medien-urteil.ts");
+  const { createServiceClient } = await lade("src/lib/supabase.ts");
+  const client = createServiceClient();
+  video();
+  await pruefe(3, eingabe());
+  weitereVideos();
+  const zeilen = welt.tabellen.studio_medium;
+  const [sb, og, ex] = zeilen;
+  zeilen.find((z) => z.id === 12).objekt_slug = "villa-x"; // Original aus einem anderen Objekt
+  zeilen.find((z) => z.id === 22).fassung = "export"; // Original mit falscher Fassung
+  const h = (n) => n.toString(16).padStart(2, "0").repeat(32);
+  zeilen.push(
+    { ...ex, id: 33, sha256: h(33), abgeleitet_von: 2 }, // teilt sich das Original 2 mit Export 3
+    { ...ex, id: 43, sha256: h(43), abgeleitet_von: null }, // ohne Original
+    { ...ex, id: 53, sha256: h(53), abgeleitet_von: 99 }, // Original fehlt
+    { ...og, id: 62, sha256: h(62), startbild_id: 98 }, // Startbild fehlt
+    { ...ex, id: 63, sha256: h(63), abgeleitet_von: 62 },
+    { ...og, id: 72, sha256: h(72), art: "ton" }, // unlesbare Zeile
+    { ...ex, id: 73, sha256: h(73), abgeleitet_von: 72 },
+    { ...sb, id: 81, sha256: h(81), objekt_slug: "villa-x" }, // Startbild aus einem anderen Objekt
+    { ...og, id: 82, sha256: h(82), startbild_id: 81 },
+    { ...ex, id: 83, sha256: h(83), abgeleitet_von: 82 },
+  );
+  const ids = [2, 3, 13, 23, 33, 43, 53, 63, 73, 77, 83];
+  const gesammelt = await urteil.leseKetten(client, ids);
+  for (const id of ids) assert.deepEqual(gesammelt.get(id), await urteil.leseKette(client, id, null), `Kette ${id}`);
+  // Stichproben, damit der Vergleich nicht leer ausgeht.
+  assert.equal(gesammelt.get(3).original.id, 2);
+  assert.equal(gesammelt.get(3).startbild.id, 1);
+  assert.equal(gesammelt.get(13).original, null, "fremdes Objekt");
+  assert.equal(gesammelt.get(23).original, null, "falsche Fassung");
+  assert.equal(gesammelt.get(63).startbild, null, "Startbild fehlt");
+  assert.equal(gesammelt.get(83).startbild, null, "Startbild aus einem anderen Objekt");
+  assert.deepEqual(gesammelt.get(77), { art: "fehlt" });
+  assert.deepEqual(gesammelt.get(73), { art: "fehler", grund: "Zeile nicht lesbar: Medium 72: art unlesbar" });
+  // Höchstens drei Rundreisen, jede id höchstens einmal gefragt.
+  const vorher = welt.log.length;
+  await urteil.leseKetten(client, ids);
+  const runden = welt.log.slice(vorher).filter((l) => l.tabelle === "studio_medium").map((l) => inListe(l.query, "id"));
+  assert.equal(runden.length, 3);
+  assert.equal(new Set(runden.flat()).size, runden.flat().length, "keine id doppelt gefragt");
+  // Scheitert die zweite Rundreise (Originale), trifft das nur die Ketten mit Original; die ohne bleiben lesbar.
+  let nr = 0;
+  welt.stoerung = (a) => (a.art === "supabase" && a.tabelle === "studio_medium" && (nr += 1) === 2 ? { status: 500, body: { message: "Rundreise 2 gestört" } } : null);
+  try {
+    const gestoert = await urteil.leseKetten(client, [3, 43]);
+    assert.deepEqual(gestoert.get(3), { art: "fehler", grund: "Rundreise 2 gestört" });
+    assert.equal(gestoert.get(43).art, "ok");
+    assert.equal(gestoert.get(43).original, null);
+  } finally {
+    welt.stoerung = null;
+  }
+});
+
+test("MP-25 Stapel bei dauerhaftem Medien-Lesefehler (Nachtrag d1-regression-2): höchstens eine volle Abfrage je 2 min — 11 Anfragen im Takt von 30 s lesen dreimal voll (bei 0, 2 und 4 min), jede Antwort nennt den Lesefehler", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: Date.parse("2026-11-10T15:00:00.000Z") });
+  freigabenCache.setzeFreigabenZurueck();
+  video();
+  await pruefe(3, eingabe());
+  caption();
+  welt.stoerung = (a) => (a.art === "supabase" && a.tabelle === "studio_medium" ? { status: 500, body: { message: "Dauerstörung" } } : null);
+  const arten = [];
+  const vorher = welt.log.length;
+  try {
+    for (let i = 0; i < 11; i += 1) {
+      if (i > 0) t.mock.timers.tick(30_000);
+      const r = await stapelEintrag();
+      arten.push(r.abfrage);
+      assert.match(r.eintrag.freigabe_sperre, /^Medium 3 nicht lesbar: Dauerstörung/, `Anfrage ${i}`);
+    }
+  } finally {
+    welt.stoerung = null;
+  }
+  assert.deepEqual(arten.map((a, i) => (a === "voll" ? i * 30 : null)).filter((x) => x !== null), [0, 120, 240], arten.join(", "));
+  const volleContent = welt.log.slice(vorher).filter((l) => l.tabelle === "content" && /(?:^|&)select=[^&]*body/.test(l.query));
+  assert.equal(volleContent.length, 6, "drei volle Paare content (wartend und hängend)");
 });
 
 // ═══ Prüfansicht ═══

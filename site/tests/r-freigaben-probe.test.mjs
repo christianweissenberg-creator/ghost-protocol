@@ -990,7 +990,7 @@ test("FS-P13 Leerer Stapel: Auch ein leerer Zwischenstand gilt — die nächste 
   assert.deepEqual([anfragen(), fuenfte.kopf.get("x-freigaben-abfrage")], [PROBE, "unveraendert"], "wieder leer, nichts geändert: nur die Probe");
 });
 
-test("FS-P14 Kennung und Zwischenstand (lib/freigaben-cache.ts): je Liste Zählung, Reihenfolge, ids und updated_at; andere Spalten nicht; unlesbare Zeilen oder Zählungen → keine Kennung; gültig ab vollAm bis unter 30 min", async () => {
+test("FS-P14 Kennung und Zwischenstand (lib/freigaben-cache.ts): je Liste Zählung, Reihenfolge, ids und updated_at; andere Spalten nicht; unlesbare Zeilen oder Zählungen → keine Kennung; gültig ab vollAm bis unter 30 min, mit dem Lesefehler eines Videos bis unter 2 min (Nachtrag d1-regression-2)", async () => {
   const C = await zwischenstand();
   assert.equal(C.FREIGABEN_PROBE_SPALTEN, "id,updated_at,metadata->medium_id");
   assert.equal(C.FREIGABEN_ABFRAGE_HEADER, "x-freigaben-abfrage");
@@ -1022,7 +1022,7 @@ test("FS-P14 Kennung und Zwischenstand (lib/freigaben-cache.ts): je Liste Zählu
   const h = L([], 0);
   C.merkeFreigaben(w, h, 1_000);
   const s = C.gueltigerFreigabenStand(1_000);
-  assert.deepEqual(s, { kennung: K(w, h), wartend: w, haengend: h, medien: { kennung: "", daten: null }, vollAm: 1_000 });
+  assert.deepEqual(s, { kennung: K(w, h), wartend: w, haengend: h, medien: { kennung: "", daten: null }, vollAm: 1_000, gueltigMs: C.FREIGABEN_VOLL_SPAETESTENS_MS });
   assert.equal(s.wartend, w, "die rohen Zeilen, nicht kopiert oder abgeleitet");
   assert.equal(C.gueltigerFreigabenStand(1_000 + C.FREIGABEN_VOLL_SPAETESTENS_MS - 1), s, "knapp unter 30 min");
   assert.equal(C.gueltigerFreigabenStand(1_000 + C.FREIGABEN_VOLL_SPAETESTENS_MS), null, "30 min");
@@ -1036,6 +1036,11 @@ test("FS-P14 Kennung und Zwischenstand (lib/freigaben-cache.ts): je Liste Zählu
   C.merkeFreigaben(w, h, 5_000);
   C.setzeFreigabenZurueck();
   assert.equal(C.gueltigerFreigabenStand(5_000), null, "zurückgesetzt");
+  // Mit dem Lesefehler eines Videos: Höchstalter 2 min statt 30 min.
+  assert.equal(C.FREIGABEN_FEHLERSTAND_MS, 2 * 60_000);
+  C.merkeFreigaben(w, h, 6_000, { kennung: "", daten: null }, C.FREIGABEN_FEHLERSTAND_MS);
+  assert.equal(C.gueltigerFreigabenStand(6_000 + C.FREIGABEN_FEHLERSTAND_MS - 1).gueltigMs, C.FREIGABEN_FEHLERSTAND_MS, "knapp unter 2 min");
+  assert.equal(C.gueltigerFreigabenStand(6_000 + C.FREIGABEN_FEHLERSTAND_MS), null, "2 min");
 });
 
 // ═══ Mutationsprüfung (09.11.2026) ═══

@@ -15,7 +15,7 @@ import { pruefeMedienFreigabe } from "@/lib/medien-freigabe";
 import type { FreigabeEintrag, FreigabeMedium, FreigabenAntwort } from "@/lib/status-types";
 import { medienVorgaben } from "@/lib/studio/lesen";
 import { KI_PFLICHTZEILE_CAPTION } from "@/lib/studio/ki-hinweis";
-import { leseKette, leseProtokolle } from "@/lib/studio/medien-urteil";
+import { leseKetten, leseProtokolle } from "@/lib/studio/medien-urteil";
 import type { StudioMedium, StudioPruefung } from "@/lib/studio/typen";
 import {
   ABFRAGE_TIMEOUT_MS,
@@ -34,13 +34,14 @@ import {
 } from "@/lib/status-server";
 import {
   FREIGABEN_ABFRAGE_HEADER,
+  FREIGABEN_FEHLERSTAND_MS,
   FREIGABEN_PROBE_SPALTEN,
+  FREIGABEN_VOLL_SPAETESTENS_MS,
   freigabenKennung,
   freigabenMedienIds,
   gueltigerFreigabenStand,
   istZaehlung,
   merkeFreigaben,
-  setzeFreigabenZurueck,
 } from "@/lib/freigaben-cache";
 import type { FreigabenAbfrageArt, FreigabenMedien } from "@/lib/freigaben-cache";
 
@@ -86,10 +87,14 @@ import type { FreigabenAbfrageArt, FreigabenMedien } from "@/lib/freigaben-cache
 // die Route mit 502 und leeren Listen, nie aus dem Zwischenstand. Scheitert die volle Abfrage, 502 wie
 // bisher; der Zwischenstand bleibt, wie er war.
 // Zeitlimit: Probe-Paar und volles Paar bekommen je ein eigenes Abbruchsignal mit ABFRAGE_TIMEOUT_MS
-// (8 s), die volle Abfrage also genau wie vor der Änderungsprobe. Mit Videos (Schritt 9) liest die Probe die
-// Medienkennung unter ihrem Signal mit; die volle Abfrage liest danach Medienkennung und alle Videos unter einem
-// dritten, gemeinsamen Signal (Nachbesserung caption9-6; vorher je Abfrage 8 s, bis zu vier nacheinander je Video).
-// Braucht eine Anfrage alles, wartet sie bis zu 24 s auf Supabase, ohne Videos bis zu 16 s.
+// (8 s), die volle Abfrage also genau wie vor der Änderungsprobe. Mit Videos (Schritt 9) gilt für jede weitere
+// Abfrage ebenfalls ein eigenes Limit von 8 s, wie bei Studio-Karte und Freigeben (Nachtrag d1-regression-1; das
+// gemeinsame Limit aus caption9-6 sperrte im Stapel schon ab etwa 1,6 s je Abfrage, während Karte und Freigeben
+// nicht sperrten): die Medienkennung (in der Probe und in der vollen Abfrage), dann die Ketten aller Videos in
+// Sammelabfragen (lib/studio/medien-urteil.ts, leseKetten: Medien, Originale, Startbilder — höchstens drei
+// Rundreisen, gleich wie viele Videos) und parallel dazu die Prüfprotokolle je Video. Braucht eine Anfrage alles und
+// schöpft jede Abfrage ihr Limit aus, wartet sie bis zu 56 s auf Supabase (Probe-Paar, Kennung, volles Paar, Kennung,
+// drei Rundreisen), ohne Videos bis zu 16 s — beides unter dem Takt der Abfragen von 60 s.
 //
 // Objekt-Studio Schritt 9 (10.11.2026): Eine Zeile mit metadata.medium_id ist die Caption zu einem Video. Ihr
 // Sperrgrund kommt aus pruefeVideoFreigabe (lib/freigabe-regeln.ts) — Caption-Regel, Pflichtzeile und Medien-Regel,
@@ -99,8 +104,10 @@ import type { FreigabenAbfrageArt, FreigabenMedien } from "@/lib/freigaben-cache
 // lib/freigaben-cache.ts).
 // Nachbesserung caption9-1: Die volle Abfrage bildet die Medienkennung VOR den Medien-Lesungen, der Reihe nach — die
 // Kennung ist so nie jünger als die gelesenen Daten (kommt dazwischen ein Protokoll, ändert die nächste Probe die
-// Kennung, und die Route liest neu). Scheitert die Lesung eines Videos, nennt die Antwort den Grund, gemerkt wird der
-// Stand aber nicht: Die nächste Anfrage liest voll, statt den Lesefehler bis zu 30 min aus dem Zwischenstand zu wiederholen.
+// Kennung, und die Route liest neu). Scheitert die Lesung eines Videos, nennt die Antwort den Grund, und der Stand
+// gilt nur FREIGABEN_FEHLERSTAND_MS (2 min) statt 30 min (Nachtrag d1-regression-2): Ein Lesefehler steht so höchstens
+// 2 min im Zwischenstand, und ein dauerhafter Fehler kostet höchstens eine volle Abfrage je 2 min — vorher las jede
+// Anfrage voll, ohne Obergrenze.
 //
 // Segment-Config wie /api/status (geprüft in node_modules/next/dist/docs/01-app/):
 // nie statisch, jeder Abruf liest neu. Die Datei exportiert nur GET und die Segment-Config;
@@ -127,27 +134,37 @@ type MedienLesung =
   | { art: "fehlt" }
   | { art: "fehler"; grund: string };
 
-async function leseMedium(client: ReturnType<typeof createServiceClient>, id: number, signal: AbortSignal): Promise<MedienLesung> {
-  const k = await leseKette(client, id, null, signal);
-  if (k.art !== "ok") return k;
-  const p = await leseProtokolle(client, id, signal);
-  if (p.art === "fehler") return p;
-  return { ...k, pruefungen: p.pruefungen };
-}
-
-/** Kette und Protokolle aller Videos der Listen (höchstens FREIGABEN_MEDIEN_HOECHSTENS), je id, unter einem Signal. */
-async function leseMedien(client: ReturnType<typeof createServiceClient>, ids: number[], signal: AbortSignal): Promise<Map<number, MedienLesung>> {
-  const lesungen = await Promise.all(ids.map(async (id) => [id, await leseMedium(client, id, signal)] as const));
-  return new Map(lesungen);
+/**
+ * Kette und Protokolle aller Videos der Listen (höchstens FREIGABEN_MEDIEN_HOECHSTENS), je id: die Ketten in
+ * Sammelabfragen (leseKetten), die Protokolle je Video parallel dazu (leseProtokolle wie beim Freigeben), jede Abfrage
+ * mit eigenem Zeitlimit. Zuerst zählt die Kette (fehlt, fehler), dann ein Lesefehler der Protokolle — wie bisher je Video.
+ */
+async function leseMedien(client: ReturnType<typeof createServiceClient>, ids: number[]): Promise<Map<number, MedienLesung>> {
+  const [ketten, protokolle] = await Promise.all([leseKetten(client, ids), Promise.all(ids.map((id) => leseProtokolle(client, id)))]);
+  return new Map(
+    ids.map((id, i): [number, MedienLesung] => {
+      const k = ketten.get(id) ?? { art: "fehler", grund: "Kette nicht gelesen" };
+      if (k.art !== "ok") return [id, k];
+      const p = protokolle[i];
+      return [id, p.art === "fehler" ? p : { ...k, pruefungen: p.pruefungen }];
+    }),
+  );
 }
 
 /**
  * Medienteil der Kennung: die ids und für ihre Prüfprotokolle die exakte Zählung und die höchste id ("" ohne Videos).
  * Protokolle werden nur angehängt, Medien-Zeilen nie geändert: Ein neues Protokoll ändert Zählung und höchste id.
+ * Eigenes Zeitlimit von 8 s (Nachtrag d1-regression-1); ohne Videos keine Abfrage und kein Signal.
  */
-async function medienKennung(client: ReturnType<typeof createServiceClient>, ids: number[], signal: AbortSignal): Promise<string> {
+async function medienKennung(client: ReturnType<typeof createServiceClient>, ids: number[]): Promise<string> {
   if (ids.length === 0) return "";
-  const r = await client.from("studio_pruefung").select("id", { count: "exact" }).in("medium_id", ids).order("id", { ascending: false }).limit(1).abortSignal(signal);
+  const r = await client
+    .from("studio_pruefung")
+    .select("id", { count: "exact" })
+    .in("medium_id", ids)
+    .order("id", { ascending: false })
+    .limit(1)
+    .abortSignal(AbortSignal.timeout(ABFRAGE_TIMEOUT_MS));
   if (r.error) throw new LeseFehler(`Prüfprotokolle: ${bereinigeFehler(r.error)}`);
   if (!istZaehlung(r.count)) throw new LeseFehler("Prüfprotokolle: Zählung unlesbar");
   const erste: unknown = Array.isArray(r.data) ? r.data[0] : undefined;
@@ -340,7 +357,8 @@ export async function GET() {
       if (!istZaehlung(probeWartendGesamt) || !istZaehlung(probeHaengendGesamt)) {
         throw new LeseFehler("Änderungsprobe: Zählung unlesbar");
       }
-      const probeMedien = await medienKennung(client, freigabenMedienIds(probeWartend.data, probeHaengend.data), probeSignal);
+      // Die Medienkennung mit eigenem Zeitlimit, nach dem Probe-Paar (Nachtrag d1-regression-1).
+      const probeMedien = await medienKennung(client, freigabenMedienIds(probeWartend.data, probeHaengend.data));
       const kennung = freigabenKennung(
         { zeilen: probeWartend.data, gesamt: probeWartendGesamt },
         { zeilen: probeHaengend.data, gesamt: probeHaengendGesamt },
@@ -388,25 +406,28 @@ export async function GET() {
     const [wartendGesamt, haengendGesamt] = zaehlungenAus(wartend, haengend);
     // Schritt 9: Videos der Captions lesen (Kette und Protokolle) und den Medienteil der Kennung bilden.
     const ids = freigabenMedienIds(Array.isArray(wartend.data) ? wartend.data : [], Array.isArray(haengend.data) ? haengend.data : []);
-    // Ohne Videos keine weitere Abfrage und kein weiteres Signal (wie vor Schritt 9). Mit Videos (Nachbesserung
-    // caption9-1): erst die Kennung, dann die Daten, der Reihe nach, unter einem gemeinsamen Zeitlimit (caption9-6).
+    // Ohne Videos keine weitere Abfrage (wie vor Schritt 9). Mit Videos (Nachbesserung caption9-1): erst die Kennung,
+    // dann die Daten, der Reihe nach; jede Abfrage mit eigenem Zeitlimit (Nachtrag d1-regression-1).
     let medien: ReadonlyMap<number, MedienLesung> = KEINE_MEDIEN;
     let kennungMedien = "";
     if (ids.length > 0) {
-      const medienSignal = AbortSignal.timeout(ABFRAGE_TIMEOUT_MS);
-      kennungMedien = await medienKennung(client, ids, medienSignal);
-      medien = await leseMedien(client, ids, medienSignal);
+      kennungMedien = await medienKennung(client, ids);
+      medien = await leseMedien(client, ids);
     }
     const antwort = stapelAntwort(wartend.data, wartendGesamt, haengend.data, haengendGesamt, jetzt.getTime(), medien);
     // Beide Listen sind gelesen (stapelAntwort wirft sonst): Zwischenstand ersetzen, Kennung aus genau
-    // diesen Zeilen und Zählungen und dem Medienteil. Ein Video mit Lesefehler wird nicht gemerkt (caption9-1).
+    // diesen Zeilen und Zählungen und dem Medienteil. Mit dem Lesefehler eines Videos gilt der Stand nur 2 min
+    // (Nachtrag d1-regression-2; caption9-1 merkte ihn gar nicht, dann las jede Anfrage voll).
     if (Array.isArray(wartend.data) && Array.isArray(haengend.data)) {
-      if ([...medien.values()].some((l) => l.art === "fehler")) {
-        setzeFreigabenZurueck();
-      } else {
-        const medienStand: FreigabenMedien = { kennung: kennungMedien, daten: medien };
-        merkeFreigaben({ zeilen: wartend.data, gesamt: wartendGesamt }, { zeilen: haengend.data, gesamt: haengendGesamt }, vollAm, medienStand);
-      }
+      const mitLesefehler = [...medien.values()].some((l) => l.art === "fehler");
+      const medienStand: FreigabenMedien = { kennung: kennungMedien, daten: medien };
+      merkeFreigaben(
+        { zeilen: wartend.data, gesamt: wartendGesamt },
+        { zeilen: haengend.data, gesamt: haengendGesamt },
+        vollAm,
+        medienStand,
+        mitLesefehler ? FREIGABEN_FEHLERSTAND_MS : FREIGABEN_VOLL_SPAETESTENS_MS,
+      );
     }
     return stapel200(antwort, "voll");
   } catch (e) {

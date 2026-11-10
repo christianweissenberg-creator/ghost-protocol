@@ -1,6 +1,10 @@
 // Objekt-Studio Schritt 8 (10.11.2026): Kette und Prüfprotokolle eines Videos lesen und die Medien-Regel anwenden —
 // nur auf dem Server. Genutzt von der Prüfroute (POST …/medien/[id]/pruefung), vom Freigeben (POST /api/content/status
-// für Zeilen mit metadata.medium_id) und von GET /api/studio/[objekt].
+// für Zeilen mit metadata.medium_id), von GET /api/studio/[objekt] und vom Freigabe-Stapel (GET /api/freigaben, dort
+// die Ketten aller Videos in Sammelabfragen: leseKetten).
+//
+// Zeitlimit: jede Abfrage ABFRAGE_TIMEOUT_MS (8 s), an allen Stellen gleich (Nachtrag d1-regression-1). So urteilen
+// Stapel, Studio-Karte und Freigeben bei derselben Antwortzeit der Datenbank gleich.
 //
 // Vor dem Freigeben wird die Export-Datei gestreamt nachgehasht (die Datenbank schützt die Zeilen, nicht die Dateien).
 // Die Regel selbst ist rein (lib/medien-freigabe.ts); hier entstehen ihre Eingaben: die Zeilen aus studio_medium und
@@ -35,11 +39,8 @@ export const PROTOKOLLE_JE_MEDIUM = 100;
 
 export type ProtokollLesung = { art: "ok"; pruefungen: StudioPruefung[] } | { art: "fehler"; grund: string };
 
-/**
- * Prüfprotokolle eines Mediums, jüngstes zuerst (höchstens PROTOKOLLE_JE_MEDIUM). signal: gemeinsames Zeitlimit des
- * Aufrufers (Stapel, Nachbesserung caption9-6); ohne eines ABFRAGE_TIMEOUT_MS für diese Abfrage.
- */
-export async function leseProtokolle(client: ServiceClient, id: number, signal?: AbortSignal): Promise<ProtokollLesung> {
+/** Prüfprotokolle eines Mediums, jüngstes zuerst (höchstens PROTOKOLLE_JE_MEDIUM), Zeitlimit ABFRAGE_TIMEOUT_MS. */
+export async function leseProtokolle(client: ServiceClient, id: number): Promise<ProtokollLesung> {
   try {
     const p = await client
       .from("studio_pruefung")
@@ -48,7 +49,7 @@ export async function leseProtokolle(client: ServiceClient, id: number, signal?:
       .order("geprueft_am", { ascending: false })
       .order("id", { ascending: false })
       .limit(PROTOKOLLE_JE_MEDIUM)
-      .abortSignal(signal ?? AbortSignal.timeout(ABFRAGE_TIMEOUT_MS));
+      .abortSignal(AbortSignal.timeout(ABFRAGE_TIMEOUT_MS));
     if (p.error) return { art: "fehler", grund: bereinigeFehler(p.error) };
     return { art: "ok", pruefungen: jungeZuerst((Array.isArray(p.data) ? (p.data as unknown[]) : []).map(leseProtokollZeile)) };
   } catch (e) {
@@ -56,29 +57,101 @@ export async function leseProtokolle(client: ServiceClient, id: number, signal?:
   }
 }
 
-async function zeileNachId(client: ServiceClient, id: number, signal?: AbortSignal): Promise<StudioMedium | null> {
-  const r = await client.from("studio_medium").select(MEDIUM_SPALTEN).eq("id", id).abortSignal(signal ?? AbortSignal.timeout(ABFRAGE_TIMEOUT_MS)).maybeSingle();
+async function zeileNachId(client: ServiceClient, id: number): Promise<StudioMedium | null> {
+  const r = await client.from("studio_medium").select(MEDIUM_SPALTEN).eq("id", id).abortSignal(AbortSignal.timeout(ABFRAGE_TIMEOUT_MS)).maybeSingle();
   if (r.error) throw new Error(bereinigeFehler(r.error));
   return r.data === null ? null : leseMediumZeile(r.data);
+}
+
+/** Grund einer gescheiterten Kettenlesung (einzeln und gesammelt gleich). */
+function kettenGrund(e: unknown): string {
+  return e instanceof StudioLeseFehler ? `Zeile nicht lesbar: ${e.message}` : bereinigeFehler(e);
+}
+
+/**
+ * Die Kette zum Export ex: sein Original (gleiche Fassung und gleiches Objekt) und dessen Startbild (ebenso).
+ * zeile liest eine Medien-Zeile nach id (null = gibt es nicht) — einzeln (leseKette) oder aus Sammelabfragen
+ * (leseKetten); die Regel ist für beide Wege dieselbe.
+ */
+async function ketteAus(ex: StudioMedium, zeile: (id: number) => Promise<StudioMedium | null>): Promise<KettenLesung> {
+  const og = ex.abgeleitet_von === null ? null : await zeile(ex.abgeleitet_von);
+  const original = og !== null && og.fassung === "original" && og.objekt_slug === ex.objekt_slug ? og : null;
+  const sb = original === null || original.startbild_id === null ? null : await zeile(original.startbild_id);
+  const startbild = sb !== null && sb.fassung === "startbild" && sb.objekt_slug === ex.objekt_slug ? sb : null;
+  return { art: "ok", export: ex, original, startbild };
 }
 
 /**
  * Kette eines Mediums lesen: das Medium (für das Freigeben der Export), sein Original und dessen Startbild.
  * slug: nur Medien dieses Objekts (sonst "fehlt"); null = ohne Objektfilter. Die Prüfprotokolle liest leseProtokolle.
- * signal: gemeinsames Zeitlimit aller drei Abfragen (Stapel); ohne eines je Abfrage ABFRAGE_TIMEOUT_MS.
  */
-export async function leseKette(client: ServiceClient, id: number, slug: string | null, signal?: AbortSignal): Promise<KettenLesung> {
+export async function leseKette(client: ServiceClient, id: number, slug: string | null): Promise<KettenLesung> {
   try {
-    const ex = await zeileNachId(client, id, signal);
+    const ex = await zeileNachId(client, id);
     if (ex === null || (slug !== null && ex.objekt_slug !== slug)) return { art: "fehlt" };
-    const og = ex.abgeleitet_von === null ? null : await zeileNachId(client, ex.abgeleitet_von, signal);
-    const original = og !== null && og.fassung === "original" && og.objekt_slug === ex.objekt_slug ? og : null;
-    const sb = original === null || original.startbild_id === null ? null : await zeileNachId(client, original.startbild_id, signal);
-    const startbild = sb !== null && sb.fassung === "startbild" && sb.objekt_slug === ex.objekt_slug ? sb : null;
-    return { art: "ok", export: ex, original, startbild };
+    return await ketteAus(ex, (n) => zeileNachId(client, n));
   } catch (e) {
-    return { art: "fehler", grund: e instanceof StudioLeseFehler ? `Zeile nicht lesbar: ${e.message}` : bereinigeFehler(e) };
+    return { art: "fehler", grund: kettenGrund(e) };
   }
+}
+
+/**
+ * Ketten vieler Medien in Sammelabfragen (Freigabe-Stapel, Nachtrag d1-regression-1): erst alle Medien per in(), dann
+ * ihre Originale, dann deren Startbilder — höchstens drei Rundreisen für alle Videos zusammen statt drei je Video,
+ * jede mit eigenem Zeitlimit wie eine einzelne Abfrage. Je Medium dieselbe Kette wie leseKette(client, id, null).
+ * Scheitert eine Sammelabfrage, nennen alle Medien, deren Kette eine ihrer Zeilen braucht, den Grund; eine unlesbare
+ * Zeile trifft nur diese Ketten.
+ */
+export async function leseKetten(client: ServiceClient, ids: readonly number[]): Promise<Map<number, KettenLesung>> {
+  const zeilen = new Map<number, StudioMedium>();
+  const unlesbar = new Map<number, unknown>();
+  const gefragt = new Set<number>();
+  const runde = async (wunsch: readonly number[]): Promise<void> => {
+    const offen = [...new Set(wunsch)].filter((n) => !gefragt.has(n));
+    if (offen.length === 0) return;
+    for (const n of offen) gefragt.add(n);
+    try {
+      const r = await client.from("studio_medium").select(MEDIUM_SPALTEN).in("id", offen).abortSignal(AbortSignal.timeout(ABFRAGE_TIMEOUT_MS));
+      if (r.error) throw new Error(bereinigeFehler(r.error));
+      if (!Array.isArray(r.data)) throw new Error("Antwort ohne Zeilenliste");
+      for (const z of r.data as unknown[]) {
+        let m: StudioMedium;
+        try {
+          m = leseMediumZeile(z);
+        } catch (e) {
+          // Unlesbar trifft nur die Ketten mit dieser Zeile; lässt sie sich keiner gefragten id zuordnen, die ganze Abfrage.
+          const id = typeof z === "object" && z !== null ? (z as Record<string, unknown>).id : undefined;
+          if (typeof id !== "number" || !offen.includes(id)) throw e;
+          unlesbar.set(id, e);
+          continue;
+        }
+        zeilen.set(m.id, m);
+      }
+    } catch (e) {
+      for (const n of offen) unlesbar.set(n, e);
+    }
+  };
+  const zeile = async (n: number): Promise<StudioMedium | null> => {
+    if (unlesbar.has(n)) throw unlesbar.get(n);
+    return zeilen.get(n) ?? null;
+  };
+  const gueltigesOriginal = (ex: StudioMedium | undefined): StudioMedium | null => {
+    const og = ex === undefined || ex.abgeleitet_von === null ? undefined : zeilen.get(ex.abgeleitet_von);
+    return ex !== undefined && og !== undefined && og.fassung === "original" && og.objekt_slug === ex.objekt_slug ? og : null;
+  };
+  await runde(ids);
+  await runde(ids.flatMap((n) => { const ex = zeilen.get(n); return ex !== undefined && ex.abgeleitet_von !== null ? [ex.abgeleitet_von] : []; }));
+  await runde(ids.flatMap((n) => { const og = gueltigesOriginal(zeilen.get(n)); return og !== null && og.startbild_id !== null ? [og.startbild_id] : []; }));
+  const ergebnis = new Map<number, KettenLesung>();
+  for (const n of ids) {
+    try {
+      const ex = await zeile(n);
+      ergebnis.set(n, ex === null ? { art: "fehlt" } : await ketteAus(ex, zeile));
+    } catch (e) {
+      ergebnis.set(n, { art: "fehler", grund: kettenGrund(e) });
+    }
+  }
+  return ergebnis;
 }
 
 export type DateiNachpruefung = { art: "gleich"; sha256: string } | { art: "abweichend"; grund: string } | { art: "fehler"; grund: string };

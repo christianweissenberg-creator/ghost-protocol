@@ -44,6 +44,10 @@
 // geblieben. Medien-Zeilen ändern sich nie; ein neues Video an einer Zeile ändert deren updated_at. Der Zwischenstand
 // hält die gelesenen Medien mit, damit eine Antwort ohne volle Abfrage dieselben Urteile zeigt.
 //
+// Lesefehler eines Videos (Nachtrag d1-regression-2): Dann gilt der Zwischenstand nur FREIGABEN_FEHLERSTAND_MS (2 min)
+// statt FREIGABEN_VOLL_SPAETESTENS_MS. Der Fehler steht so höchstens 2 min im Stand (danach liest die Route voll und
+// nennt den dann richtigen Grund), und ein dauerhafter Fehler kostet höchstens eine volle Abfrage je 2 min.
+//
 // Nur die Route importiert diese Datei ("server-only"); kein Browser-Code erreicht sie (Wächter R5-W7 in
 // tests/r-content-waechter.test.mjs). Verhalten: tests/r-freigaben-probe.test.mjs.
 
@@ -52,6 +56,9 @@ import { contentKennung } from "./content-liste-cache";
 
 /** Höchstalter des Zwischenstands: Ist seine volle Abfrage so alt, liest die Route wieder voll — auch ohne erkannte Änderung. */
 export const FREIGABEN_VOLL_SPAETESTENS_MS = 30 * 60_000;
+
+/** Höchstalter eines Zwischenstands mit dem Lesefehler eines Videos (Nachtrag d1-regression-2). */
+export const FREIGABEN_FEHLERSTAND_MS = 2 * 60_000;
 
 /** Spalten der Änderungsprobe; Filter, Sortierung, Grenzen und count "exact" wie bei der vollen Abfrage. */
 export const FREIGABEN_PROBE_SPALTEN = "id,updated_at,metadata->medium_id";
@@ -83,6 +90,8 @@ export interface FreigabenStand {
   readonly medien: FreigabenMedien;
   /** Uhr des Servers (ms) unmittelbar vor der vollen Abfrage — so ist das Alter eher zu hoch als zu niedrig geschätzt. */
   readonly vollAm: number;
+  /** Höchstalter dieses Stands: FREIGABEN_VOLL_SPAETESTENS_MS, mit dem Lesefehler eines Videos FREIGABEN_FEHLERSTAND_MS. */
+  readonly gueltigMs: number;
 }
 
 let stand: FreigabenStand | null = null;
@@ -125,29 +134,33 @@ export function freigabenMedienIds(...listen: readonly (readonly unknown[])[]): 
 }
 
 /**
- * Der Zwischenstand, wenn seine volle Abfrage jünger als FREIGABEN_VOLL_SPAETESTENS_MS ist; sonst null.
+ * Der Zwischenstand, wenn seine volle Abfrage jünger als sein Höchstalter (gueltigMs) ist; sonst null.
  * Liegt jetzt vor vollAm (Uhr zurückgestellt), gilt er ebenfalls als abgelaufen.
  */
 export function gueltigerFreigabenStand(jetzt: number): FreigabenStand | null {
   if (stand === null) return null;
   const alter = jetzt - stand.vollAm;
-  return alter >= 0 && alter < FREIGABEN_VOLL_SPAETESTENS_MS ? stand : null;
+  return alter >= 0 && alter < stand.gueltigMs ? stand : null;
 }
 
 /**
  * Nach einer erfolgreichen vollen Abfrage: Zwischenstand ersetzen, die Kennung aus genau diesen Zeilen und
  * Zählungen. Lässt sich aus ihnen keine Kennung bilden, hält der Speicher danach keinen Stand — die
- * nächste Anfrage liest wieder voll, wie vor der Änderungsprobe.
+ * nächste Anfrage liest wieder voll, wie vor der Änderungsprobe. gueltigMs: Höchstalter des Stands
+ * (mit dem Lesefehler eines Videos FREIGABEN_FEHLERSTAND_MS).
  */
-export function merkeFreigaben(wartend: FreigabenListe, haengend: FreigabenListe, vollAm: number, medien: FreigabenMedien = OHNE_MEDIEN): void {
+export function merkeFreigaben(
+  wartend: FreigabenListe,
+  haengend: FreigabenListe,
+  vollAm: number,
+  medien: FreigabenMedien = OHNE_MEDIEN,
+  gueltigMs: number = FREIGABEN_VOLL_SPAETESTENS_MS,
+): void {
   const kennung = freigabenKennung(wartend, haengend, medien.kennung);
-  stand = kennung === null ? null : { kennung, wartend, haengend, medien, vollAm };
+  stand = kennung === null ? null : { kennung, wartend, haengend, medien, vollAm, gueltigMs };
 }
 
-/**
- * Zwischenstand verwerfen: Die nächste Anfrage liest voll. Die Route tut das nach dem Lesefehler eines Videos
- * (Nachbesserung caption9-1); die Tests, damit jeder ohne Zwischenstand beginnt.
- */
+/** Zwischenstand verwerfen: Die nächste Anfrage liest voll. Die Tests tun das, damit jeder ohne Zwischenstand beginnt. */
 export function setzeFreigabenZurueck(): void {
   stand = null;
 }
