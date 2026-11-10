@@ -32,7 +32,11 @@ COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 # im CommonJS-Cache — ein Pfad unter @img/sharp-…wasm32 heißt WebAssembly, nativ nur mit geladenem @img/sharp-…/….node.
 # Der import-Weg lädt sein Binary über createRequire in denselben Cache. Der Test prüft beide Wege (require und import)
 # und lässt den Build sonst scheitern. Versionen und „nativ“ stehen im Build-Log.
-RUN node -e "const n = (s, weg) => { const k = Object.keys(require.cache); const wasm = 'emscripten' in s.versions || k.some((p) => p.includes('/@img/sharp-') && p.includes('wasm32')); const nativ = k.some((p) => p.includes('/@img/sharp-') && !p.includes('wasm32') && p.endsWith('.node')); if (wasm || !nativ) throw new Error('sharp (' + weg + ') laeuft nicht nativ: ' + (wasm ? 'WebAssembly geladen' : 'kein natives Binary geladen')); }; n(require('sharp'), 'require'); import('sharp').then((m) => { n(m.default, 'import'); console.log('sharp', m.default.versions.sharp, 'libvips', m.default.versions.vips, 'nativ'); })"
+# Dazu der Ladeweg des Servers (Nachtrag d2-nativ-e22-1): Er lädt sharp nicht als „sharp“, sondern über den gehashten
+# Extern-Namen des Builds (.next/node_modules/sharp-<hash>, ein Symlink auf node_modules/sharp). Genau einer muss da sein
+# und auf node_modules/sharp zeigen; sonst scheiterte erst jeder Abgleich zur Laufzeit. Die Zeile kommt ohne Dollar,
+# Backtick und Backslash aus.
+RUN node -e "const fs = require('fs'); const h = fs.readdirSync('.next/node_modules').filter((x) => x.startsWith('sharp-')); if (h.length !== 1 || fs.realpathSync('.next/node_modules/' + h[0]) !== fs.realpathSync('node_modules/sharp')) throw new Error('sharp-Extern des Builds fehlt oder zeigt nicht auf node_modules/sharp: ' + h.join(', ')); const n = (s, weg) => { const k = Object.keys(require.cache); const wasm = 'emscripten' in s.versions || k.some((p) => p.includes('/@img/sharp-') && p.includes('wasm32')); const nativ = k.some((p) => p.includes('/@img/sharp-') && !p.includes('wasm32') && p.endsWith('.node')); if (wasm || !nativ) throw new Error('sharp (' + weg + ') laeuft nicht nativ: ' + (wasm ? 'WebAssembly geladen' : 'kein natives Binary geladen')); }; n(require('sharp'), 'require'); import('sharp').then((m) => { n(m.default, 'import'); console.log('sharp', m.default.versions.sharp, 'libvips', m.default.versions.vips, 'nativ'); })"
 USER nextjs
 EXPOSE 3000
 ENV PORT=3000
