@@ -247,10 +247,13 @@ test("R4: Freigeben-Knopf gesperrt, solange pruefeFreigabe sperrt — mit sichtb
   assert.ok(freigebenGesperrt(knopfHtml(zeile(11, { review_notes: "URTEIL: FREIGABE nicht möglich" }))), "Altzeile mit Verneinung");
 });
 
-test("R2: Freigeben bei abweichender Fassung frei, aber mit Hinweis am Knopf", () => {
+// Paket B (10.11.2026, R2/E13 entschieden): Vorher war eine abweichende Fassung frei, mit Hinweis am
+// Knopf. Jetzt wird nur Text freigegeben, den COUNSEL wörtlich geprüft hat — der Knopf sperrt mit Grund.
+test("R2 (E13): Freigeben bei abweichender Fassung gesperrt — Grund am Knopf statt Hinweis", () => {
   const html = knopfHtml(ZEILEN[2]);
-  assert.ok(freigebenDa(html) && !freigebenGesperrt(html));
-  assert.ok(html.includes("Freigabetext ungeprüft — COUNSEL prüfte die Vorfassung"));
+  assert.ok(freigebenGesperrt(html));
+  assert.match(html, /<span[^>]*>Freigeben gesperrt: Freigabetext nicht wörtlich geprüft: COUNSEL prüfte eine andere Fassung \(R2\)/);
+  assert.ok(!html.includes("Freigabetext ungeprüft — COUNSEL prüfte die Vorfassung"), "kein Hinweis neben gesperrtem Knopf");
 });
 
 test("R2: Beleg-Kette zeigt grünes FREIGABE nur bei gleicher Fassung", () => {
@@ -312,15 +315,17 @@ test("R34: Pipeline-Fluss nach Abbruch, während des Laufs und bei unbekanntem A
       { agent: "scribe", status: "error", fehler: "Antwort abgeschnitten" },
       { agent: "counsel", status: "pending" },
       { agent: "publisher", status: "pending" },
+      { agent: "counsel_endfassung", status: "pending" },
       { agent: "amplifier", status: "pending" },
     ],
   };
   const nachFehler = fluss("ergebnis", fehlerLauf);
-  assert.equal((nachFehler.match(/>nicht ausgeführt</g) ?? []).length, 3);
+  // Paket B (R2): sechs Stufen, die Endprüfung heißt "COUNSEL 2".
+  assert.equal((nachFehler.match(/>nicht ausgeführt</g) ?? []).length, 4);
   assert.ok(!nachFehler.includes("WAIT"));
-  assert.ok(nachFehler.includes("Abbruch in Stufe SCRIBE: Antwort abgeschnitten — COUNSEL, PUBLISHER, AMPLIFIER wurden nicht ausgeführt."));
+  assert.ok(nachFehler.includes("Abbruch in Stufe SCRIBE: Antwort abgeschnitten — COUNSEL, PUBLISHER, COUNSEL 2, AMPLIFIER wurden nicht ausgeführt."));
   const laeuft = fluss("laeuft");
-  assert.equal((laeuft.match(/>läuft</g) ?? []).length, 5);
+  assert.equal((laeuft.match(/>läuft</g) ?? []).length, 6);
   assert.ok(!laeuft.includes("WAIT"));
   assert.ok(fluss("unbekannt").includes("Ausgang unbekannt"));
 });
@@ -341,11 +346,13 @@ test("R10: Meldungen ohne Ergebnis — Hinweis auf dieselbe Lauf-ID, Knopf zum E
 
 // Browser-Prüfung 06.11.2026: Bei 375 px scrollte /content waagrecht, weil die Stufenleiste nicht
 // schrumpfen konnte. Jetzt scrollt nur die Leiste in ihrer Karte (gemessen: 280 px sichtbar,
-// 480 px Inhalt); dieser Test hält die Klassen fest.
+// 480 px Inhalt); dieser Test hält die Klassen fest. Paket B (10.11.2026): sechs Kacheln, Inhalt
+// mindestens 580 px (nicht im Browser gemessen).
 test("Browser-Prüfung: Stufenleiste scrollt in ihrer Karte, nicht die Seite", () => {
   const html = renderToStaticMarkup(React.createElement(A.PipelineFluss, { lage: "kein_lauf", ergebnis: null }));
-  assert.match(html, /<div class="overflow-x-auto" data-fluss-leiste="true"><div class="grid min-w-\[480px\] /);
-  assert.equal((html.match(/data-stufe=/g) ?? []).length, 5);
+  assert.match(html, /<div class="overflow-x-auto" data-fluss-leiste="true"><div class="grid min-w-\[580px\] /);
+  assert.equal((html.match(/data-stufe=/g) ?? []).length, 6);
+  assert.ok(html.includes('data-stufe="counsel_endfassung"') && html.includes(">COUNSEL 2<"));
 });
 
 // ═══ Teil B: Klickabläufe mit Hook-Laufzeit ═══
@@ -657,7 +664,7 @@ test("R10: unbekannter Ausgang behält die Lauf-ID, 409 und 4xx verwerfen sie, D
   assert.ok(!t1.includes("abgewiesen"));
   assert.ok(t1.includes("Der nächste Klick sendet dieselbe Lauf-ID"));
   assert.match(sim.pipelineAufrufe[0].lauf_id, LAUF_ID);
-  assert.equal(zaehle(stufenText(baum), /unbekannt/g), 5);
+  assert.equal(zaehle(stufenText(baum), /unbekannt/g), 6, "Paket B: sechs Stufen");
 
   // Klick 2: dieselbe Lauf-ID; 409 → "Lauf existiert bereits (#5, Entwurf)"
   baum = await sim.klicke(knoepfe(baum, "Content produzieren")[0]);
@@ -672,7 +679,7 @@ test("R10: unbekannter Ausgang behält die Lauf-ID, 409 und 4xx verwerfen sie, D
   baum = await sim.ruhe(3);
   assert.equal(sim.pipelineAufrufe.length, 3, "Doppelklick startet keinen zweiten POST");
   assert.notEqual(sim.pipelineAufrufe[2].lauf_id, sim.pipelineAufrufe[1].lauf_id);
-  assert.equal(zaehle(stufenText(baum), /läuft/g), 5);
+  assert.equal(zaehle(stufenText(baum), /läuft/g), 6, "Paket B: sechs Stufen");
   assert.equal(knoepfe(baum, "Pipeline läuft")[0]?.props.disabled, true);
   gibFrei();
   baum = await sim.ruhe();
@@ -764,9 +771,10 @@ test("R24: Namensschutz-Abbruch — PUBLISHER-Ausgabe maskiert und nicht \"Freig
       { agent: "scribe", status: "done", output: TEXT, cost: 0.01 },
       { agent: "counsel", status: "done", output: FREIGABE_NOTES, cost: 0.01 },
       { agent: "publisher", status: "error", fehler: NAMENSSCHUTZ, output: `${TEXT} Daten aus dem ${NAME}-Export.`, cost: 0.01 },
+      { agent: "counsel_endfassung", status: "pending" },
       { agent: "amplifier", status: "pending" },
     ],
-    summary: { total_cost_usd: 0.04, kosten_unvollstaendig: false, total_duration_ms: 1000, completed: "3/5" },
+    summary: { total_cost_usd: 0.04, kosten_unvollstaendig: false, total_duration_ms: 1000, completed: "3/6" },
     speicherfehler: [],
   };
   const sim = baueSimulation({ pipelineAntworten: [json(200, abbruch)] });
@@ -780,7 +788,9 @@ test("R24: Namensschutz-Abbruch — PUBLISHER-Ausgabe maskiert und nicht \"Freig
   assert.ok(t.includes("PUBLISHER-Ausgabe enthielt einen geschützten Namen — Lauf abgebrochen, nicht zur Freigabe gestellt."));
   assert.ok(!t.includes("Der Freigabetext enthält einen geschützten Namen"));
   assert.ok(t.includes("Abbruch in Stufe PUBLISHER: Namensschutz"));
-  assert.equal(zaehle(stufenText(baum), /nicht ausgeführt/g), 1);
+  // Paket B: Endprüfung und AMPLIFIER laufen nach dem Namensschutz-Abbruch nicht.
+  assert.equal(zaehle(stufenText(baum), /nicht ausgeführt/g), 2);
+  assert.ok(t.includes("COUNSEL 2, AMPLIFIER wurden nicht ausgeführt."));
 });
 
 test("R24: Im Lauf zur Freigabe bleibt der Freigabetext roh, mit Warnung bei geschütztem Namen", async () => {
@@ -849,8 +859,9 @@ test("Content-Tab: Sperre (R4), Hinweis (R2), Name (R24) und Metriken (R19) je E
   baum = await oeffneEintrag(sim, baum, 2);
   assert.equal(freigebenKnopf(baum).props.disabled, false);
   baum = await oeffneEintrag(sim, baum, 3);
-  assert.equal(freigebenKnopf(baum).props.disabled, false);
-  assert.ok(text(baum).includes("Freigabetext ungeprüft — COUNSEL prüfte die Vorfassung"));
+  // Paket B (R2/E13): abweichende Fassung gesperrt, Grund sichtbar
+  assert.equal(freigebenKnopf(baum).props.disabled, true);
+  assert.ok(text(baum).includes("Freigeben gesperrt: Freigabetext nicht wörtlich geprüft: COUNSEL prüfte eine andere Fassung (R2)"));
   baum = await oeffneEintrag(sim, baum, 4);
   assert.equal(freigebenKnopf(baum).props.disabled, true);
   assert.ok(text(baum).includes("Der Freigabetext enthält einen geschützten Namen — Freigabe gesperrt."));
@@ -1045,24 +1056,26 @@ test("Gesamtprüfung: CTA-Link mit geschütztem Namen — Anzeige maskiert, Warn
   assert.doesNotMatch(html, ENTHAELT_NAMEN);
 });
 
-test("Gesamtprüfung: LinkedIn ohne Pipeline-Format — Hinweis, Knopf gesperrt, kein POST (R39 bleibt offen)", async () => {
-  const sim = baueSimulation();
+// Paket B (10.11.2026, R39/E11): Vorher hatte LinkedIn kein Pipeline-Format (Hinweis, Knopf gesperrt,
+// kein POST). Jetzt startet LinkedIn einen Lauf mit dem Format linkedin_post.
+test("Paket B: LinkedIn startet einen Lauf mit linkedin_post (R39, E11)", async () => {
+  const sim = baueSimulation({ pipelineAntworten: [json(200, { ...ERGEBNIS_ABWEICHEND, platform: "linkedin" })] });
   let baum = await sim.start();
   baum = await sim.tippe(themaFeld(baum), "Fachbeitrag");
   const li = finde(baum, (k) => k.type === "button" && text(k).trim() === "in LI")[0];
   assert.ok(li, "LinkedIn-Knopf fehlt");
   baum = await sim.klicke(li);
-  assert.ok(text(baum).includes("LinkedIn ist in der Pipeline nicht hinterlegt"));
+  assert.ok(!text(baum).includes("nicht hinterlegt"));
+  const format = finde(baum, (k) => k.type === "select" && finde(k, (o) => o.type === "option" && o.props.value === "linkedin_post").length === 1)[0];
+  assert.ok(format, "Format-Auswahl mit linkedin_post fehlt");
+  assert.equal(format.props.value, "linkedin_post");
   const produzieren = knoepfe(baum, "Content produzieren")[0];
-  assert.equal(produzieren.props.disabled, true);
-  produzieren.props.onClick(); // erzwungen
-  baum = await sim.ruhe(3);
-  assert.equal(sim.pipelineAufrufe.length, 0);
-  assert.ok(text(baum).includes("LinkedIn ist in der Pipeline nicht hinterlegt"));
-  assert.ok(!text(baum).includes("undefined"));
-  // zurück auf X: Lauf wieder möglich
-  baum = await sim.klicke(finde(baum, (k) => k.type === "button" && text(k).trim() === "𝕏 X")[0]);
-  assert.equal(knoepfe(baum, "Content produzieren")[0].props.disabled, false);
+  assert.equal(produzieren.props.disabled, false);
+  baum = await sim.klicke(produzieren);
+  assert.equal(sim.pipelineAufrufe.length, 1);
+  assert.equal(sim.pipelineAufrufe[0].platform, "linkedin");
+  assert.equal(sim.pipelineAufrufe[0].format, "linkedin_post");
+  assert.ok(text(baum).includes("Pipeline-Ergebnis"));
 });
 
 test("Gesamtprüfung R24: SCRIBE-Vorfassung, Titel, Fehler-Vermerk und Objekt-Snapshot nur maskiert (X09, X10, X23–X25)", async () => {
@@ -1215,7 +1228,7 @@ test("Prüflauf: Wiederholung mit offener Lauf-ID — eine 5xx der Route verwirf
   const t2 = text(baum);
   assert.ok(t2.includes(`${AUSGANG_UNBEKANNT} (früherer Versuch mit dieser Lauf-ID) · Dieser Versuch: Lauf nicht gestartet (HTTP 500)`), t2.slice(0, 600));
   assert.ok(t2.includes("Der nächste Klick sendet dieselbe Lauf-ID"));
-  assert.equal(zaehle(stufenText(baum), /unbekannt/g), 5);
+  assert.equal(zaehle(stufenText(baum), /unbekannt/g), 6, "Paket B: sechs Stufen");
   baum = await sim.klicke(knoepfe(baum, "Content produzieren")[0]); // dieselbe ID → 409
   assert.equal(sim.pipelineAufrufe[2].lauf_id, sim.pipelineAufrufe[0].lauf_id, "dritter Klick sendet weiter dieselbe Lauf-ID");
   assert.ok(text(baum).includes("Lauf existiert bereits (#7, Entwurf)"));
@@ -1245,7 +1258,8 @@ test("Prüflauf: 50er-Grenze als Ursache nur, wenn die Abfrage sie meldet — au
 });
 
 test("Nachprüfung: freigabeLage je Eintrag gemerkt — gleicher Eintrag gleiche Lage, ersetzter Eintrag neu", () => {
-  const eintrag = { body: TEXT, review_notes: "Prüfung ok.\nURTEIL: FREIGABE", metadata: {} };
+  // Paket B (R2): freigebbar nur mit geprüftem Text — hier der SCRIBE-Text, gleich dem body.
+  const eintrag = { body: TEXT, review_notes: "Prüfung ok.\nURTEIL: FREIGABE", metadata: { steps: [{ agent: "researcher" }, { agent: "scribe", status: "done", output: TEXT }] } };
   const lage = A.freigabeLageGemerkt(eintrag);
   assert.equal(A.freigabeLageGemerkt(eintrag), lage, "zweiter Aufruf aus dem Merker");
   assert.deepEqual(lage, A.freigabeLage(eintrag), "dieselbe Regel wie ungemerkt");

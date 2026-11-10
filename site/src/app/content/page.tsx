@@ -16,7 +16,7 @@ import type { EintragLesung, ListenLesung } from "@/lib/content-liste";
 import { KPICard } from "@/components/ui/KPICard";
 import { objekteFehlerArt, objektFehlerText, useFreigaben } from "@/lib/hooks-status";
 import type { ObjekteFehlerArt } from "@/lib/hooks-status";
-import { enthaeltGeschuetztenNamen, maskiereGeschuetzteNamen } from "@/lib/freigabe-regeln";
+import { STUFE_ENDPRUEFUNG, enthaeltGeschuetztenNamen, geprueftenTextAusSchritten, maskiereGeschuetzteNamen } from "@/lib/freigabe-regeln";
 import type { CounselUrteil } from "@/lib/status-types";
 import { BelegKette } from "@/components/studio/BelegKette";
 import { FreigebenKnopf } from "@/components/studio/FreigabeKnopf";
@@ -99,6 +99,13 @@ import type { ContentMetadata, CounselVermerk, FassungsBezug, FreigabeLage, Verm
 // ersetzt wurde, liest die Seite sofort neu (vorher erst im nächsten Takt — eine neue Zeile aus der
 // verworfenen Antwort erschien dadurch einen Takt später). Nach dem Verlassen startet keine Abfrage mehr,
 // auch nicht aus einem Pipeline-Lauf, der erst danach endet.
+//
+// Objekt-Studio Stufe 2, Paket B (10.11.2026):
+// - R39/E11: LinkedIn startet einen Lauf mit dem Format linkedin_post (vorher Hinweis und kein Lauf).
+// - R2/E13: Die Leiste zeigt sechs Stufen; die fünfte ist die COUNSEL-Endprüfung der PUBLISHER-Fassung
+//   ("COUNSEL 2"). Der Fassungsbezug des frischen Ergebnisses folgt derselben Regel wie Server und
+//   Stapel (geprueftenTextAusSchritten, lib/freigabe-regeln.ts). Freigeben und Kopieren sperren, wenn
+//   COUNSEL den Freigabetext nicht wörtlich geprüft hat (pruefeFreigabe mit dem geprüften Text).
 
 // ═══ TYPES ═══
 
@@ -278,12 +285,13 @@ const CATEGORIES = [
 
 /**
  * Formate je Plattform, wie POST /api/content/pipeline sie annimmt (FORMATE_JE_PLATTFORM dort).
- * linkedin steht im Formular, hat in der Pipeline aber kein Format: Entscheidung offen (R39).
+ * Paket B (10.11.2026, R39/E11): linkedin hat das Format linkedin_post.
  */
 const FORMATE_JE_PLATTFORM: Record<string, readonly string[]> = {
   youtube: ["longform", "short", "deep_dive"],
   x: ["thread"],
   twitter: ["thread"],
+  linkedin: ["linkedin_post"],
   tiktok: ["tiktok_short"],
   instagram: ["carousel", "reel", "story"],
   newsletter: ["newsletter_issue"],
@@ -292,9 +300,7 @@ const FORMATE_JE_PLATTFORM: Record<string, readonly string[]> = {
 /** Hinweis, wenn eine Plattform im Formular kein Pipeline-Format hat; null, wenn sie eines hat. */
 function plattformOhneFormat(plattform: string): string | null {
   if (Object.prototype.hasOwnProperty.call(FORMATE_JE_PLATTFORM, plattform)) return null;
-  return plattform === "linkedin"
-    ? "LinkedIn ist in der Pipeline nicht hinterlegt (kein Format, keine Anweisungen) — ob es kommt, entscheidet der Inhaber. Für LinkedIn startet hier kein Lauf."
-    : `Plattform „${maskiereGeschuetzteNamen(plattform)}“ ist in der Pipeline nicht hinterlegt — kein Lauf.`;
+  return `Plattform „${maskiereGeschuetzteNamen(plattform)}“ ist in der Pipeline nicht hinterlegt — kein Lauf.`;
 }
 
 const TWEET_MAX = 280;
@@ -318,8 +324,16 @@ const HTTP_ART: Record<number, string> = {
 
 const TABS: readonly Tab[] = ["pipeline", "calendar", "content"];
 
-/** Reihenfolge der Pipeline-Stufen (agent-Namen wie in api/content/pipeline/route.ts). */
-const STUFEN = ["researcher", "scribe", "counsel", "publisher", "amplifier"] as const;
+/**
+ * Reihenfolge der Pipeline-Stufen (Namen wie steps[].agent in api/content/pipeline/route.ts).
+ * Paket B (R2): counsel_endfassung = COUNSEL prüft die PUBLISHER-Fassung wörtlich.
+ */
+const STUFEN = ["researcher", "scribe", "counsel", "publisher", STUFE_ENDPRUEFUNG, "amplifier"] as const;
+
+/** Anzeigename einer Stufe: Agentenname in Großbuchstaben; die Endprüfung heißt "COUNSEL 2". */
+function stufenName(stufe: string): string {
+  return stufe === STUFE_ENDPRUEFUNG ? "COUNSEL 2" : stufe.toUpperCase();
+}
 
 /** Format der lauf_id laut Vertrag mit POST /api/content/pipeline (sonst 400). */
 const LAUF_ID_MUSTER = /^[A-Za-z0-9:_-]{8,80}$/;
@@ -634,7 +648,7 @@ function stufenEtikett(lage: FlussLage, status: string | undefined): { text: str
 function flussHinweis(r: PipelineResult): string | null {
   const steps = Array.isArray(r.steps) ? r.steps : [];
   // Stufennamen stammen aus der Server-Antwort und werden wie alle Servertexte maskiert (R24).
-  const offen = steps.filter((s) => s.status !== "done" && s.status !== "error").map((s) => maskiert(s.agent.toUpperCase()));
+  const offen = steps.filter((s) => s.status !== "done" && s.status !== "error").map((s) => maskiert(stufenName(s.agent)));
   const offenText =
     offen.length > 0 ? ` — ${offen.join(", ")} ${offen.length === 1 ? "wurde" : "wurden"} nicht ausgeführt.` : ".";
   if (r.status === "abgelehnt") {
@@ -645,7 +659,7 @@ function flussHinweis(r: PipelineResult): string | null {
     // Vermerk-Objekt; ein reiner Text (500 der Route mit Schritten ohne Vermerk) zählt als Grund.
     const f: Vermerk | null = typeof r.fehler === "string" ? { grund: r.fehler } : alsObjekt(r.fehler);
     const stufeRoh =
-      typeof f?.stufe === "string" && f.stufe ? f.stufe.toUpperCase() : gescheitert ? gescheitert.agent.toUpperCase() : null;
+      typeof f?.stufe === "string" && f.stufe ? stufenName(f.stufe) : gescheitert ? stufenName(gescheitert.agent) : null;
     const stufe = stufeRoh === null ? null : maskiert(stufeRoh);
     const grundRoh =
       typeof f?.grund === "string" && f.grund
@@ -711,12 +725,17 @@ function laufZurFreigabe(status: unknown): boolean {
   return status === "complete" || status === "partial";
 }
 
-/** Bezug im frischen Pipeline-Ergebnis: SCRIBE-Text gegen PUBLISHER-Text (= body) direkt vergleichen. */
+/**
+ * Bezug im frischen Pipeline-Ergebnis: geprüften Text gegen PUBLISHER-Text (= body) direkt vergleichen.
+ * Paket B (R2): geprüft ist der Text, dem das letzte COUNSEL-Urteil gilt — mit Endprüfung die
+ * PUBLISHER-Fassung (ihr Review ist die Ausgabe der Stufe), sonst der SCRIBE-Text.
+ */
 function ergebnisBezug(r: PipelineResult): FassungsBezug {
   if (!laufZurFreigabe(r.status)) return "kein_text";
-  const scribe = r.steps.find((s) => s.agent === "scribe")?.output;
   const publisher = r.steps.find((s) => s.agent === "publisher")?.output;
-  return fassungsBezug(publisher, typeof scribe === "string" ? scribe : null, r.freigabe_hinweis);
+  const review = r.steps.find((s) => s.agent === STUFE_ENDPRUEFUNG)?.output;
+  const geprueft = geprueftenTextAusSchritten(r.steps, typeof review === "string" ? review : null);
+  return fassungsBezug(publisher, geprueft, r.freigabe_hinweis);
 }
 
 /**
@@ -798,9 +817,10 @@ function PipelineFluss({ lage, ergebnis }: { lage: FlussLage; ergebnis: Pipeline
       </h2>
       {/* Browser-Prüfung 06.11.2026: Bei 375 px war die Stufenleiste 466 px breit und die ganze
           Seite scrollte waagrecht (Scrollbreite 514 statt 369). Jetzt scrollt nur die Leiste in
-          ihrer Karte; ab etwa 520 px Kartenbreite passt sie ohne Scrollen. */}
+          ihrer Karte. Paket B: sechs Stufen, Mindestbreite 580 px; ab etwa 620 px Kartenbreite
+          passt sie ohne Scrollen (gerechnet, nicht im Browser gemessen). */}
       <div className="overflow-x-auto" data-fluss-leiste>
-      <div className="grid min-w-[480px] grid-cols-[1fr_auto_1fr_auto_1fr_auto_1fr_auto_1fr] items-center gap-1">
+      <div className="grid min-w-[580px] grid-cols-[1fr_auto_1fr_auto_1fr_auto_1fr_auto_1fr_auto_1fr] items-center gap-1">
         {STUFEN.flatMap((agent, i) => {
           const step = lage === "ergebnis" ? ergebnis?.steps.find((s) => s.agent === agent) : undefined;
           const { text, farbe } = stufenEtikett(lage, step?.status);
@@ -810,11 +830,12 @@ function PipelineFluss({ lage, ergebnis }: { lage: FlussLage; ergebnis: Pipeline
               className="rounded-lg p-2 text-center transition-all"
               style={{ background: `${farbe}10`, border: `1px solid ${farbe}30` }}
               data-stufe={agent}
+              title={agent === STUFE_ENDPRUEFUNG ? "COUNSEL prüft die Endfassung (PUBLISHER-Text) wörtlich (R2)" : undefined}
             >
               <div className="text-[9px] font-mono mb-0.5" style={{ color: farbe }}>
                 {text}
               </div>
-              <div className="text-[10px] font-semibold text-foreground truncate">{agent.toUpperCase()}</div>
+              <div className="text-[10px] font-semibold text-foreground truncate">{stufenName(agent)}</div>
               {typeof step?.cost === "number" && (
                 <div className="text-[8px] text-text-muted mt-0.5">
                   ${step.cost.toFixed(4)} gesch.
@@ -1097,7 +1118,7 @@ function ContentSeite() {
   const runPipeline = useCallback(
     async (eingaben: LaufEingaben) => {
       if (laufAktiv.current) return;
-      // Ohne Pipeline-Format (z. B. LinkedIn, R39 offen) startet kein Lauf.
+      // Ohne Pipeline-Format startet kein Lauf (seit Paket B hat auch LinkedIn eines).
       const ohneFormat = plattformOhneFormat(eingaben.platform);
       if (ohneFormat || !(FORMATE_JE_PLATTFORM[eingaben.platform] ?? []).includes(eingaben.format)) {
         setLaufMeldung({ art: "nicht_gesendet", text: ohneFormat ?? "Lauf nicht gestartet — Format passt nicht zur Plattform." });
@@ -1376,13 +1397,13 @@ function ContentSeite() {
                 <div className="grid grid-cols-5 gap-1.5">
                   {(["youtube", "x", "linkedin", "tiktok", "instagram", "newsletter"] as const).map((p) => {
                     const labels: Record<string, string> = { youtube: "YT", x: "X", linkedin: "LI", tiktok: "TT", instagram: "IG", newsletter: "Mail" };
-                    const defaultFormats: Record<string, string> = { youtube: "longform", x: "thread", tiktok: "tiktok_short", instagram: "carousel", newsletter: "newsletter_issue" };
+                    const defaultFormats: Record<string, string> = { youtube: "longform", x: "thread", linkedin: "linkedin_post", tiktok: "tiktok_short", instagram: "carousel", newsletter: "newsletter_issue" };
                     return (
                       <button
                         key={p}
                         onClick={() => {
                           setCustomPlatform(p);
-                          // Ohne Pipeline-Format (linkedin): leer statt undefined; der Lauf startet dann nicht.
+                          // Ohne Pipeline-Format: leer statt undefined; der Lauf startet dann nicht.
                           setCustomFormat(defaultFormats[p] ?? "");
                         }}
                         className={`px-1.5 py-2 rounded-lg text-[10px] font-medium transition-all ${
@@ -1420,6 +1441,9 @@ function ContentSeite() {
                   )}
                   {customPlatform === "x" && (
                     <option value="thread">Thread (6-7 Tweets, Steinadel-Ton)</option>
+                  )}
+                  {customPlatform === "linkedin" && (
+                    <option value="linkedin_post">LinkedIn-Post (Fachton, 1.200-2.000 Zeichen)</option>
                   )}
                   {customPlatform === "tiktok" && (
                     <option value="tiktok_short">TikTok Short (30-60 Sek)</option>
@@ -1462,7 +1486,7 @@ function ContentSeite() {
                   : "bg-accent-violet/20 text-accent-violet hover:bg-accent-violet/30"
               } disabled:opacity-40 disabled:cursor-not-allowed`}
             >
-              {pipelineRunning ? "Pipeline läuft … (bis zu 5 Agenten)" : "Content produzieren"}
+              {pipelineRunning ? "Pipeline läuft … (bis zu 6 Stufen)" : "Content produzieren"}
             </button>
             {laufMeldung && (
               <LaufMeldungAnzeige

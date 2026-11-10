@@ -10,7 +10,13 @@
 
 import { werteCounselAus } from "@/lib/counsel-urteil";
 import type { CounselAuswertung } from "@/lib/counsel-urteil";
-import { enthaeltGeschuetztenNamen, maskiereGeschuetzteNamen, pruefeFreigabe } from "@/lib/freigabe-regeln";
+import {
+  STUFE_ENDPRUEFUNG,
+  enthaeltGeschuetztenNamen,
+  geprueftenTextAusSchritten,
+  maskiereGeschuetzteNamen,
+  pruefeFreigabe,
+} from "@/lib/freigabe-regeln";
 import type { FreigabePruefung } from "@/lib/freigabe-regeln";
 import type { CounselUrteil } from "@/lib/status-types";
 
@@ -45,6 +51,8 @@ export interface ObjektSnapshot {
   abgerufen_am?: string;
   export?: { version?: string | null; quelle?: string | null; generiert_am?: string | null } | null;
   objekt?: Record<string, unknown> | null;
+  /** Paket B (10.11.2026): Bezeichnung der Datierungszeile im Prompt, z. B. "Ersterwähnung" (Exportfeld baujahr). */
+  datierung?: { feld?: string; bezeichnung?: string; ausnahme_greift?: boolean; quelle?: string; fundstelle?: string | null } | null;
 }
 
 export interface StepEintrag {
@@ -56,18 +64,36 @@ export interface StepEintrag {
   duration_ms?: number;
 }
 
+/** Kurzlink-Beleg der Pipeline (Paket B, Schritt 4, E12): Link, aufgelöstes Ziel, Textprüfungen. */
+export interface KurzlinkVermerk {
+  link?: string;
+  ziel_url?: string;
+  utm_source?: string;
+  utm_medium?: string;
+  utm_campaign?: string;
+  utm_content?: string;
+  regel?: string;
+  pruefung_scribe?: { ok?: boolean; befunde?: string[] };
+  pruefung_endfassung?: { ok?: boolean; befunde?: string[] };
+}
+
 export interface ContentMetadata {
   thema?: string;
   objekt_slug?: string | null;
   utm_content?: string | null;
   kampagne?: string | null;
   cta_link?: string | null;
+  /** Paket B (10.11.2026): Kurzlink-Beleg; fehlt bei Läufen davor. */
+  kurzlink?: KurzlinkVermerk;
   amplifier_empfehlung?: string;
   /** Vor Stufe 1 ein Text, seit Stufe 1 ein Vermerk mit Stufe und Grund. */
   fehler?: string | Vermerk;
   warnungen?: Vermerk[];
   steps?: StepEintrag[];
+  /** Maßgebliches Urteil (zu review_notes): seit Paket B das der Endprüfung, sonst das der Vorprüfung. */
   counsel?: CounselVermerk;
+  /** Paket B (R2): Urteil der ersten Prüfung (SCRIBE-Text), wenn die Endprüfung gelaufen ist. */
+  counsel_vorpruefung?: CounselVermerk;
   regelpaket?: { version?: string | null; stand?: string | null };
   objekt_snapshot?: ObjektSnapshot | null;
   researcher_quellen?: string;
@@ -94,7 +120,10 @@ export interface FreigabeLage {
   counsel: CounselAuswertung;
   pruefung: FreigabePruefung;
   bezug: FassungsBezug;
-  /** Von COUNSEL geprüfter Text (metadata.steps[1].output, SCRIBE); null = nicht gespeichert. */
+  /**
+   * Von COUNSEL geprüfter Text (geprueftenTextAusSchritten): seit Paket B die PUBLISHER-Fassung der
+   * Endprüfung, bei Läufen davor metadata.steps[1].output (SCRIBE); null = nicht feststellbar.
+   */
   geprueftText: string | null;
   /** Der Freigabetext enthält den geschützten Namen. */
   nameImText: boolean;
@@ -172,14 +201,88 @@ export function snapshotWert(feld: string, wert: unknown): string[] {
   return [String(wert)];
 }
 
+// ═══ PAKET B (Objekt-Studio Stufe 2, Schritte 4 und 5, 10.11.2026) ═══
+// Nur Läufe ab Paket B tragen die Felder; ältere Zeilen rendern unverändert.
+
+/** Etikett einer Snapshot-Zeile: für baujahr die Bezeichnung im Prompt (z. B. "Ersterwähnung"), sonst das übliche. */
+export function snapshotEtikett(snapshot: ObjektSnapshot | null, feld: string, etikett: string): string {
+  if (feld !== "baujahr" || !snapshot) return etikett;
+  const d = alsObjekt(snapshot.datierung ?? null);
+  return d && typeof d.bezeichnung === "string" && d.bezeichnung.trim() !== "" ? maskiert(d.bezeichnung) : etikett;
+}
+
+/** Hinweis zur Datierungszeile: Exportfeld und Objekt-Ausnahme; null ohne Beleg (Läufe vor Paket B). */
+export function datierungsHinweis(snapshot: ObjektSnapshot | null): string | null {
+  const d = snapshot ? alsObjekt(snapshot.datierung ?? null) : null;
+  if (!d) return null;
+  if (d.ausnahme_greift === true) {
+    return `Exportfeld baujahr · Objekt-Ausnahme${typeof d.quelle === "string" && d.quelle ? `: ${maskiert(d.quelle)}` : ""}`;
+  }
+  return "Exportfeld baujahr · Objekt-Ausnahme greift nicht (der Export nennt ein anderes Jahr)";
+}
+
+/** Eine COUNSEL-Prüfung eines Laufs (R2): was geprüft wurde, Ergebnis, geschätzte Kosten. */
+export interface CounselPruefungZeile {
+  art: "vor" | "end";
+  titel: string;
+  ergebnis: string;
+  kosten: string;
+}
+
+function pruefungsZeile(art: CounselPruefungZeile["art"], titel: string, stufe: unknown): CounselPruefungZeile {
+  const s = istObjekt(stufe) ? stufe : null;
+  if (!s || s.status === undefined || s.status === "pending") {
+    return { art, titel, ergebnis: "nicht ausgeführt", kosten: "keine Kosten" };
+  }
+  const kosten =
+    typeof s.cost === "number" && Number.isFinite(s.cost) && s.cost >= 0 ? `$${s.cost.toFixed(4)} gesch.` : "Kosten nicht gemeldet";
+  let ergebnis: string;
+  if (s.status === "done") ergebnis = `Urteil ${werteCounselAus(typeof s.output === "string" ? s.output : null).urteil}`;
+  else if (s.status === "error") ergebnis = `Fehler${typeof s.fehler === "string" && s.fehler ? `: ${maskiert(s.fehler)}` : ""}`;
+  else ergebnis = `nicht abgeschlossen (${maskiertWert(s.status)})`;
+  return { art, titel, ergebnis, kosten };
+}
+
+/**
+ * Beide COUNSEL-Prüfungen eines Laufs mit Endprüfung (R2): Vorprüfung des SCRIBE-Texts und Endprüfung
+ * des Freigabetexts, je mit Ergebnis und geschätzten Kosten. null bei Läufen ohne Endprüfung.
+ */
+export function counselPruefungen(meta: ContentMetadata): CounselPruefungZeile[] | null {
+  const steps: unknown[] = Array.isArray(meta.steps) ? meta.steps : [];
+  const end = steps.find((s) => istObjekt(s) && s.agent === STUFE_ENDPRUEFUNG);
+  if (end === undefined) return null;
+  const vor = steps.find((s) => istObjekt(s) && s.agent === "counsel");
+  return [
+    pruefungsZeile("vor", "Vorprüfung · SCRIBE-Text", vor),
+    pruefungsZeile("end", "Endprüfung · Freigabetext, wörtlich", end),
+  ];
+}
+
+/** Ziel-URL des Kurzlinks (E12) und Ergebnis der Textprüfungen; null ohne Kurzlink-Beleg. */
+export function kurzlinkAnzeige(meta: ContentMetadata): { ziel: string | null; pruefungen: string | null } | null {
+  const k = alsObjekt(meta.kurzlink ?? null);
+  if (!k) return null;
+  const ziel = typeof k.ziel_url === "string" && k.ziel_url ? maskiert(k.ziel_url) : null;
+  const teil = (name: string, p: unknown): string | null => {
+    const e = istObjekt(p) ? p : null;
+    if (!e) return null;
+    if (e.ok === true) return `${name} bestanden`;
+    const befunde = Array.isArray(e.befunde) ? e.befunde.filter((b): b is string => typeof b === "string") : [];
+    return `${name} nicht bestanden${befunde.length ? ` (${maskiert(befunde.join("; "))})` : ""}`;
+  };
+  const teile = [teil("SCRIBE-Text", k.pruefung_scribe), teil("Endfassung", k.pruefung_endfassung)].filter((t): t is string => t !== null);
+  return { ziel, pruefungen: teile.length ? `Kurzlink im Text geprüft: ${teile.join(" · ")}` : null };
+}
+
 // ═══ FREIGABE-LAGE (R2, R4, R24) ═══
 
-/** Von COUNSEL geprüfter Text: metadata.steps[1].output (SCRIBE); null, wenn nicht gespeichert. */
-export function geprueftenText(meta: ContentMetadata): string | null {
-  const schritt: unknown = Array.isArray(meta.steps) ? meta.steps[1] : undefined;
-  if (!istObjekt(schritt) || typeof schritt.output !== "string") return null;
-  if (typeof schritt.agent === "string" && schritt.agent.toLowerCase() !== "scribe") return null;
-  return schritt.output;
+/**
+ * Von COUNSEL geprüfter Text — dieselbe Regel wie Server und Stapel (geprueftenTextAusSchritten,
+ * lib/freigabe-regeln.ts; Paket B, R2): mit Endprüfung die PUBLISHER-Fassung, deren Urteil in
+ * review_notes steht; bei Läufen davor metadata.steps[1].output (SCRIBE). null, wenn nicht feststellbar.
+ */
+export function geprueftenText(meta: ContentMetadata, reviewNotes: string | null): string | null {
+  return geprueftenTextAusSchritten(meta.steps, reviewNotes);
 }
 
 /**
@@ -200,10 +303,11 @@ export function fassungsBezug(
 export function freigabeLage(item: Pick<BelegEintrag, "body" | "review_notes" | "metadata">): FreigabeLage {
   const meta = alsObjekt(item.metadata) ?? {};
   const counsel = werteCounselAus(item.review_notes);
-  const geprueftText = geprueftenText(meta);
+  const geprueftText = geprueftenText(meta, item.review_notes);
   return {
     counsel,
-    pruefung: pruefeFreigabe(counsel, item.body),
+    // Paket B (R2): mit dem geprüften Text — dieselbe Sperre wie beim Freigeben auf dem Server.
+    pruefung: pruefeFreigabe(counsel, item.body, geprueftText),
     bezug: fassungsBezug(item.body, geprueftText, alsObjekt(meta.freigabe_hinweis)),
     geprueftText,
     nameImText: enthaeltGeschuetztenNamen(item.body),

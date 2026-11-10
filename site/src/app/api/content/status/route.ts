@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { createServiceClient } from "@/lib/supabase";
 import { werteCounselAus } from "@/lib/counsel-urteil";
-import { pruefeFreigabe } from "@/lib/freigabe-regeln";
+import { geprueftenTextAusSchritten, pruefeFreigabe } from "@/lib/freigabe-regeln";
 import { bereinigeFehler, pruefeAnfrageHerkunft } from "@/lib/status-server";
 
 // Content-Freigabe-Aktionen: Übergänge zwischen den Status der content-Tabelle.
@@ -37,6 +37,11 @@ import { bereinigeFehler, pruefeAnfrageHerkunft } from "@/lib/status-server";
 // Gesamtprüfung 06.11.2026: Cross-Site-POST → 403, ohne JSON-Content-Type → 415
 // (pruefeAnfrageHerkunft), bevor gelesen oder geschrieben wird. Vorher konnte im Dev-Modus jede
 // fremde Seite im selben Browser "freigeben" für beliebige IDs senden.
+//
+// Objekt-Studio Stufe 2, Schritt 5 (10.11.2026, R2/E13): "freigeben" verlangt zusätzlich, dass
+// COUNSEL genau den Freigabetext geprüft hat (geprueftenTextAusSchritten aus metadata.steps und
+// review_notes, lib/freigabe-regeln.ts). Sonst 409 mit Sperrgrund "… (R2)" — auch für Altzeilen, deren
+// body die ungeprüfte PUBLISHER-Fassung ist.
 
 type Aktion = "freigeben" | "ablehnen" | "gepostet" | "metriken";
 
@@ -181,10 +186,12 @@ export async function POST(request: NextRequest) {
     switch (aktion) {
       case "freigeben": {
         // R4: dieselbe Regel wie Freigabe-Stapel und Knopf — nur COUNSEL-Urteil FREIGABE,
-        // ein Text ab Mindestlänge und ohne geschützten Namen.
+        // ein Text ab Mindestlänge und ohne geschützten Namen; R2 (Paket B): nur der Text, den
+        // COUNSEL wörtlich geprüft hat.
         const body = typeof eintrag.body === "string" ? eintrag.body : null;
         const reviewNotes = typeof eintrag.review_notes === "string" ? eintrag.review_notes : null;
-        const pruefung = pruefeFreigabe(werteCounselAus(reviewNotes), body);
+        const geprueft = geprueftenTextAusSchritten(alteMetadata.steps, reviewNotes);
+        const pruefung = pruefeFreigabe(werteCounselAus(reviewNotes), body, geprueft);
         if (!pruefung.freigebbar || body === null) {
           return fehler(409, pruefung.grund ?? "Freigabetext nicht lesbar");
         }

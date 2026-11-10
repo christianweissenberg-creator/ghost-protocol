@@ -351,11 +351,13 @@ async function produziere(dryRun: boolean): Promise<Lauf> {
       publisher_fassung: vorschau === null ? null : vorschau.slice(0, 2000).join(""),
       publisher_fassung_gekuerzt: vorschau !== null && vorschau.length > 2000,
       // Ohne PUBLISHER-Text (z. B. COUNSEL hat abgelehnt) gibt es auch keine Fassung zu benennen.
+      // Paket B (R2): Seit der COUNSEL-Endprüfung ist der geprüfte Text die PUBLISHER-Fassung selbst;
+      // der Hinweis nennt deshalb nicht mehr "SCRIBE-Text", sondern den geprüften Text allgemein.
       publisher_fassung_hinweis:
         vorschau === null
           ? "keine PUBLISHER-Fassung im Ergebnis"
           : identisch
-            ? "PUBLISHER-Fassung, identisch mit dem von COUNSEL geprüften SCRIBE-Text"
+            ? "PUBLISHER-Fassung, identisch mit dem von COUNSEL geprüften Text"
             : "PUBLISHER-Fassung, von COUNSEL nicht geprüft",
     },
     200,

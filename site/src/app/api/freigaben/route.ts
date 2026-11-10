@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { createServiceClient } from "@/lib/supabase";
 import { werteCounselAus } from "@/lib/counsel-urteil";
-import { maskiereGeschuetzteNamen, pruefeFreigabe } from "@/lib/freigabe-regeln";
+import { geprueftenTextAusSchritten, maskiereGeschuetzteNamen, pruefeFreigabe } from "@/lib/freigabe-regeln";
 import type { FreigabeEintrag, FreigabenAntwort } from "@/lib/status-types";
 import {
   ABFRAGE_TIMEOUT_MS,
@@ -39,6 +39,12 @@ import type { FreigabenAbfrageArt } from "@/lib/freigaben-cache";
 // /api/content/status das Freigeben serverseitig sperrt (R4). title und die URTEIL-Zeile
 // gehen nur mit maskiertem geschütztem Namen hinaus (R24). geprueft_ungleich_freigabe
 // bleibt: body ist weiter die PUBLISHER-Fassung (R2, Entscheidung des Inhabers steht aus).
+//
+// Paket B, Schritt 5 (10.11.2026, R2/E13 entschieden): Der geprüfte Text kommt aus
+// geprueftenTextAusSchritten (lib/freigabe-regeln.ts) — bei Läufen mit COUNSEL-Endprüfung die
+// PUBLISHER-Fassung, deren Urteil in review_notes steht, sonst wie bisher der SCRIBE-Text. Neue Zeilen
+// tragen damit kein geprueft_ungleich_freigabe mehr. Derselbe Text geht an pruefeFreigabe: Ein
+// Freigabetext, den COUNSEL nicht wörtlich geprüft hat, ist gesperrt (Sperrgrund "… (R2)").
 //
 // Alles oder nichts: scheitert eine der beiden Abfragen, sind beide Listen leer und
 // "fehler" ist gesetzt. Eine halbe Liste sähe sonst aus wie "nichts hängt".
@@ -104,16 +110,16 @@ function zuEintrag(z: unknown, jetztMs: number): FreigabeEintrag {
   // Zeichen = Unicode-Codepunkte des getrimmten body, damit gilt: text_leer ⇔ text_zeichen === 0.
   const text = (textOderNull(z.body) ?? "").trim();
 
-  // metadata.steps[1] ist SCRIBE (Reihenfolge in api/content/pipeline/route.ts); dessen
-  // output hat COUNSEL geprüft. Fehlt er, gilt der Freigabetext als ungeprüft (fail-closed).
-  const steps: unknown = z.steps;
-  const schritt: unknown = Array.isArray(steps) ? steps[1] : undefined;
-  const geprueft = istObjekt(schritt) ? textOderNull(schritt.output) : null;
+  // Text, dem das COUNSEL-Urteil (review_notes) gilt (Paket B, R2): mit Endprüfung die
+  // PUBLISHER-Fassung, sonst metadata.steps[1] (SCRIBE). Fehlt er, gilt der Freigabetext als
+  // ungeprüft (fail-closed).
+  const reviewNotes = textOderNull(z.review_notes);
+  const geprueft = geprueftenTextAusSchritten(z.steps, reviewNotes);
 
   // Urteil und Sperre mit derselben Regel wie der Server beim Freigeben (content/status).
   // pruefung.zeile ist bereits maskiert.
   const status = String(z.status);
-  const pruefung = pruefeFreigabe(werteCounselAus(textOderNull(z.review_notes)), textOderNull(z.body));
+  const pruefung = pruefeFreigabe(werteCounselAus(reviewNotes), textOderNull(z.body), geprueft);
   // Fail-closed: null heißt "serverseitig freigebbar" — das gilt nur im Status zur_freigabe.
   const sperre =
     pruefung.grund ?? (status === STATUS_WARTEND ? null : `Status "${status}" — freigebbar ist nur "${STATUS_WARTEND}"`);

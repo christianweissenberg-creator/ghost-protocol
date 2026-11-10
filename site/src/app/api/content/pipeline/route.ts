@@ -1,15 +1,45 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServiceClient } from "@/lib/supabase";
 import { werteCounselAus } from "@/lib/counsel-urteil";
-import { MIN_FREIGABE_ZEICHEN, enthaeltGeschuetztenNamen, maskiereGeschuetzteNamen } from "@/lib/freigabe-regeln";
+import {
+  MIN_FREIGABE_ZEICHEN,
+  STUFE_ENDPRUEFUNG,
+  enthaeltGeschuetztenNamen,
+  geprueftenTextAusSchritten,
+  maskiereGeschuetzteNamen,
+} from "@/lib/freigabe-regeln";
 import { bereinigeFehler, leseProtokollEintraege, pruefeAnfrageHerkunft } from "@/lib/status-server";
 import { STEINADEL_REGELPAKET } from "@/lib/steinadel-regelpaket";
+import { baueKurzlink, pruefeKurzlinksImText } from "@/lib/steinadel-kurzlink";
+import type { KurzlinkPruefung, KurzlinkTextPruefung } from "@/lib/steinadel-kurzlink";
+import { DATIERUNG_AUSNAHMEN, istStudioObjekt } from "@/lib/studio/objekte";
 
 const BASE_URL = process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000";
 
-// Content-First Pipeline: RESEARCHER → SCRIBE → COUNSEL → PUBLISHER → AMPLIFIER
+// Content-First Pipeline: RESEARCHER → SCRIBE → COUNSEL → PUBLISHER → COUNSEL (Endfassung) → AMPLIFIER
 // COUNSEL ist Pflicht-Schritt (fail-closed): ohne eindeutige Freigabe-Empfehlung
 // stoppt die Pipeline, PUBLISHER/AMPLIFIER laufen NICHT.
+//
+// Objekt-Studio Stufe 2, Paket B, Schritte 4 und 5 (10.11.2026; Spezifikation §6.3, §8.1, §9;
+// Entscheidungen E10–E13 des Inhabers vom 10.11.2026):
+// - Datierung im Objektblock: Hat das Objekt eine Datierungs-Ausnahme (lib/studio/objekte.ts,
+//   DATIERUNG_AUSNAHMEN) und nennt der Export genau dieses Jahr, heißt die Zeile wie die Ausnahme,
+//   beim RitterGut "Ersterwähnung: 1335" statt "Baujahr: 1335". Fundstelle siehe DATIERUNG_FUNDSTELLE.
+//   Das Exportfeld baujahr bleibt unverändert (es gehört Steinadel); der Objekt-Snapshot belegt die
+//   Bezeichnung (objekt_snapshot.datierung).
+// - CTA als Kurzlink https://steinadel.de/k/<kampagne>/<präfix>-<slug>-<id> statt Direktlink (E12,
+//   lib/steinadel-kurzlink.ts). Ersatzweg §6.3: Der Code prüft den Link deterministisch — beim Bauen
+//   (Form, Auflösung, Gegenprobe mit der lpUrl des Exports) und in SCRIBE-Text und Endfassung (CTA-Link
+//   unverändert da, keine fremden /k/- und keine /l/-Links). COUNSEL bekommt die aufgelöste Ziel-URL mit
+//   UTMs. Besteht ein Text die Prüfung nicht, endet der Lauf vor dem nächsten bezahlten Aufruf.
+// - R39 (E10, E11): LinkedIn ist Plattform der Pipeline (Format linkedin_post, Präfix li). Die
+//   Pflichtzeilen (Modellrechnung-Disclaimer, KI-Kennzeichnung, Impressum) kommen wie bei allen
+//   Plattformen aus buildObjektBlock (seit 0f553a9).
+// - R2 (E13): Eine sechste Stufe counsel_endfassung (STUFE_ENDPRUEFUNG) prüft die PUBLISHER-Fassung
+//   wörtlich, bevor AMPLIFIER läuft. Ihre Antwort ist review_notes und metadata.counsel; die erste
+//   Prüfung (SCRIBE-Text) steht als metadata.counsel_vorpruefung. Freigegeben wird nur, was COUNSEL
+//   wörtlich geprüft hat (pruefeFreigabe mit geprueftenTextAusSchritten, lib/freigabe-regeln.ts). Die
+//   Kosten der Endprüfung stehen in steps[4].cost und in der Summe.
 //
 // Stufe 1 (05.11.2026) — Freigabe und Beleg-Kette:
 // - Das COUNSEL-Urteil wertet werteCounselAus() aus (lib/counsel-urteil.ts); die frühere
@@ -54,8 +84,8 @@ const BASE_URL = process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000";
 //   usage.cost_usd (bezahlter Aufruf ohne verwertbare Antwort, HTTP 502), übernimmt die Stufe
 //   diese Kosten statt null — wie delegate und /api/status.
 // - platform und format nur aus FORMATE_JE_PLATTFORM, sonst 400 vor jedem Aufruf (vorher lief
-//   eine unbekannte Plattform mit den X-Anweisungen als Rückfall). LinkedIn steht nicht darin:
-//   ob es eine Plattform der Pipeline wird, entscheidet der Inhaber (R39).
+//   eine unbekannte Plattform mit den X-Anweisungen als Rückfall). LinkedIn stand damals nicht darin
+//   (R39 offen); seit Paket B (E11, 10.11.2026) steht es darin.
 // - Ein CTA-Link mit geschütztem Namen wird weder in den SCRIBE-Auftrag geschrieben noch als
 //   metadata.cta_link gespeichert (Warnung mit Stufe "objekt").
 // - pruefeAnfrageHerkunft (lib/status-server.ts): Cross-Site-POST → 403, ohne JSON-Content-Type
@@ -76,6 +106,7 @@ const BASE_URL = process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000";
 //   Pipeline, Freigeben (api/content/status) und Freigabe-Stapel (api/freigaben).
 // - body bleibt die PUBLISHER-Fassung (R2): Welcher Text freigegeben wird, entscheidet der
 //   Inhaber; metadata.freigabe_hinweis hält fest, ob sie dem geprüften SCRIBE-Text gleicht.
+//   (Entschieden am 10.11.2026, E13: nur wörtlich geprüfter Text — siehe Paket B oben.)
 
 // Stufe 1 (05.11.2026): "krypto_trading" entfernt — Ghost Protocol hat mit Trading
 // nichts zu tun. Unbekannte Kategorien werden abgewiesen statt still umgedeutet.
@@ -102,10 +133,12 @@ function istKategorie(wert: unknown): wert is Kategorie {
 
 // Gesamtprüfung 06.11.2026: zulässige Plattformen und Formate (auch für GET). Jede hat
 // Anweisungen in platformInstructions und Beschriftungen in platformLabel/formatLabel.
+// Paket B (10.11.2026, R39, E11): linkedin mit dem Format linkedin_post.
 const FORMATE_JE_PLATTFORM: Readonly<Record<string, readonly string[]>> = {
   youtube: ["longform", "short", "deep_dive"],
   twitter: ["thread"],
   x: ["thread"],
+  linkedin: ["linkedin_post"],
   newsletter: ["newsletter_issue"],
   tiktok: ["tiktok_short"],
   instagram: ["carousel", "reel", "story"],
@@ -120,12 +153,34 @@ function eingabeText(wert: unknown): string {
   return maskiereGeschuetzteNamen(String(wert)).slice(0, 40);
 }
 
-type Stufe = "researcher" | "scribe" | "counsel" | "publisher" | "amplifier";
+// Paket B (10.11.2026, R2/E13): counsel_endfassung ist COUNSEL auf der PUBLISHER-Fassung. Der Name
+// der Stufe steht in steps[].agent (wie bisher der Agentenname); welchen Agenten sie aufruft, sagt
+// AGENT_JE_STUFE.
+type Stufe = "researcher" | "scribe" | "counsel" | "publisher" | typeof STUFE_ENDPRUEFUNG | "amplifier";
+
+const AGENT_JE_STUFE: Readonly<Record<Stufe, string>> = {
+  researcher: "researcher",
+  scribe: "scribe",
+  counsel: "counsel",
+  publisher: "publisher",
+  [STUFE_ENDPRUEFUNG]: "counsel",
+  amplifier: "amplifier",
+};
 
 interface PipelineRequest {
   topic?: string;
-  platform: "youtube" | "twitter" | "x" | "newsletter" | "tiktok" | "instagram";
-  format: "longform" | "short" | "thread" | "deep_dive" | "newsletter_issue" | "tiktok_short" | "reel" | "carousel" | "story";
+  platform: "youtube" | "twitter" | "x" | "linkedin" | "newsletter" | "tiktok" | "instagram";
+  format:
+    | "longform"
+    | "short"
+    | "thread"
+    | "deep_dive"
+    | "linkedin_post"
+    | "newsletter_issue"
+    | "tiktok_short"
+    | "reel"
+    | "carousel"
+    | "story";
   category?: Kategorie;
   repurpose_from?: string; // Original-Content für Repurposing
   objekt_slug?: string; // Steinadel-Objekt (optional) — bindet Objektdaten in RESEARCHER/SCRIBE ein
@@ -335,15 +390,88 @@ interface ObjektSnapshot {
   abgerufen_am: string;
   export: ExportKopf;
   objekt: Record<(typeof SNAPSHOT_FELDER)[number], unknown>;
+  /** Paket B: Bezeichnung der Datierungszeile im Prompt, nur bei Objekten mit Datierungs-Ausnahme. */
+  datierung?: DatierungsBeleg;
 }
 
-function baueSnapshot(o: ObjektApi, kopf: ExportKopf, abgerufenAm: string): ObjektSnapshot {
+function baueSnapshot(o: ObjektApi, kopf: ExportKopf, abgerufenAm: string, datierung: DatierungsBeleg | null): ObjektSnapshot {
   const objekt = {} as ObjektSnapshot["objekt"];
   for (const feld of SNAPSHOT_FELDER) {
     // Fehlt ein Feld im Export, steht null im Beleg — kein Ersatzwert.
     objekt[feld] = o[feld] ?? null;
   }
-  return { abgerufen_am: abgerufenAm, export: kopf, objekt };
+  return { abgerufen_am: abgerufenAm, export: kopf, objekt, ...(datierung ? { datierung } : {}) };
+}
+
+// ═══ Datierung (Paket B, Schritt 4, 10.11.2026) ═══
+// Die Ausnahmen kommen aus lib/studio/objekte.ts (DATIERUNG_AUSNAHMEN) — dieselbe Regel wie der
+// Studio-Kopf (lib/studio/lesen.ts, kopfAusExport): Nennt der Export genau das Jahr der Ausnahme, heißt
+// die Zeile wie die Ausnahme; nennt er ein anderes, heißt sie "Baujahr" wie das Exportfeld, und der
+// Lauf trägt eine Warnung. Fundstelle der Ausnahme je Objekt (Steinadel-Repo, nur gelesen, 0f3e82c):
+const DATIERUNG_FUNDSTELLE: Readonly<Record<string, string>> = {
+  "rittergut-seifersdorf":
+    "SR/docs/import/extraktion-rohdaten.json:552 (Feld Baujahr: historische Gründung „Est. 1335“, Stallungen um 1750 bzw. Ende 19. Jh.); " +
+    "SR/apps/web/src/app/(public)/dossier/[slug]/dossier-content.ts:51 („1335 · gegr. · Ersterwähnung“)",
+};
+
+/** Beleg der Datierungszeile im Objekt-Snapshot (nur bei Objekten mit Datierungs-Ausnahme). */
+interface DatierungsBeleg {
+  feld: "baujahr";
+  /** Bezeichnung der Zeile im Prompt: die der Ausnahme oder "Baujahr". */
+  bezeichnung: string;
+  /** Exportwert, unverändert. */
+  wert: string | number | null;
+  ausnahme_greift: boolean;
+  /** Jahr, für das die Ausnahme gilt. */
+  ausnahme_jahr: number;
+  quelle: string;
+  fundstelle: string | null;
+}
+
+interface Datierung {
+  /** Zeile im Objektblock. */
+  zeile: string;
+  beleg: DatierungsBeleg | null;
+  /** Warnung, wenn die Ausnahme nicht greift; sonst null. */
+  warnung: string | null;
+}
+
+/** Ganze Zahl aus dem Export (Zahl oder Ziffernfolge), wie im Studio-Kopf; sonst null. */
+function ganzeZahl(wert: string | number | null): number | null {
+  if (typeof wert === "number") return Number.isInteger(wert) ? wert : null;
+  if (typeof wert === "string" && /^\d{1,6}$/.test(wert.trim())) return Number(wert.trim());
+  return null;
+}
+
+function datierungFuer(o: ObjektApi): Datierung {
+  const ausnahme = istStudioObjekt(o.slug) ? (DATIERUNG_AUSNAHMEN[o.slug] ?? null) : null;
+  const baujahrZeile = `Baujahr: ${anzeige(o.baujahr)}`;
+  if (ausnahme === null) return { zeile: baujahrZeile, beleg: null, warnung: null };
+  const greift = ganzeZahl(o.baujahr) === ausnahme.jahr;
+  const beleg: DatierungsBeleg = {
+    feld: "baujahr",
+    bezeichnung: greift ? ausnahme.bezeichnung : "Baujahr",
+    wert: o.baujahr,
+    ausnahme_greift: greift,
+    ausnahme_jahr: ausnahme.jahr,
+    quelle: ausnahme.quelle,
+    fundstelle: DATIERUNG_FUNDSTELLE[o.slug] ?? null,
+  };
+  if (!greift) {
+    return {
+      zeile: baujahrZeile,
+      beleg,
+      warnung: `Objekt-Ausnahme „${ausnahme.bezeichnung}“ gilt nur für den Exportwert ${ausnahme.jahr}; der Export nennt ${
+        o.baujahr === null ? "kein Jahr" : anzeige(o.baujahr)
+      }, im Prompt als Baujahr`,
+    };
+  }
+  const wert = anzeige(o.baujahr);
+  return {
+    zeile: `${ausnahme.bezeichnung}: ${wert} (Exportfeld baujahr; das ist nicht das Baujahr — schreibe nie „Baujahr ${wert}“)`,
+    beleg,
+    warnung: null,
+  };
 }
 
 // Regelpaket-Version aus der Kopfzeile lesen, z. B. "— v1.1 (Stand 29.07.2026)".
@@ -451,7 +579,7 @@ function leseKosten(obj: Record<string, unknown>): number | null {
 // leere Antwort → 502 { fehler: "leere Antwort", agent_id, model, stop_reason, usage,
 // protokoll_fehler, protokoll_fehler_liste }. Fehler werfen (AktivierungsFehler mit den
 // Protokollfehlern und den gemeldeten Kosten der Fehlerantwort).
-async function activateAgent(agentId: Stufe, task: string, cookie: string): Promise<Aktivierung> {
+async function activateAgent(agentId: string, task: string, cookie: string): Promise<Aktivierung> {
   const res = await fetch(`${BASE_URL}/api/agents/activate`, {
     method: "POST",
     headers: {
@@ -532,7 +660,8 @@ async function fuehreStufeAus(
   step.status = "running";
   const start = Date.now();
   try {
-    const r = await activateAgent(step.agent, task, cookie);
+    // Paket B: Die Stufe counsel_endfassung ruft COUNSEL auf (AGENT_JE_STUFE).
+    const r = await activateAgent(AGENT_JE_STUFE[step.agent], task, cookie);
     step.output = r.response;
     step.cost = r.cost;
     step.model = r.model;
@@ -595,7 +724,8 @@ function zusammenfassung(steps: PipelineStep[]) {
   return {
     ...kostenZusammenfassung(steps),
     total_duration_ms: steps.reduce((sum, s) => sum + (s.duration_ms ?? 0), 0),
-    completed: `${steps.filter((s) => s.status === "done").length}/5`,
+    // Paket B: sechs Stufen (mit der COUNSEL-Endprüfung); gezählt wird die Länge, nicht eine feste Zahl.
+    completed: `${steps.filter((s) => s.status === "done").length}/${steps.length}`,
   };
 }
 
@@ -663,8 +793,11 @@ async function fetchObjekt(slug: string, cookie: string): Promise<ObjektAbruf> {
   };
 }
 
-// OBJEKTDATEN-Block für RESEARCHER/SCRIBE/COUNSEL — inkl. Zahlen-Regel
-function buildObjektBlock(o: ObjektApi): string {
+// OBJEKTDATEN-Block für RESEARCHER/SCRIBE/COUNSEL (seit Paket B auch PUBLISHER) — inkl. Zahlen-Regel.
+// Paket B (10.11.2026): Datierungszeile aus datierungFuer (Ersterwähnung statt Baujahr), und der CTA
+// verweist auf den Kurzlink (Abschnitt CTA-LINK, ctaBlock) statt auf die Kampagnen-URL; ohne Kurzlink
+// gibt es einen allgemeinen CTA ohne Link.
+function buildObjektBlock(o: ObjektApi, datierung: Datierung, mitKurzlink: boolean): string {
   // Fixrunde 06.11.2026 (R21): Felder sind geprüft (pruefeExportObjekt); fehlende optionale
   // stehen als "nicht im Export" da, nie als "undefined".
   const kennzahlenText = o.kennzahlen.length
@@ -681,7 +814,7 @@ Name: ${o.name}
 Untertitel: ${anzeige(o.untertitel)}
 Tagline: ${anzeige(o.tagline)}
 Ort: ${anzeige(o.ort)}
-Baujahr: ${anzeige(o.baujahr)}
+${datierung.zeile}
 Preis: ${o.preis}
 Kurzbeschreibung: ${anzeige(o.kurzbeschreibung)}
 Status: ${anzeige(o.statusBadge)}
@@ -723,7 +856,11 @@ scheiterten):
    "Impressum: steinadel.de/impressum" (§5 TMG).
 3. KEINE SOCIAL-HANDLES: Stand heute existieren KEINE bestätigten Steinadel-Konten.
    Erfinde niemals ein Handle (kein "@steinadel", kein "@steinadel_immobilien").
-   Der CTA verweist auf die oben genannte Kampagnen-/Objekt-URL, nicht auf ein Profil.
+   ${
+     mitKurzlink
+       ? "Der CTA verweist auf den Kurzlink (Abschnitt CTA-LINK bzw. KURZLINK), nicht auf ein Profil\n   und nicht direkt auf die Kampagnenseite."
+       : "Es gibt keinen CTA-Link: allgemeiner CTA ohne Link, keine steinadel.de-Adresse außer\n   dem Impressums-Verweis."
+   }
 4. KEINE GESCHÄFTS-/ERFOLGSZAHLEN: kein Umsatz, MRR, Kunden-, Abonnenten- oder
    Followerzahlen, kein "ausgebucht"/"Warteliste" — auch nicht aus anderen
    Projekten (Interna anderer Projekte und Marken gehören NIE in Steinadel-Content).
@@ -732,9 +869,54 @@ scheiterten):
    behauptet.`;
 }
 
-// Erlaubtes Zeichenset für utm_content erzwingen
-function sanitizeUtm(value: string): string {
-  return value.toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/-+/g, "-");
+// ═══ CTA-Kurzlink (Paket B, Schritt 4, 10.11.2026; E12-Ersatzweg, lib/steinadel-kurzlink.ts) ═══
+// Vorher: Direktlink lpUrl?utm_source=<plattform>&utm_medium=social&… mit utm_content aus sanitizeUtm.
+
+type Kurzlink = Extract<KurzlinkPruefung, { ok: true }>;
+
+const KURZLINK_REGEL =
+  "E12-Ersatzweg (Spezifikation §6.3): im Code geprüft, Auflösung wie die Steinadel-Weiterleitung (lib/steinadel-kurzlink.ts)";
+
+/** Grund, mit dem ein Lauf endet, wenn ein Text die Kurzlink-Prüfung nicht besteht. */
+const KURZLINK_GRUND = "Kurzlink-Prüfung nicht bestanden (E12)";
+
+/** CTA-Regel für SCRIBE und PUBLISHER: der Kurzlink wörtlich, kein anderer steinadel.de-Link. */
+function ctaBlock(k: Kurzlink): string {
+  return `CTA-LINK (Pflicht, Zeichen für Zeichen übernehmen): ${k.link}
+- Genau dieser Link steht im CTA (bei X im letzten Tweet). Nicht kürzen, nichts anhängen, keine
+  UTM-Parameter ergänzen, kein Schrägstrich am Ende — die UTMs setzt der Steinadel-Server beim
+  Weiterleiten.
+- Keine andere steinadel.de-Adresse als Link (keine Kampagnenseite /l/…, keine Objektseite);
+  daneben erlaubt ist nur der Impressums-Verweis "Impressum: steinadel.de/impressum".`;
+}
+
+/** Für COUNSEL: was der Code geprüft hat — jeder Kurzlink im Text mit aufgelöster Ziel-URL und UTMs. */
+function kurzlinkBlock(pruefung: KurzlinkTextPruefung): string {
+  const zeilen = pruefung.kurzlinks.map(
+    (k) =>
+      `- ${k.link} (${k.cta ? "CTA-Link, steht unverändert im Content" : "Kurzlink desselben Laufs mit anderem Kanal-Präfix"})\n` +
+      `  leitet weiter auf ${k.ziel.url}\n` +
+      `  Ziel: Kampagnenseite ${k.ziel.lp_pfad} auf steinadel.de; utm_source ${k.ziel.utm_source}, utm_medium ${k.ziel.utm_medium}, ` +
+      `utm_campaign ${k.ziel.utm_campaign} (= Slug der Kampagnenseite), utm_content ${k.ziel.utm_content}`
+  );
+  return `KURZLINK — vom Code deterministisch geprüft (Ersatzweg nach Entscheidung des Betreibers vom 10.11.2026):
+Der CTA ist ein Kurzlink https://steinadel.de/k/<kampagne>/<präfix>-<objekt>-<id>. Er zählt Klicks; die
+UTM-Parameter setzt der Steinadel-Server beim Weiterleiten (307). Geprüft wurden Form, Auflösung und Ziel
+jedes Kurzlinks im Content. Andere Kurzlinks und Direktlinks auf /l/-Seiten enthält der Content nicht.
+${zeilen.join("\n")}
+Prüfe die Kurzlinks anhand dieser aufgelösten Ziel-URLs (Regelpaket §2 Ziel-Links, §3 UTM-Konvention).
+Alle übrigen Inhalte und Links prüfst du wie immer nach dem Regelpaket.`;
+}
+
+/** Ergebnis einer Textprüfung für metadata.kurzlink; Befunde mit maskiertem Namen (sie zitieren den Text). */
+function textPruefungBeleg(p: KurzlinkTextPruefung) {
+  return {
+    ok: p.ok,
+    cta_treffer: p.cta_treffer,
+    kurzlinks: p.kurzlinks.map((k) => maskiereGeschuetzteNamen(k.link)),
+    befunde: p.befunde.map(maskiereGeschuetzteNamen),
+    am: new Date().toISOString(),
+  };
 }
 
 type Dienst = ReturnType<typeof createServiceClient>;
@@ -776,11 +958,13 @@ export async function POST(request: NextRequest) {
   const warnungen: Vermerk[] = [];
   let basisMetadata: Record<string, unknown> = {};
 
+  // Paket B (R2): steps[4] ist die COUNSEL-Endprüfung, AMPLIFIER rückt auf steps[5].
   const steps: PipelineStep[] = [
     { agent: "researcher", status: "pending" },
     { agent: "scribe", status: "pending" },
     { agent: "counsel", status: "pending" },
     { agent: "publisher", status: "pending" },
+    { agent: STUFE_ENDPRUEFUNG, status: "pending" },
     { agent: "amplifier", status: "pending" },
   ];
 
@@ -897,6 +1081,7 @@ export async function POST(request: NextRequest) {
     // ═══ Objektdaten laden (falls objekt_slug gesetzt) ═══
     let objekt: ObjektApi | null = null;
     let objektSnapshot: ObjektSnapshot | null = null;
+    let datierung: Datierung | null = null;
     if (objekt_slug) {
       const abruf = await fetchObjekt(objekt_slug, cookie);
       if (abruf.art === "export_fehler") {
@@ -913,16 +1098,19 @@ export async function POST(request: NextRequest) {
         return fehlerAntwort(502, `Export-Objekt unvollständig: ${abruf.feld}`);
       }
       objekt = abruf.objekt;
-      objektSnapshot = baueSnapshot(abruf.objekt, abruf.kopf, abruf.abgerufen_am);
+      // Paket B: Datierungszeile (Ersterwähnung statt Baujahr) — im Snapshot belegt, damit der Beleg
+      // zeigt, wie die Zeile im Prompt hieß.
+      datierung = datierungFuer(abruf.objekt);
+      if (datierung.warnung) warnungen.push(vermerk("objekt", datierung.warnung));
+      objektSnapshot = baueSnapshot(abruf.objekt, abruf.kopf, abruf.abgerufen_am, datierung.beleg);
     }
 
     const thema = objekt ? objekt.name : (topic as string);
-    const objektBlock = objekt ? buildObjektBlock(objekt) : null;
 
     // LinkedIn = Qualitätskanal laut Steinadel-Funnel-Plan (P2/P4): Fachton,
     // belegte Marktdaten mit Quelle, keine Reel-Ästhetik.
     const platformLabel: Record<string, string> = { youtube: "YouTube-Video", twitter: "X/Twitter-Thread", x: "X/Twitter-Thread", newsletter: "Newsletter-Ausgabe", tiktok: "TikTok-Video", instagram: "Instagram-Post", linkedin: "LinkedIn-Post (Fachton, keine Reel-Ästhetik)" };
-    const formatLabel: Record<string, string> = { longform: "Longform (8-12 Min)", short: "Short (60 Sek)", thread: "Thread (5-8 Posts)", deep_dive: "Deep Dive (15+ Min)", newsletter_issue: "Newsletter-Ausgabe", tiktok_short: "TikTok Short (30-60 Sek)", reel: "Reel (30-90 Sek)", carousel: "Carousel (5-10 Slides)", story: "Story (15 Sek Clips)" };
+    const formatLabel: Record<string, string> = { longform: "Longform (8-12 Min)", short: "Short (60 Sek)", thread: "Thread (5-8 Posts)", deep_dive: "Deep Dive (15+ Min)", linkedin_post: "Fachbeitrag, 1.200-2.000 Zeichen", newsletter_issue: "Newsletter-Ausgabe", tiktok_short: "TikTok Short (30-60 Sek)", reel: "Reel (30-90 Sek)", carousel: "Carousel (5-10 Slides)", story: "Story (15 Sek Clips)" };
     const categoryKey: Kategorie = category ?? "ghost_protocol";
     // R24: Objekt-Läufe ohne Projektnamen in der Kategorie (KATEGORIE_LABEL_OBJEKT).
     const kategorieLabel = (objekt ? KATEGORIE_LABEL_OBJEKT : KATEGORIE_LABEL)[categoryKey];
@@ -998,26 +1186,70 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // ═══ UTM-Registry (nur bei Objekt + vorhandener Kampagne) ═══
+    // ═══ CTA-Kurzlink (Paket B, Schritt 4, E12; nur bei Objekt + vorhandener Kampagne) ═══
+    // Kampagne bleibt die erste des Objekts (beim RitterGut afa-rechner-p1), Präfix aus der Plattform
+    // (twitter → x), Content <präfix>-<slug>-<id> (lib/steinadel-kurzlink.ts). Lässt sich der Kurzlink
+    // nicht bauen oder nicht prüfen, gibt es keinen CTA-Link (Warnung) — kein Rückfall auf den Direktlink.
     let utmContent: string | null = null;
     let ctaLink: string | null = null;
     let kampagneSlug: string | null = null;
+    let kurzlink: Kurzlink | null = null;
     if (objekt && objekt.kampagnen.length > 0) {
       const kampagne = objekt.kampagnen[0];
-      utmContent = sanitizeUtm(`${platform}-${objekt_slug}-${contentId}`);
-      ctaLink =
-        `${kampagne.lpUrl}?utm_source=${encodeURIComponent(platform)}` +
-        `&utm_medium=social&utm_campaign=${encodeURIComponent(kampagne.kampagne)}` +
-        `&utm_content=${utmContent}`;
       kampagneSlug = kampagne.kampagne;
+      const bau = baueKurzlink({ plattform: platform, kampagne: kampagne.kampagne, lpUrl: kampagne.lpUrl, slug: objekt.slug, id: contentId });
+      if (bau.ok) {
+        kurzlink = bau.pruefung;
+        ctaLink = bau.pruefung.link;
+        utmContent = bau.pruefung.content;
+      } else {
+        warnungen.push(vermerk("objekt", "Kurzlink nicht baubar — kein CTA-Link", bau.grund));
+      }
     }
     // Gesamtprüfung 06.11.2026: Ein CTA-Link mit geschütztem Namen geht weder in den
     // SCRIBE-Auftrag (dort "EXAKT diesen Link") noch in metadata.cta_link (Kopieren-Knopf).
+    // Paket B: dann auch kein Kurzlink-Beleg und kein utm_content (beide tragen den Namen).
     if (ctaLink !== null && enthaeltGeschuetztenNamen(ctaLink)) {
       ctaLink = null;
+      utmContent = null;
+      kurzlink = null;
       warnungen.push(vermerk("objekt", "CTA-Link enthält einen geschützten Namen — nicht verwendet und nicht gespeichert"));
     }
-    basisMetadata = { ...basisMetadata, utm_content: utmContent, kampagne: kampagneSlug, cta_link: ctaLink };
+    basisMetadata = {
+      ...basisMetadata,
+      utm_content: utmContent,
+      kampagne: kampagneSlug,
+      cta_link: ctaLink,
+      ...(kurzlink
+        ? {
+            kurzlink: {
+              link: kurzlink.link,
+              ziel_url: kurzlink.ziel.url,
+              utm_source: kurzlink.ziel.utm_source,
+              utm_medium: kurzlink.ziel.utm_medium,
+              utm_campaign: kurzlink.ziel.utm_campaign,
+              utm_content: kurzlink.ziel.utm_content,
+              regel: KURZLINK_REGEL,
+            },
+          }
+        : {}),
+    };
+
+    // Objektblock erst jetzt: Er nennt den Kurzlink als CTA (oder den allgemeinen CTA ohne Link).
+    const objektBlock = objekt && datierung ? buildObjektBlock(objekt, datierung, kurzlink !== null) : null;
+    const cta = kurzlink ? `\n\n${ctaBlock(kurzlink)}` : "";
+
+    /**
+     * Kurzlinks eines Texts prüfen (E12-Ersatzweg) und das Ergebnis unter metadata.kurzlink[feld]
+     * belegen. null ohne Kurzlink (Lauf ohne Objekt oder ohne Kampagne).
+     */
+    const pruefeTextKurzlinks = (text: string, feld: "pruefung_scribe" | "pruefung_endfassung"): KurzlinkTextPruefung | null => {
+      if (!kurzlink || !objekt || contentId === null) return null;
+      const pruefung = pruefeKurzlinksImText(text, { link: kurzlink.link, kampagne: kurzlink.kampagne, slug: objekt.slug, id: contentId });
+      const bisher = istObjekt(basisMetadata.kurzlink) ? basisMetadata.kurzlink : {};
+      basisMetadata = { ...basisMetadata, kurzlink: { ...bisher, [feld]: textPruefungBeleg(pruefung) } };
+      return pruefung;
+    };
 
     // Abbruch mit status "fehler": Vermerk speichern und einheitlich antworten. Liegt schon
     // ein COUNSEL-Urteil vor (basisMetadata.counsel), bleibt es in metadata und Antwort.
@@ -1090,6 +1322,18 @@ Format: Strukturierte Bullet-Points, deutsch. Keine Floskeln, nur Fakten.${objek
   Situation und Behördenbescheinigung; keine Steuerberatung.")
 - Letzter Tweet: CTA mit EXAKT diesem Link${ctaLink ? `: ${ctaLink}` : " (kein Kampagnen-Link hinterlegt — allgemeiner CTA)"}
 - Keine Superlativ-Ketten, keine Caps-Lock-Dringlichkeit`,
+      // Paket B (10.11.2026, R39/E11): LinkedIn als Qualitätskanal — Regelpaket §4 (Fachton, belegte
+      // Marktdaten mit Quelle, keine Reel-Ästhetik) und Steinadel-Starterpaket. Die Pflichtzeilen
+      // (Disclaimer, KI-Kennzeichnung, Impressum) stehen bei Objekt-Läufen im Objektblock.
+      linkedin: `Schreibe einen LinkedIn-Post (${formatLabel[format]})${
+        objekt ? " im Steinadel-Ton (Qualitätskanal: Fachton, premium, editorial, ruhig)" : " (Fachton, sachlich)"
+      }:
+- Zeile 1-2: Hook mit einer belegten Zahl oder einer sachlichen These${objekt ? " aus den Objektdaten — NICHT erfunden" : ""} (sichtbar vor "…mehr anzeigen")
+- 3-5 kurze Absätze mit je 1-3 Sätzen, keine Reel-Ästhetik, keine Superlativ-Ketten, höchstens 1 Emoji
+- ${objekt ? "Zahlen NUR aus den Objektdaten (siehe REGEL); keine Marktdaten aus dem Gedächtnis" : "Marktdaten nur mit Quelle (z. B. Destatis), sonst weglassen"}
+- Schluss: CTA${ctaLink ? ` mit EXAKT diesem Link: ${ctaLink}` : objekt ? " ohne Link (kein Kampagnen-Link hinterlegt)" : ""}
+- Höchstens 3 fachliche Hashtags am Ende, kein Hashtag-Block
+- Länge: 1.200 bis 2.000 Zeichen`,
       newsletter: `Schreibe eine Newsletter-Ausgabe (${formatLabel[format]}):
 - Betreffzeile (max 50 Zeichen, Öffnungsrate-optimiert)
 - Preview-Text (max 90 Zeichen)
@@ -1156,7 +1400,7 @@ STILREGELN:
 - ${objekt ? "Interne System-, Projekt- und Agentennamen NICHT erwähnen" : "Ghost Protocol NICHT erwähnen"} (Agenten sind unsichtbar)
 ${objekt ? "" : `- Brandname für extern: "AI Insider" (Arbeitstitel)`}
 
-Liefere den fertigen Content, sofort publishbar.${objektBlock ? `\n\n${objektBlock}` : ""}`,
+Liefere den fertigen Content, sofort publishbar.${objektBlock ? `\n\n${objektBlock}` : ""}${cta}`,
       cookie,
       true,
       warnungen
@@ -1164,6 +1408,15 @@ Liefere den fertigen Content, sofort publishbar.${objektBlock ? `\n\n${objektBlo
     // Technischer Fehler oder abgeschnittener Text in SCRIBE → Abbruch, kein COUNSEL
     if (steps[1].status !== "done") {
       return brichAb(vermerk("scribe", steps[1].fehler ?? "unbekannter Fehler"));
+    }
+
+    // Paket B (E12-Ersatzweg): CTA-Link im SCRIBE-Text deterministisch prüfen, vor dem bezahlten
+    // COUNSEL-Aufruf. Fehlt er oder steht ein anderer /k/- oder ein /l/-Link da, endet der Lauf.
+    const kurzlinkScribe = pruefeTextKurzlinks(steps[1].output ?? "", "pruefung_scribe");
+    if (kurzlinkScribe && !kurzlinkScribe.ok) {
+      steps[1].status = "error";
+      steps[1].fehler = KURZLINK_GRUND;
+      return brichAb(vermerk("scribe", KURZLINK_GRUND, kurzlinkScribe.befunde.join("; ")));
     }
 
     // ═══ STEP 3: COUNSEL — Pflicht-Review, fail-closed ═══
@@ -1174,7 +1427,7 @@ Liefere den fertigen Content, sofort publishbar.${objektBlock ? `\n\n${objektBlo
 CONTENT:
 ${steps[1].output}
 
-${objektBlock ?? "OBJEKTDATEN: keine (Freitext-Content ohne Steinadel-Objektbezug)"}`,
+${objektBlock ?? "OBJEKTDATEN: keine (Freitext-Content ohne Steinadel-Objektbezug)"}${kurzlinkScribe ? `\n\n${kurzlinkBlock(kurzlinkScribe)}` : ""}`,
       cookie,
       true,
       warnungen
@@ -1279,7 +1532,12 @@ Liefere:
 - Finaler Content (mit deinen Korrekturen)
 - Metadaten (Title, Description, Tags, Hashtags)
 - Publishing-Zeitpunkt (Tag + Uhrzeit, DACH-optimiert)
-- Cross-Promotion-Posts (1 Tweet, 1 Newsletter-Teaser)`,
+- Cross-Promotion-Posts (1 Tweet, 1 Newsletter-Teaser)
+
+ENDFASSUNG (R2): Deine gesamte Antwort geht wörtlich an COUNSEL und danach unverändert zur
+Freigabe. Übernimm Pflichtzeilen (Modellrechnung-Disclaimer, KI-Kennzeichnung, Impressum)
+unverändert, ergänze keine neuen Zahlen, Handles, Siegel oder Erfolgsbehauptungen, und nenne
+Zeitpunkte nur als Empfehlung.${objektBlock ? `\n\n${objektBlock}` : ""}${cta}`,
       cookie,
       true,
       warnungen
@@ -1314,9 +1572,90 @@ Liefere:
       return brichAb(vermerk("publisher", NAMENSSCHUTZ_GRUND));
     }
 
-    // ═══ STEP 5: AMPLIFIER — Distribution-Plan ═══
+    // Paket B (E12-Ersatzweg): Kurzlinks der Endfassung prüfen, vor der bezahlten Endprüfung.
+    const kurzlinkEndfassung = pruefeTextKurzlinks(freigabeText, "pruefung_endfassung");
+    if (kurzlinkEndfassung && !kurzlinkEndfassung.ok) {
+      steps[3].status = "error";
+      steps[3].fehler = KURZLINK_GRUND;
+      return brichAb(vermerk("publisher", KURZLINK_GRUND, kurzlinkEndfassung.befunde.join("; ")));
+    }
+
+    // ═══ STEP 5: COUNSEL — Endprüfung der PUBLISHER-Fassung, wörtlich (Paket B, R2/E13) ═══
+    // Geprüft wird genau der Text, der als body zur Freigabe geht. Ohne Urteil FREIGABE läuft
+    // AMPLIFIER nicht; das spart dessen Aufruf und hält die Zeile bei "abgelehnt".
     await fuehreStufeAus(
       steps[4],
+      `ENDPRUEFUNG (R2): Pruefe die folgende ENDFASSUNG WOERTLICH und STRIKT gegen dein STEINADEL-REGELPAKET (fail-closed). Genau dieser Text geht unveraendert zur Freigabe — geprueft wird ALLES darin, auch Metadaten, Hashtags, Zeitpunkt-Empfehlung und Cross-Promotion-Texte. Zahlen NUR gegen die mitgelieferten Objektdaten abgleichen. Zitiere Verstoesse. HALTE das Review KOMPAKT (max. ~300 Woerter — nur Befunde, keine langen Tabellen) und schliesse ZWINGEND mit der URTEIL:-Zeile ab ('URTEIL: FREIGABE-EMPFEHLUNG' oder 'URTEIL: ABLEHNUNG').
+
+ENDFASSUNG (PUBLISHER):
+${freigabeText}
+
+${objektBlock ?? "OBJEKTDATEN: keine (Freitext-Content ohne Steinadel-Objektbezug)"}${kurzlinkEndfassung ? `\n\n${kurzlinkBlock(kurzlinkEndfassung)}` : ""}`,
+      cookie,
+      true,
+      warnungen
+    );
+    // Technischer Fehler: kein fachliches Urteil. review_notes bleibt die Vorprüfung (passend zu
+    // metadata.counsel); die Teilantwort steht als Beleg in steps[4].output.
+    if (steps[4].status !== "done") {
+      return brichAb(vermerk(STUFE_ENDPRUEFUNG, steps[4].fehler ?? "unbekannter Fehler"));
+    }
+
+    const endpruefungOutput = steps[4].output ?? "";
+    const endAuswertung = werteCounselAus(endpruefungOutput);
+    const endpruefung = {
+      urteil: endAuswertung.urteil,
+      zeile: endAuswertung.zeile === null ? null : maskiereGeschuetzteNamen(endAuswertung.zeile),
+      grund: endAuswertung.grund,
+      geprueft: "PUBLISHER-Text (steps[3]), wörtlich = Freigabetext (body)",
+      am: new Date().toISOString(),
+    };
+    const endAbgelehnt = endAuswertung.urteil !== "FREIGABE";
+    // Ab hier ist das maßgebliche Urteil die Endprüfung (passend zu review_notes); die Vorprüfung
+    // des SCRIBE-Texts bleibt als counsel_vorpruefung im Beleg.
+    basisMetadata = { ...basisMetadata, counsel: endpruefung, counsel_vorpruefung: counsel };
+
+    const endGespeichert = await speichere(
+      {
+        reviewed_by: "counsel",
+        review_notes: endpruefungOutput,
+        status: endAbgelehnt ? "abgelehnt" : "counsel_geprueft",
+        metadata: metadataMit(),
+      },
+      endAbgelehnt ? "Status abgelehnt (Endprüfung)" : "Endprüfung gespeichert"
+    );
+    // R6 wie bei der Vorprüfung: ohne gespeichertes Urteil kein weiterer Aufruf, Lauf "fehler".
+    if (!endGespeichert) {
+      return brichAb(
+        vermerk(
+          "pipeline",
+          endAbgelehnt ? "COUNSEL-Endprüfung nicht gespeichert" : "COUNSEL-Endprüfung nicht gespeichert — AMPLIFIER nicht gestartet",
+          letzterSpeicherfehler()
+        ),
+        { reviewed_by: "counsel", review_notes: endpruefungOutput }
+      );
+    }
+
+    if (endAbgelehnt) {
+      return NextResponse.json({
+        pipeline: "content-first",
+        contentId,
+        thema,
+        platform,
+        format,
+        status: "abgelehnt",
+        counsel: endpruefung,
+        counsel_vorpruefung: counsel,
+        warnungen,
+        steps,
+        summary: zusammenfassung(steps),
+        speicherfehler,
+      });
+    }
+
+    // ═══ STEP 6: AMPLIFIER — Distribution-Plan ═══
+    await fuehreStufeAus(
+      steps[5],
       `AMPLIFICATION-AUFTRAG: Erstelle den Distribution- und Repurposing-Plan für diesen Content.
 
 ORIGINAL-PLATTFORM: ${platform}
@@ -1325,10 +1664,10 @@ THEMA: ${thema}
 PUBLISHER-OUTPUT:
 ${steps[3].output}
 
-ALLE 5 PLATTFORMEN: YouTube, X/Twitter, TikTok, Instagram, Newsletter
+ALLE 6 PLATTFORMEN: YouTube, X/Twitter, LinkedIn, TikTok, Instagram, Newsletter
 
 AUFGABEN:
-1. Distribution-Timeline: 7-Tage-Plan über ALLE 5 Plattformen
+1. Distribution-Timeline: 7-Tage-Plan über ALLE 6 Plattformen
 2. Repurposing-Matrix (1→6 Strategie) passend zur Original-Plattform
 3. Für JEDEN Repurpose-Piece: Konkreten Content-Entwurf liefern (nicht nur Beschreibung!)
 4. Hashtag-Strategie pro Plattform
@@ -1340,30 +1679,32 @@ Liefere einen konkreten Aktionsplan mit fertigen Repurpose-Entwürfen.`,
       warnungen
     );
     // Technischer Fehler in AMPLIFIER → status 'fehler' (wie bisher)
-    if (steps[4].status !== "done") {
-      return brichAb(vermerk("amplifier", steps[4].fehler ?? "unbekannter Fehler"));
+    if (steps[5].status !== "done") {
+      return brichAb(vermerk("amplifier", steps[5].fehler ?? "unbekannter Fehler"));
     }
 
     // ═══ Erfolgreicher Durchlauf: zur menschlichen Freigabe ═══
-    // body bleibt die PUBLISHER-Fassung (Entscheidung des Inhabers steht aus). Geprüft hat
-    // COUNSEL aber den SCRIBE-Text; der Hinweis hält fest, ob beide gleich sind (Stufe 1).
+    // body ist die PUBLISHER-Fassung, und genau sie hat COUNSEL in der Endprüfung wörtlich geprüft
+    // (R2/E13). Der Hinweis entsteht mit derselben Regel, mit der das Freigeben prüft
+    // (geprueftenTextAusSchritten, lib/freigabe-regeln.ts).
+    const wortlautGeprueft = geprueftenTextAusSchritten(steps, endpruefungOutput);
     const freigabeHinweis = {
-      geprueft: "SCRIBE-Text (steps[1])",
+      geprueft: "PUBLISHER-Text (steps[3]), wörtlich geprüft in der COUNSEL-Endprüfung (steps[4])",
       zur_freigabe: "PUBLISHER-Text (body)",
-      identisch: (steps[1].output ?? "").trim() === freigabeText.trim(),
+      identisch: wortlautGeprueft !== null && wortlautGeprueft.trim() === freigabeText.trim(),
     };
 
     const zurFreigabeGespeichert = await speichere(
       {
         body: freigabeText,
         // R6: Review und Urteil stehen auch in dieser Fassung — eine zur_freigabe-Zeile
-        // ohne review_notes kann es so nicht geben.
+        // ohne review_notes kann es so nicht geben. Paket B: das Urteil der Endprüfung.
         reviewed_by: "counsel",
-        review_notes: counselOutput,
+        review_notes: endpruefungOutput,
         status: "zur_freigabe",
         metadata: metadataMit({
           freigabe_hinweis: freigabeHinweis,
-          amplifier_empfehlung: steps[4].output,
+          amplifier_empfehlung: steps[5].output,
         }),
       },
       "Status zur_freigabe"
@@ -1376,7 +1717,7 @@ Liefere einen konkreten Aktionsplan mit fertigen Repurpose-Entwürfen.`,
       await speichere(
         {
           status: "fehler",
-          metadata: metadataMit({ freigabe_hinweis: freigabeHinweis, amplifier_empfehlung: steps[4].output, fehler }),
+          metadata: metadataMit({ freigabe_hinweis: freigabeHinweis, amplifier_empfehlung: steps[5].output, fehler }),
         },
         "Status fehler (zur_freigabe nicht gespeichert)"
       );
@@ -1388,7 +1729,8 @@ Liefere einen konkreten Aktionsplan mit fertigen Repurpose-Entwürfen.`,
         format,
         status: "fehler",
         fehler_vermerk: fehler,
-        counsel,
+        counsel: endpruefung,
+        counsel_vorpruefung: counsel,
         freigabe_hinweis: freigabeHinweis,
         warnungen,
         steps,
@@ -1397,6 +1739,7 @@ Liefere einen konkreten Aktionsplan mit fertigen Repurpose-Entwürfen.`,
       });
     }
 
+    // Paket B: "complete" nur, wenn alle sechs Stufen fertig sind (vorher fest 5).
     const completedSteps = steps.filter((s) => s.status === "done").length;
     return NextResponse.json({
       pipeline: "content-first",
@@ -1405,8 +1748,9 @@ Liefere einen konkreten Aktionsplan mit fertigen Repurpose-Entwürfen.`,
       platform,
       format,
       category: categoryKey,
-      status: completedSteps === 5 ? "complete" : "partial",
-      counsel,
+      status: completedSteps === steps.length ? "complete" : "partial",
+      counsel: endpruefung,
+      counsel_vorpruefung: counsel,
       freigabe_hinweis: freigabeHinweis,
       warnungen,
       steps,
@@ -1432,7 +1776,8 @@ Liefere einen konkreten Aktionsplan mit fertigen Repurpose-Entwürfen.`,
 export async function GET() {
   return NextResponse.json({
     pipeline: "content-first",
-    description: "RESEARCHER → SCRIBE → COUNSEL → PUBLISHER → AMPLIFIER (5 Plattformen, COUNSEL fail-closed, optional an Steinadel-Objekt gebunden)",
+    description:
+      "RESEARCHER → SCRIBE → COUNSEL → PUBLISHER → COUNSEL (Endfassung, wörtlich) → AMPLIFIER (6 Plattformen, COUNSEL fail-closed, optional an Steinadel-Objekt gebunden; CTA als Steinadel-Kurzlink)",
     platforms: Object.keys(FORMATE_JE_PLATTFORM),
     formats: FORMATE_JE_PLATTFORM,
     categories: Object.keys(KATEGORIE_LABEL),

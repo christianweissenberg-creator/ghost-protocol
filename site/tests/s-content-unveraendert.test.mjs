@@ -25,6 +25,17 @@
 //   Zeitpunkt der letzten erfolgreichen Abfrage). Sie wird nur im Content-Tab nach geladener Liste
 //   gezeigt; ohneStandZeile prüft, dass sie genau einmal mit dem erwarteten Text dasteht, und nimmt
 //   genau sie heraus. Alles andere bleibt byte-gleich verglichen.
+//
+// Objekt-Studio Stufe 2, Paket B (10.11.2026) — bewusst angepasst, sonst unverändert:
+// - R2/E13: Die Stufenleiste hat sechs Kacheln; die neue fünfte heißt "COUNSEL 2" (Endprüfung,
+//   data-stufe="counsel_endfassung"), die Leiste ist mindestens 580 statt 480 px breit.
+//   ohneEndpruefungsKachel prüft je Leiste genau eine solche Kachel und nimmt sie samt Pfeil davor
+//   heraus; die Klassen der Leiste werden auf die der Vorher-Fassung gesetzt.
+// - R2/E13: Freigegeben wird nur wörtlich geprüfter Text. Von den Testzeilen trifft das nur Eintrag 3
+//   (SCRIBE-Text ≠ Freigabetext): Der Knopf ist gesperrt, und die Prüfregel der Beleg-Kette ist "nicht
+//   erfüllt" mit dem R2-Grund. Für Eintrag 3 rendert der Vergleich den Vorher-Knopf mit derselben
+//   gesperrten Lage (Teil B), und ohneR2Sperre setzt genau die R2-Stellen auf den Vorher-Text zurück
+//   (Teil B, C). Alle übrigen Einträge bleiben byte-gleich.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -224,7 +235,7 @@ test("S-U1 /content byte-gleich: ganze Seite je Starttab, mit und ohne Freigabe-
       const alt = renderToStaticMarkup(React.createElement(vorher.ContentPage));
       const neu = renderToStaticMarkup(React.createElement(nachher.ContentPage));
       assert.ok(alt.includes("Content <em>Pipeline</em>"), `Seite ?${suche} gerendert`);
-      assert.equal(neu, alt, `Seite ?${suche} weicht ab`);
+      assert.equal(ohneEndpruefungsKachel(neu), alt, `Seite ?${suche} weicht ab`);
       verglichen += alt.length;
       laengen.push(alt.length);
     }
@@ -238,16 +249,28 @@ test("S-U2 /content byte-gleich: Freigeben-Knopf und Beleg-Kette je Eintrag (ech
   const kopierStatus = (key) => `Kopieren ${key}`;
   let ketten = 0;
   for (const z of ZEILEN) {
+    // Paket B (R2): Nur Eintrag 3 sperrt neu; seine Lage ist die alte mit gesperrter Prüfung.
+    const r2 = z.id === 3;
+    const altLage = vorher.freigabeLage(z);
+    const neuLage = nachher.freigabeLage(z);
+    if (r2) {
+      assert.equal(altLage.pruefung.freigebbar, true, "vorher frei (mit Hinweis)");
+      assert.deepEqual(neuLage.pruefung, { ...altLage.pruefung, freigebbar: false, grund: R2_GRUND });
+      assert.deepEqual({ ...neuLage, pruefung: null }, { ...altLage, pruefung: null }, "sonst gleiche Lage");
+    }
+    const erwarteteLage = r2 ? neuLage : altLage;
     for (const pending of [false, true]) {
-      const alt = renderToStaticMarkup(React.createElement(vorher.FreigebenKnopf, { lage: vorher.freigabeLage(z), pending, onFreigeben: () => {} }));
-      const neu = renderToStaticMarkup(React.createElement(nachher.FreigebenKnopf, { lage: nachher.freigabeLage(z), pending, onFreigeben: () => {} }));
+      const alt = renderToStaticMarkup(React.createElement(vorher.FreigebenKnopf, { lage: erwarteteLage, pending, onFreigeben: () => {} }));
+      const neu = renderToStaticMarkup(React.createElement(nachher.FreigebenKnopf, { lage: neuLage, pending, onFreigeben: () => {} }));
       assert.ok(alt.includes(">Freigeben</button>"));
       assert.equal(neu, alt, `Freigeben-Knopf #${z.id} (pending ${pending})`);
     }
     const alt = renderToStaticMarkup(React.createElement(vorher.BelegKette, { item: z, kopiere, kopierStatus }));
     const neu = renderToStaticMarkup(React.createElement(nachher.BelegKette, { item: z, kopiere, kopierStatus }));
     assert.ok(alt.includes("Beleg-Kette") && alt.includes("COUNSEL-Urteil"));
-    assert.equal(neu, alt, `Beleg-Kette #${z.id}`);
+    const regelNeu = `<p style="color:var(--gp-rose)">nicht erfüllt: ${R2_GRUND}</p>`;
+    assert.equal(neu.split(regelNeu).length - 1, r2 ? 1 : 0, `Prüfregel #${z.id}`);
+    assert.equal(neu.replace(regelNeu, '<p style="color:var(--gp-emerald)">erfüllt</p>'), alt, `Beleg-Kette #${z.id}`);
     ketten += alt.length;
   }
   // Jede Verzweigung kommt vor: Snapshot mit Objektfeldern, CTA mit Namen gesperrt, Betreiber, gepostet.
@@ -339,6 +362,34 @@ function kartenKopf(baum, id) {
 const STAND = "2026-11-08T21:30:05.123Z";
 const STAND_ZEILE = /<p [^>]*data-liste-stand="true"[^>]*>([^<]*)<\/p>/g;
 
+// ─── Paket B: gewollte Abweichungen (siehe Kopf) ───
+const LEISTE_NEU = "grid min-w-[580px] grid-cols-[1fr_auto_1fr_auto_1fr_auto_1fr_auto_1fr_auto_1fr]";
+const LEISTE_ALT = "grid min-w-[480px] grid-cols-[1fr_auto_1fr_auto_1fr_auto_1fr_auto_1fr]";
+const KACHEL_ENDPRUEFUNG =
+  /<span class="text-text-muted text-sm">→<\/span><div class="rounded-lg p-2 text-center transition-all" style="[^"]*" data-stufe="counsel_endfassung" title="COUNSEL prüft die Endfassung \(PUBLISHER-Text\) wörtlich \(R2\)"><div class="text-\[9px\] font-mono mb-0\.5" style="[^"]*">[^<]*<\/div><div class="text-\[10px\] font-semibold text-foreground truncate">COUNSEL 2<\/div>(?:<div class="text-\[8px\] text-text-muted mt-0\.5">[^<]*<\/div>)?<\/div>/g;
+
+/** Nachher-Markup ohne die Kachel "COUNSEL 2" — je Leiste genau eine, sonst schlägt der Test fehl. */
+function ohneEndpruefungsKachel(markup) {
+  const leisten = markup.split(LEISTE_NEU).length - 1;
+  assert.equal([...markup.matchAll(KACHEL_ENDPRUEFUNG)].length, leisten, "je Leiste genau eine Kachel COUNSEL 2");
+  assert.ok(!markup.includes(LEISTE_ALT), "keine Leiste in der Vorher-Breite");
+  return markup.replaceAll(LEISTE_NEU, LEISTE_ALT).replace(KACHEL_ENDPRUEFUNG, "");
+}
+
+const R2_GRUND = "Freigabetext nicht wörtlich geprüft: COUNSEL prüfte eine andere Fassung (R2)";
+
+/** Nachher-Markup mit den R2-Stellen auf dem Vorher-Text (Knopf nicht in Arbeit); jede Stelle genau `anzahl`-mal. */
+function ohneR2Sperre(markup, anzahl) {
+  const knopf =
+    /<button disabled="" title="Freigeben gesperrt: Freigabetext nicht wörtlich geprüft: COUNSEL prüfte eine andere Fassung \(R2\)" class="([^"]*)">Freigeben<\/button><span class="text-\[10px\]" style="color:var\(--gp-rose\)">Freigeben gesperrt: Freigabetext nicht wörtlich geprüft: COUNSEL prüfte eine andere Fassung \(R2\)<\/span>/g;
+  const regel = `<p style="color:var(--gp-rose)">nicht erfüllt: ${R2_GRUND}</p>`;
+  assert.equal([...markup.matchAll(knopf)].length, anzahl, "R2-Sperre am Knopf");
+  assert.equal(markup.split(regel).length - 1, anzahl, "R2-Grund in der Prüfregel");
+  return markup
+    .replace(knopf, '<button class="$1">Freigeben</button><span class="text-[10px]" style="color:var(--gp-amber)">Freigabetext ungeprüft — COUNSEL prüfte die Vorfassung</span>')
+    .replaceAll(regel, '<p style="color:var(--gp-emerald)">erfüllt</p>');
+}
+
 /** Nachher-Markup ohne die Stand-Zeile — nur, wenn sie genau einmal mit dem erwarteten Text dasteht. */
 function ohneStandZeile(markup) {
   const treffer = [...markup.matchAll(STAND_ZEILE)];
@@ -387,7 +438,8 @@ test("S-U3 /content byte-gleich: Content-Tab mit geladenen Einträgen, jeder Ein
       baumNeu = await neu.ruhe(2);
       const markupAlt = alsMarkup(baumAlt);
       assert.ok(markupAlt.includes("Beleg-Kette"), `Eintrag ${z.id} aufgeklappt`);
-      assert.equal(ohneStandZeile(alsMarkup(baumNeu)), markupAlt, `Eintrag ${z.id} aufgeklappt`);
+      // Paket B (R2): nur der aufgeklappte Eintrag 3 zeigt die neue Sperre (Knopf und Prüfregel).
+      assert.equal(ohneR2Sperre(ohneStandZeile(alsMarkup(baumNeu)), z.id === 3 ? 1 : 0), markupAlt, `Eintrag ${z.id} aufgeklappt`);
       verglichen += markupAlt.length;
     }
     assert.ok(verglichen > 100_000, `verglichen: ${verglichen} Zeichen`);
@@ -411,6 +463,9 @@ test("S-U4 /content byte-gleich: Pipeline-Ergebnis mit Urteilsanzeige und Fassun
     }
     assert.ok(laeufe.vorher.includes("Pipeline-Ergebnis"), "Ergebnis gerendert");
     assert.ok(laeufe.vorher.includes("COUNSEL prüfte die Vorfassung"), "Urteilsanzeige mit Fassungsbezug");
-    assert.equal(laeufe.nachher, laeufe.vorher);
+    // Paket B: Das Ergebnis hat die Form vor Paket B (fünf Schritte, ohne Endprüfung) — die Kachel
+    // COUNSEL 2 zeigt "nicht ausgeführt" und fällt im Vergleich heraus; alles andere bleibt gleich.
+    assert.ok(laeufe.nachher.includes('data-stufe="counsel_endfassung"'));
+    assert.equal(ohneEndpruefungsKachel(laeufe.nachher), laeufe.vorher);
   });
 });

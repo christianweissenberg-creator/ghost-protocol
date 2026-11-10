@@ -99,6 +99,8 @@ function stufeAus(anfrage) {
   if (t.startsWith("RESEARCH-AUFTRAG")) return "researcher";
   if (t.startsWith("CONTENT-PRODUKTION")) return "scribe";
   if (t.startsWith("Pruefe den folgenden Content")) return "counsel";
+  // Paket B (R2): COUNSEL-Endprüfung der PUBLISHER-Fassung — Antwort wie COUNSEL.
+  if (t.startsWith("ENDPRUEFUNG (R2)")) return "counsel";
   if (t.startsWith("PUBLISHING-AUFTRAG")) return "publisher";
   if (t.startsWith("AMPLIFICATION-AUFTRAG")) return "amplifier";
   return "andere";
@@ -136,7 +138,8 @@ test("Z-P1 Pipeline Ende-zu-Ende: jeder Protokollfehler von activate einzeln in 
   const r = await pipePost(TOPIC_LAUF);
   assert.equal(r.status, 200, JSON.stringify(r.body).slice(0, 400));
   assert.equal(r.body.status, "complete");
-  assert.equal(welt.claudeAufrufe, 5);
+  // Paket B: sechs bezahlte Aufrufe (mit der COUNSEL-Endprüfung).
+  assert.equal(welt.claudeAufrufe, 6);
   for (const a of welt.activateAntworten) {
     assert.ok(Array.isArray(a.body.protokoll_fehler_liste));
     assert.equal(a.body.protokoll_fehler, a.body.protokoll_fehler_liste.join("; "));
@@ -215,10 +218,13 @@ test("Z-P3 Pipeline: Fehlerantwort ohne Kostenangabe bleibt 'unvollständig' (ni
   assert.equal(r.body.summary.kosten_unvollstaendig, true);
 });
 
-// ═══ Plattform und Format nur aus der festen Liste (LinkedIn: Entscheidung R39 offen) ═══
+// ═══ Plattform und Format nur aus der festen Liste ═══
+// Paket B (10.11.2026, R39/E11): LinkedIn ist Plattform mit dem Format linkedin_post; abgewiesen wird
+// nur ein falsches Format (vorher die ganze Plattform).
 
 for (const [name, body, muster] of [
-  ["linkedin", { ...TOPIC_LAUF, platform: "linkedin", format: "thread" }, /Plattform "linkedin" nicht unterstützt/],
+  ["linkedin mit falschem Format", { ...TOPIC_LAUF, platform: "linkedin", format: "thread" }, /Format "thread" für linkedin nicht unterstützt — erlaubt: linkedin_post/],
+  ["unbekannte Plattform", { ...TOPIC_LAUF, platform: "facebook", format: "thread" }, /Plattform "facebook" nicht unterstützt/],
   ["Format passt nicht", { ...TOPIC_LAUF, platform: "youtube", format: "thread" }, /Format "thread" für youtube nicht unterstützt/],
   ["Plattform mit geschütztem Namen", { ...TOPIC_LAUF, platform: `${NAME}-kanal` }, /\[geschützter Name\]/],
 ]) {
@@ -232,33 +238,45 @@ for (const [name, body, muster] of [
   });
 }
 
-test("Z-P5 Pipeline GET: Plattformliste aus derselben Quelle, ohne linkedin", async () => {
+test("Z-P5 Pipeline GET: Plattformliste aus derselben Quelle, mit linkedin (Paket B, R39)", async () => {
   const res = await pipeline.GET();
   const d = await res.json();
-  assert.deepEqual(d.platforms, ["youtube", "twitter", "x", "newsletter", "tiktok", "instagram"]);
-  assert.ok(!d.platforms.includes("linkedin"));
+  assert.deepEqual(d.platforms, ["youtube", "twitter", "x", "linkedin", "newsletter", "tiktok", "instagram"]);
+  assert.deepEqual(d.formats.linkedin, ["linkedin_post"]);
   for (const p of d.platforms) assert.ok(d.formats[p].length > 0);
 });
 
 // ═══ CTA-Link mit geschütztem Namen: nicht im SCRIBE-Auftrag, nicht gespeichert ═══
 
+// Paket B (10.11.2026, E12): Der CTA ist ein Kurzlink aus Kampagne, Slug und Nummer; der geschützte
+// Name kann nur über Kampagne oder Slug hineinkommen. Die Kampagne folgt hier der Form des
+// Steinadel-Exports (lpUrl = https://steinadel.de/l/<kampagne>), sonst gäbe es gar keinen Kurzlink.
 test("Z-P6 Pipeline: CTA-Link mit geschütztem Namen wird nicht verwendet und nicht gespeichert", async () => {
   const objekt = structuredClone(STANDARD_OBJEKT);
-  objekt.kampagnen[0].lpUrl = `https://steinadel.example/lp/${NAME.toLowerCase()}-villa`;
+  const kampagne = `${NAME.toLowerCase()}-herbst`;
+  objekt.kampagnen[0] = { kampagne, lpUrl: `https://steinadel.de/l/${kampagne}`, lpVariant: `${kampagne}-a` };
   welt.objekteAntwort = { status: 200, body: { version: "1", quelle: "export", generiert_am: "2026-11-06T09:00:00Z", objekte: [objekt] } };
   const r = await pipePost({ objekt_slug: "villa-x", platform: "x", format: "thread", category: "ki_automation" });
   assert.equal(r.status, 200, JSON.stringify(r.body).slice(0, 300));
   const z = zeile(r.body.contentId);
   assert.equal(z.metadata.cta_link, null);
+  assert.equal(z.metadata.utm_content, null);
+  assert.equal(z.metadata.kurzlink, undefined, "kein Kurzlink-Beleg mit Namen");
   assert.ok(r.body.warnungen.some((w) => w.stufe === "objekt" && /CTA-Link enthält einen geschützten Namen/.test(w.grund)));
   const scribe = welt.aktivierungen.find((a) => a.agent === "scribe");
   assert.ok(scribe.task.includes("kein Kampagnen-Link hinterlegt"), "allgemeiner CTA statt Link");
   assert.ok(!/EXAKT diesem Link: https?:/.test(scribe.task));
-  // Gegenprobe: ohne Namen steht der Link im Auftrag und in metadata
+  assert.ok(!scribe.task.includes("CTA-LINK"), "kein Kurzlink-Block");
+  assert.doesNotMatch(JSON.stringify(z.metadata.warnungen), NAME_RE);
+  // Gegenprobe: ohne Namen steht der Kurzlink im Auftrag und in metadata
   zuruecksetzen();
   welt.pipelineModul = pipeline;
+  const sauber = structuredClone(STANDARD_OBJEKT);
+  sauber.kampagnen[0] = { kampagne: "herbst", lpUrl: "https://steinadel.de/l/herbst", lpVariant: "herbst-a" };
+  welt.objekteAntwort = { status: 200, body: { version: "1", quelle: "export", generiert_am: "2026-11-06T09:00:00Z", objekte: [sauber] } };
   const ok = await pipePost({ objekt_slug: "villa-x", platform: "x", format: "thread", category: "ki_automation" });
-  assert.match(zeile(ok.body.contentId).metadata.cta_link, /^https:\/\/steinadel\.example\/lp\/villa-x\?utm_source=x/);
+  assert.match(zeile(ok.body.contentId).metadata.cta_link, /^https:\/\/steinadel\.de\/k\/herbst\/x-villa-x-\d+$/);
+  assert.ok(welt.aktivierungen.find((a) => a.agent === "scribe").task.includes(`EXAKT diesem Link: ${zeile(ok.body.contentId).metadata.cta_link}`));
 });
 
 // ═══ Herkunft: Cross-Site-POST und Content-Type (vor jedem Abruf) ═══
@@ -542,10 +560,12 @@ test("Z-W1 (MX1) eigene Zeile nach dem Insert nicht sichtbar → 500, kein bezah
     ["scribe", "pending"],
     ["counsel", "pending"],
     ["publisher", "pending"],
+    ["counsel_endfassung", "pending"],
     ["amplifier", "pending"],
   ]);
   assert.equal(r.body.summary.total_cost_usd, null);
-  assert.equal(r.body.summary.completed, "0/5");
+  // Paket B: sechs Stufen
+  assert.equal(r.body.summary.completed, "0/6");
 });
 
 test("Z-W2 (MX2) Lauf-ID mehrfach vergeben → 409 nennt die älteste Zeile", async () => {

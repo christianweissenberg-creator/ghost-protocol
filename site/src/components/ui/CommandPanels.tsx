@@ -120,20 +120,21 @@ interface BadgeDaten {
  * (geprueft_ungleich_freigabe === false). Sonst bernstein, und ein eigenes Badge davor sagt, was
  * mit dem Freigabetext ist: "Freigabetext ungeprüft" (weicht von der geprüften Fassung ab) bzw.
  * "Fassung unbestätigt" (Angabe fehlt). Zwei kurze Badges statt eines langen, damit jedes in
- * die Karte passt. Welcher Text freigegeben wird, entscheidet der Inhaber (offen).
+ * die Karte passt. Welcher Text freigegeben wird, hat der Inhaber am 10.11.2026 entschieden (E13): nur
+ * Text, den COUNSEL wörtlich geprüft hat; der Server sperrt alles andere (freigabe_sperre, "… (R2)").
  */
 function counselBadges(e: FreigabeEintrag): BadgeDaten[] {
   const urteil: CounselUrteil = e.counsel?.urteil ?? "UNKLAR";
   const zeile = e.counsel?.zeile ? maskiereGeschuetzteNamen(e.counsel.zeile) : "keine gefunden";
   const herkunft = `Aus review_notes abgeleitet, kein gespeichertes Urteil.\nURTEIL-Zeile: ${zeile}`;
-  const offen = "Welcher Text freigegeben wird, entscheidet der Inhaber (offen).";
+  const offen = "Freigegeben wird nur Text, den COUNSEL wörtlich geprüft hat (R2, E13).";
   const abweichung = e.geprueft_ungleich_freigabe;
   if (urteil === "FREIGABE" && abweichung === true) {
     return [
       {
         text: "Freigabetext ungeprüft",
         ton: "amber",
-        title: `Der Freigabetext weicht von der Fassung ab, die COUNSEL geprüft hat (SCRIBE, metadata.steps[1]).\n${offen}`,
+        title: `Der Freigabetext weicht von der Fassung ab, die COUNSEL geprüft hat (bei Läufen vor der Endprüfung die SCRIBE-Fassung, metadata.steps[1]).\n${offen}`,
       },
       {
         text: "COUNSEL: Vorfassung freigegeben",
