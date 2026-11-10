@@ -3,10 +3,9 @@
 // wird. Nur öffentlich zitierbare Fundstellen; wo es keine gibt, steht das dabei. Regeln, deren
 // Prüfung erst ein späterer Bauschritt bringt, stehen mit "noch nicht gebaut (Schritt N)" da — nie
 // als laufende Prüfung. Die Anker-Regel prüft seit Schritt 6 (10.11.2026) der Server, den
-// Startbild-Abgleich seit Schritt 7 (10.11.2026).
+// Startbild-Abgleich seit Schritt 7 und die Medien-Regel seit Schritt 8 (beide 10.11.2026).
 
 import { MIN_FREIGABE_ZEICHEN } from "@/lib/freigabe-regeln";
-import { STUDIO_BAUSCHRITTE, nochNichtGebautText } from "./objekte";
 
 export interface StudioRegel {
   regel: string;
@@ -17,7 +16,6 @@ export interface StudioRegel {
 }
 
 const PIPELINE = "site/src/app/api/content/pipeline/route.ts (buildObjektBlock)";
-const OHNE_FUNDSTELLE = "Vorgabe des Inhabers; im Repo noch ohne eigene Fundstelle";
 
 export const STUDIO_REGELN: readonly StudioRegel[] = [
   {
@@ -85,9 +83,17 @@ export const STUDIO_REGELN: readonly StudioRegel[] = [
       "Code, serverseitig beim Einspielen: Anker live geladen und gegen das Manifest gehasht, Ausschnitt nach Rezept, Pixelvergleich je Kanal mit Toleranz 2; Ergebnis mit größter Abweichung in der Startbild-Zeile",
   },
   {
+    // Seit Schritt 8 (10.11.2026): Bedingung 9 der Medien-Regel; der Nachweis-Verweis steht im Prüfprotokoll, nie im Code.
     regel: "Medien erst freigebbar, wenn die Nutzungsrechte geklärt und mit Nachweis vermerkt sind; bis dahin keine Veröffentlichung.",
-    fundstelle: OHNE_FUNDSTELLE,
-    pruefung: nochNichtGebautText(STUDIO_BAUSCHRITTE.medienregel),
+    fundstelle: "site/src/lib/medien-freigabe.ts (pruefeMedienFreigabe, Bedingung 9); Prüfprotokoll studio_pruefung",
+    pruefung: "Code, serverseitig beim Freigeben und in der Studio-Ansicht (Medien-Regel mit allen Gründen)",
+  },
+  {
+    // Seit Schritt 8 (10.11.2026).
+    regel:
+      "Ein Video ist erst freigebbar, wenn jede Bedingung der Medien-Regel gilt: Kette mit gleicher job_id, jüngstes Prüfprotokoll zur Datei, jede Prompt-Klausel bestanden, Anker-Abgleich bestanden, KI-Hinweis eingebrannt und im festgelegten Wortlaut, Durchsicht in voller Bildrate, Schnittfenster im Original, Anker und Startbild-Abgleich.",
+    fundstelle: "site/src/lib/medien-freigabe.ts (pruefeMedienFreigabe); site/src/lib/studio/ki-hinweis.ts (KI_HINWEIS_BILD)",
+    pruefung: "Code, serverseitig beim Freigeben (409 mit Grund, Export-Datei vorher nachgehasht); Prüfprotokoll mit vom Server berechnetem Urteil",
   },
   {
     regel: "Bauträger öffentlich nicht namentlich nennen.",

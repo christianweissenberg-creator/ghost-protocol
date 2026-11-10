@@ -2,7 +2,9 @@
 
 // Medien-Panel des Objekt-Studios (Schritt 7, 10.11.2026): „Video einspielen“ mit Prüflauf, Vorschau und
 // ausdrücklicher Bestätigung, die Medienliste je Video (Export → Original → Startbild) und der Startbild-Abgleich
-// ohne Datenbank-Zeile (Toleranz-Messung).
+// ohne Datenbank-Zeile (Toleranz-Messung). Seit Schritt 8 je Video das Urteil der Medien-Regel mit allen Gründen
+// (vom Server berechnet), das jüngste Prüfprotokoll und die Prüfansicht (components/studio/PruefAnsicht.tsx); sie
+// wird erst beim Öffnen aufgebaut, damit der Seitenaufbau kein Video lädt.
 //
 // Hochgeladen wird direkt in den privaten Bucket: Der Server stellt je Datei eine signierte Upload-URL aus
 // (POST …/medien/upload-url), der Browser schickt die Datei per PUT dorthin — das ist der einzige Storage-Zugriff
@@ -17,7 +19,7 @@
 import { useCallback, useState } from "react";
 import type { ReactNode } from "react";
 import { ankerManifest, kurzHash } from "@/lib/studio/anker";
-import type { AnkerManifest } from "@/lib/studio/anker";
+import type { AnkerEintrag, AnkerManifest } from "@/lib/studio/anker";
 import type {
   AbgleichErgebnis,
   MedienKette,
@@ -32,6 +34,7 @@ import type {
 } from "@/lib/studio/typen";
 import { berlinDatumZeit } from "@/lib/types";
 import { FARBE_BERNSTEIN, FARBE_GRUEN, FARBE_ROT, istObjekt, maskiert } from "@/components/studio/beleg-hilfen";
+import { PruefAnsicht } from "@/components/studio/PruefAnsicht";
 
 // ── Texte ──
 
@@ -248,6 +251,45 @@ function videoWerte(m: StudioMedium): string {
     m.aigc_kennzeichen === null ? null : `AIGC-Kennzeichen ${m.aigc_kennzeichen ? "ja" : "nein"}`,
   ].filter(Boolean);
   return teile.length > 0 ? `${teile.join(" · ")} (laut Beleg, ffprobe)` : "keine Angaben im Beleg";
+}
+
+/** Urteil der Medien-Regel (Server) mit allen Gründen und das jüngste Prüfprotokoll. */
+function FreigabeUrteil({ k }: { k: MedienKette }) {
+  const p = k.pruefungen?.[0] ?? null;
+  return (
+    <div className="mt-3 text-[11px] break-words" data-medien-urteil={k.urteil.freigebbar ? "freigebbar" : "gesperrt"}>
+      <p className="font-semibold" style={{ color: k.urteil.freigebbar ? FARBE_GRUEN : FARBE_ROT }}>
+        Freigabe (Medien-Regel, Server): {k.urteil.freigebbar ? "freigebbar" : `gesperrt — ${k.urteil.gruende.length} Grund/Gründe`}
+      </p>
+      {k.urteil.gruende.length > 0 && (
+        <ul className="list-disc pl-5 mt-1" data-medien-gruende>
+          {k.urteil.gruende.map((g) => (
+            <li key={g}>{maskiert(g)}</li>
+          ))}
+        </ul>
+      )}
+      <p className="text-[10px] text-text-muted mt-1" data-juengstes-protokoll={p?.id ?? "keins"}>
+        {k.pruefungen === null
+          ? "Prüfprotokolle nicht lesbar."
+          : p === null
+            ? "Noch kein Prüfprotokoll."
+            : `Jüngstes Prüfprotokoll #${p.id} · ${zeitBerlin(p.geprueft_am, "ohne Zeitpunkt")} · Kürzel ${maskiert(p.pruefer_kuerzel)} · Urteil ${p.urteil === "bestanden" ? "bestanden" : "nicht bestanden"} · Rechte ${p.rechte_status === "geklaert" ? "geklärt" : "offen"} · ${k.pruefungen.length} Protokoll(e)`}
+      </p>
+    </div>
+  );
+}
+
+/** Prüfansicht erst beim Öffnen aufbauen: Ein geschlossenes Video lädt nichts. */
+function PruefBereich({ k, slug, anker, holen, neuLaden }: { k: MedienKette; slug: string; anker: AnkerEintrag | null; holen: Holen; neuLaden: () => void }) {
+  const [offen, setOffen] = useState(false);
+  return (
+    <details className="mt-3" onToggle={(e) => setOffen(e.currentTarget.open)} data-pruefbereich={k.export.id}>
+      <summary className="cursor-pointer text-[12px]" style={{ color: "var(--gp-ink)" }}>
+        Prüfansicht öffnen (Export in voller Bildrate, Anker daneben, Prüfprotokoll)
+      </summary>
+      {offen && <PruefAnsicht slug={slug} kette={k} anker={anker} dateiAdresse={(id) => dateiPfad(slug, id)} holen={holen} gespeichert={neuLaden} />}
+    </details>
+  );
 }
 
 function KettenKarte({ k, slug, freigabe }: { k: MedienKette; slug: string; freigabe?: ReactNode }) {
@@ -638,24 +680,19 @@ function Abgleich({ slug, manifest, holen }: { slug: string; manifest: AnkerMani
   );
 }
 
-/**
- * Medien-Panel: Liste der Videos des Objekts, „Video einspielen“ und der Abgleich. freigabe(kette) liefert je Video
- * die Anzeige der Freigabe (ab Schritt 8 die Medien-Regel); ohne sie steht „Medien-Regel kommt mit Schritt 8“ da.
- */
+/** Medien-Panel: Liste der Videos des Objekts mit Urteil und Prüfansicht, „Video einspielen“ und der Abgleich. */
 export function MedienPanel({
   slug,
   medien,
   credits,
   neuLaden,
   holen = fetch,
-  freigabe,
 }: {
   slug: string;
   medien: StudioMedienTeil;
   credits: StudioMesswert<StudioCredits>;
   neuLaden: () => void;
   holen?: Holen;
-  freigabe?: (k: MedienKette) => ReactNode;
 }) {
   const manifest = ankerManifest(slug);
   const c = creditsText(credits);
@@ -694,13 +731,10 @@ export function MedienPanel({
                   k={k}
                   slug={slug}
                   freigabe={
-                    freigabe ? (
-                      freigabe(k)
-                    ) : (
-                      <p className="text-[11px] mt-2" style={{ color: FARBE_BERNSTEIN }} data-medien-freigabe="ohne-regel">
-                        Freigabe: gesperrt — die Medien-Regel kommt mit Schritt 8.
-                      </p>
-                    )
+                    <>
+                      <FreigabeUrteil k={k} />
+                      <PruefBereich k={k} slug={slug} anker={manifest?.eintraege.find((e) => e.id === k.export.anker_id) ?? null} holen={holen} neuLaden={neuLaden} />
+                    </>
                   }
                 />
               ))}

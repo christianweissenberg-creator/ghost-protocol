@@ -201,6 +201,38 @@ export interface StudioMedium {
   eingespielt_am: string;
 }
 
+/** Eine Zeile aus studio_pruefung (Schritt 8): Prüfprotokoll zum Export eines Videos, nur anhängbar. */
+export interface StudioPruefung {
+  id: number;
+  medium_id: number;
+  medium_sha256: string;
+  /** Konstante "betreiber-session": Die Sitzung belegt keinen Namen. */
+  durch: string;
+  /** Angabe des Prüfers, keine Authentisierung. */
+  pruefer_kuerzel: string;
+  /** Je Prompt-Klausel des Originals: bestanden oder nicht. */
+  klauseln: Array<{ id: string; bestanden: boolean }>;
+  anker_abgleich: AbgleichUrteil;
+  ki_hinweis_eingebrannt: boolean;
+  durchsicht_volle_bildrate: boolean;
+  rechte_status: "offen" | "geklaert";
+  rechte_nachweis: string | null;
+  notiz: string | null;
+  /** Vom Server mit der Medien-Regel berechnet, nie vom Browser. */
+  urteil: AbgleichUrteil;
+  /** DB-Uhr (Trigger), ISO. */
+  geprueft_am: string;
+}
+
+/** Urteil der Medien-Regel (lib/medien-freigabe.ts) für ein Video, vom Server berechnet. */
+export interface MedienUrteil {
+  freigebbar: boolean;
+  /** Alle Gründe in der Reihenfolge der Bedingungen; leer = freigebbar. */
+  gruende: string[];
+  /** Maßgebliches (jüngstes, zur Datei passendes) Prüfprotokoll; null ohne. */
+  pruefung_id: number | null;
+}
+
 /** Ein Video: der Export mit seinem Original und dessen Startbild; fehlende Glieder stehen in luecken. */
 export interface MedienKette {
   export: StudioMedium;
@@ -208,6 +240,10 @@ export interface MedienKette {
   startbild: StudioMedium | null;
   /** Was an der Kette fehlt oder nicht passt; leer = vollständig. */
   luecken: string[];
+  /** Seit Schritt 8: Prüfprotokolle zum Export, jüngstes zuerst; null, wenn sie nicht lesbar waren. */
+  pruefungen: StudioPruefung[] | null;
+  /** Seit Schritt 8: Urteil der Medien-Regel (Server). */
+  urteil: MedienUrteil;
 }
 
 export interface StudioMedienWert {

@@ -1171,24 +1171,27 @@ test("S-N13 (SPEZ-5) Higgsfield im Studio: nur der Hinweis auf den aktiven Erzeu
   assert.ok(!knoepfe.some((k) => /higgsfield|generier|erzeug/i.test(k)), knoepfe.join(" | "));
 });
 
-test("S-N14 (SPEZ-6) Regeln: Rechte-Regel 'noch nicht gebaut (Schritt 8)'; Anker-Regel (Schritt 6) und Startbild-Regel (Schritt 7) prüft der Server", async () => {
+test("S-N14 (SPEZ-6) Regeln: Anker-Regel (Schritt 6), Startbild-Regel (Schritt 7), Rechte- und Medien-Regel (Schritt 8) prüft der Server", async () => {
   const { STUDIO_REGELN } = await regelnStudio();
   standardWelt();
   const t = sichtbar(await studioHtml((await hole()).body));
   // Schritt 7 (10.11.2026): Den Startbild-Abgleich rechnet der Server beim Einspielen.
-  const startbild = STUDIO_REGELN.filter((r) => /Startbild/.test(r.regel));
+  const startbild = STUDIO_REGELN.filter((r) => /^Ein Video startet nur aus einem Ausschnitt/.test(r.regel));
   assert.equal(startbild.length, 1);
   assert.match(startbild[0].fundstelle, /site\/src\/lib\/studio\/startbild\.ts/);
   assert.match(startbild[0].pruefung, /^Code, serverseitig beim Einspielen: .*Toleranz 2/);
   assert.ok(t.includes(`${startbild[0].regel} Fundstelle: ${startbild[0].fundstelle} · Prüfung: ${startbild[0].pruefung}`));
-  for (const [muster, schritt] of [[/Nutzungsrechte/, 8]]) {
+  // Schritt 8 (10.11.2026): Rechte- und Medien-Regel prüft der Server beim Freigeben; keine Regel ist mehr „noch nicht gebaut“.
+  for (const muster of [/Nutzungsrechte/, /^Ein Video ist erst freigebbar/]) {
     const treffer = STUDIO_REGELN.filter((r) => muster.test(r.regel));
     assert.equal(treffer.length, 1, String(muster));
     const r = treffer[0];
-    assert.equal(r.pruefung, `noch nicht gebaut (Schritt ${schritt})`, r.regel);
+    assert.match(r.fundstelle, /site\/src\/lib\/medien-freigabe\.ts \(pruefeMedienFreigabe/);
+    assert.match(r.pruefung, /^Code, serverseitig beim Freigeben/);
     assert.doesNotMatch(r.fundstelle, INTERNE_VERWEISE);
-    assert.ok(t.includes(`${r.regel} Fundstelle: ${r.fundstelle} · Prüfung: noch nicht gebaut (Schritt ${schritt})`), r.regel);
+    assert.ok(t.includes(`${r.regel} Fundstelle: ${r.fundstelle} · Prüfung: ${r.pruefung}`), r.regel);
   }
+  assert.ok(STUDIO_REGELN.every((r) => !/noch nicht gebaut/.test(r.pruefung)));
   // Schritt 6 (10.11.2026): Die Anker-Regel nennt ihre Fundstellen im Repo und die Prüfung des Servers.
   const anker = STUDIO_REGELN.filter((r) => /^Anker-Bilder/.test(r.regel));
   assert.equal(anker.length, 1);
@@ -1197,7 +1200,7 @@ test("S-N14 (SPEZ-6) Regeln: Rechte-Regel 'noch nicht gebaut (Schritt 8)'; Anker
   assert.match(anker[0].pruefung, /^Code, serverseitig: SHA-256 jeder Live-Datei gegen das Manifest und urls\.cover im Export/);
   assert.ok(!/noch nicht gebaut/.test(anker[0].pruefung));
   assert.ok(t.includes(`${anker[0].regel} Fundstelle: ${anker[0].fundstelle} · Prüfung: ${anker[0].pruefung}`));
-  for (const datei of ["src/lib/studio/anker.ts", "src/lib/studio/anker-pruefung.ts", "src/lib/studio/startbild.ts"]) readFileSync(path.join(SITE, datei));
+  for (const datei of ["src/lib/studio/anker.ts", "src/lib/studio/anker-pruefung.ts", "src/lib/studio/startbild.ts", "src/lib/medien-freigabe.ts", "src/lib/studio/ki-hinweis.ts"]) readFileSync(path.join(SITE, datei));
   // "darunter": Der Bauträger bleibt die letzte Regel.
   assert.equal(STUDIO_REGELN[STUDIO_REGELN.length - 1].regel, "Bauträger öffentlich nicht namentlich nennen.");
 });
@@ -1460,7 +1463,19 @@ test("S-P1 (Schritt 7) Kacheln und Medien-Panel mit einem Video: 8,75 Credits, D
   assert.match(panel, /href="\/api\/studio\/rittergut-seifersdorf\/medien\/2\/datei"/);
   assert.match(panel, /data-startbild-abgleich="nicht_bestanden"/);
   assert.ok(p.includes("nicht bestanden — größte Abweichung 19"));
-  assert.ok(p.includes("Freigabe: gesperrt — die Medien-Regel kommt mit Schritt 8."));
+  // Seit Schritt 8: das Urteil der Medien-Regel (Server) mit allen Gründen; ohne Protokoll, mit Testwerten.
+  assert.match(panel, /data-medien-urteil="gesperrt"/);
+  const gruende = [...panel.matchAll(/<li>(.*?)<\/li>/g)].map((m) => ent(m[1]));
+  assert.deepEqual(gruende, [
+    "Prüfprotokoll fehlt",
+    "KI-Hinweis im Bild hat nicht den festgelegten Wortlaut",
+    "Anker-Hash des Exports weicht vom Manifest ab",
+    "Startbild-Abgleich nicht bestanden (größte Abweichung 19)",
+  ]);
+  assert.ok(p.includes("Freigabe (Medien-Regel, Server): gesperrt — 4 Grund/Gründe"));
+  assert.ok(p.includes("Noch kein Prüfprotokoll."));
+  assert.match(panel, /data-pruefbereich="3"/);
+  assert.doesNotMatch(panel, /<video/, "die Prüfansicht wird erst beim Öffnen aufgebaut");
   assert.ok(p.includes("8,75 Credits (Vorschau 8,75)"));
   assert.ok(p.includes("„Test-Hinweis im Bild“"));
   assert.ok(p.includes("0,5–3,5 s im Original (laut Beleg)"));

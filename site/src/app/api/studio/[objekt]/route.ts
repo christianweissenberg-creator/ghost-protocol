@@ -10,6 +10,7 @@ import type { StudioObjekt } from "@/lib/studio/objekte";
 import {
   ASSET_SPALTEN,
   MEDIUM_SPALTEN,
+  PRUEFUNG_SPALTEN,
   assetsAusLesung,
   assetsFehler,
   creditsAusMedien,
@@ -42,7 +43,8 @@ import type {
 //   abgeleitete COUNSEL-Urteil, der Sperrgrund (pruefeFreigabe, wie /api/freigaben), die Kosten und
 //   die Daten der Beleg-Kette.
 // - kosten_usd: Schätzung aus metadata.steps[].cost, mit der Zahl der Läufe ohne Kostenangabe.
-// - medien: Zeilen aus studio_medium, je Video die Kette Export → Original → Startbild.
+// - medien: Zeilen aus studio_medium, je Video die Kette Export → Original → Startbild; seit Schritt 8 mit den
+//   Prüfprotokollen (studio_pruefung) und dem Urteil der Medien-Regel (lib/medien-freigabe.ts) mit allen Gründen.
 // - kosten_credits: Higgsfield-Credits der Originale mit Deckel (E18) und Rest — getrennt von USD.
 // - messung: Messplan aus studio_messplan; fehlt die Tabelle, „nicht angelegt“, ohne Zeile „noch kein Eintrag“.
 // Fehler: 400 bei falscher Form der Kennung, 404 außerhalb der Allow-List (beide ohne jede
@@ -60,6 +62,12 @@ export const runtime = "nodejs";
 const ASSETS_HOECHSTENS = 500;
 /** Höchstzahl geladener Medien-Zeilen (je Video drei); mehr macht den Teil zur "warnung". */
 const MEDIEN_HOECHSTENS = 1000;
+/**
+ * Höchstzahl gelesener Prüfprotokolle je Seitenaufbau, jüngstes zuerst. Greift das Limit (oder kappt die Datenbank die
+ * Liste), fehlen nur ältere Protokolle; ein Video ohne gelesenes Protokoll bleibt gesperrt, und der Teil warnt
+ * (Review-Befund 2b, 10.11.2026; vorher ohne Reihenfolge und Limit — dann konnte das jüngste fehlen).
+ */
+const PROTOKOLLE_HOECHSTENS = 500;
 
 type ServiceClient = ReturnType<typeof createServiceClient>;
 type ClientLage = { art: "ok"; client: ServiceClient } | { art: "fehler"; fehlerArt: StudioFehlerArt; grund: string };
@@ -120,7 +128,32 @@ async function ladeMedien(slug: StudioObjekt, lage: ClientLage): Promise<StudioM
     if (res.error) return medienFehler(new Date().toISOString(), "supabase", bereinigeFehler(res.error));
     const zeilen: unknown[] = Array.isArray(res.data) ? res.data : [];
     const abgeschnitten = zeilen.length > MEDIEN_HOECHSTENS;
-    return medienAusZeilen(abgeschnitten ? zeilen.slice(0, MEDIEN_HOECHSTENS) : zeilen, new Date().toISOString(), abgeschnitten);
+    const geladen = abgeschnitten ? zeilen.slice(0, MEDIEN_HOECHSTENS) : zeilen;
+    // Seit Schritt 8: Prüfprotokolle der Exporte. Ein Lesefehler sperrt jedes Video (die Regel ist fail-closed).
+    const exporte = geladen
+      .map((z) => (typeof z === "object" && z !== null && (z as Record<string, unknown>).fassung === "export" ? (z as Record<string, unknown>).id : null))
+      .filter((id): id is number => typeof id === "number");
+    let pruefungen: unknown[] | null = [];
+    let pruefungenGrund: string | null = null;
+    let protokolleAbgeschnitten = false;
+    if (exporte.length > 0) {
+      const p = await lage.client
+        .from("studio_pruefung")
+        .select(PRUEFUNG_SPALTEN)
+        .in("medium_id", exporte)
+        .order("geprueft_am", { ascending: false })
+        .order("id", { ascending: false })
+        .limit(PROTOKOLLE_HOECHSTENS)
+        .abortSignal(AbortSignal.timeout(ABFRAGE_TIMEOUT_MS));
+      if (p.error) {
+        pruefungen = null;
+        pruefungenGrund = bereinigeFehler(p.error);
+      } else {
+        pruefungen = Array.isArray(p.data) ? p.data : [];
+        protokolleAbgeschnitten = pruefungen.length >= PROTOKOLLE_HOECHSTENS;
+      }
+    }
+    return medienAusZeilen(geladen, new Date().toISOString(), abgeschnitten, pruefungen, slug, pruefungenGrund, protokolleAbgeschnitten);
   } catch (e) {
     return medienFehler(versuchAm, "supabase", bereinigeFehler(e));
   }

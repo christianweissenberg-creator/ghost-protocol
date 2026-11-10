@@ -15,6 +15,10 @@ import { geprueftenTextAusSchritten, maskiereGeschuetzteNamen, pruefeFreigabe } 
 import { PREIS_STAND_AB } from "../kosten";
 import { STATUS_WARTEND, bereinigeFehler, isoOderNull, istObjekt, mitternachtBerlin, textOderNull, verbinde } from "../status-server";
 import type { Seitenergebnis } from "../status-server";
+import { pruefeMedienFreigabe } from "../medien-freigabe";
+import type { MedienRegelVorgaben } from "../medien-freigabe";
+import { ankerManifest } from "./anker";
+import { KI_HINWEIS_BILD } from "./ki-hinweis";
 import { pruefeAusschnitt } from "./medien";
 import { DATIERUNG_AUSNAHMEN, nochNichtGebautText } from "./objekte";
 import type { StudioObjekt } from "./objekte";
@@ -36,6 +40,7 @@ import type {
   StudioMedienTeil,
   StudioMedium,
   StudioMesswert,
+  StudioPruefung,
 } from "./typen";
 import type { ContentMetadata } from "@/components/studio/beleg-hilfen";
 
@@ -501,8 +506,15 @@ export function leseMediumZeile(z: unknown): StudioMedium {
   };
 }
 
-/** Je Export eine Kette Export → Original → Startbild (neueste zuerst); was fehlt, steht in luecken. */
-export function medienKetten(zeilen: readonly StudioMedium[]): { ketten: MedienKette[]; einzeln: number[] } {
+/**
+ * Je Export eine Kette Export → Original → Startbild (neueste zuerst); was fehlt, steht in luecken. Seit Schritt 8 mit
+ * den Prüfprotokollen des Exports (jüngstes zuerst; null = nicht lesbar) und dem Urteil der Medien-Regel.
+ */
+export function medienKetten(
+  zeilen: readonly StudioMedium[],
+  pruefungen: readonly StudioPruefung[] | null = [],
+  vorgaben: MedienRegelVorgaben = { anker: null, ki_hinweis_bild: KI_HINWEIS_BILD },
+): { ketten: MedienKette[]; einzeln: number[] } {
   const jeId = new Map(zeilen.map((z) => [z.id, z]));
   const inKette = new Set<number>();
   const ketten: MedienKette[] = [];
@@ -520,7 +532,9 @@ export function medienKetten(zeilen: readonly StudioMedium[]): { ketten: MedienK
       if (startbild === null) luecken.push(original.startbild_id === null ? "Original ohne Verweis auf ein Startbild" : `Startbild ${original.startbild_id} nicht gefunden`);
       else inKette.add(startbild.id);
     }
-    ketten.push({ export: ex, original, startbild, luecken });
+    const eigene = pruefungen === null ? null : jungeZuerst(pruefungen.filter((p) => p.medium_id === ex.id));
+    const r = pruefeMedienFreigabe({ export: ex, original, startbild }, eigene, vorgaben);
+    ketten.push({ export: ex, original, startbild, luecken, pruefungen: eigene, urteil: { freigebbar: r.freigebbar, gruende: r.gruende, pruefung_id: r.pruefung_id } });
   }
   return { ketten, einzeln: zeilen.filter((z) => !inKette.has(z.id)).map((z) => z.id) };
 }
@@ -529,8 +543,20 @@ export function medienFehler(versuchAm: string, art: StudioFehlerArt, grund: str
   return teilFehler(QUELLE_MEDIEN, versuchAm, art, grund);
 }
 
-/** Medien-Teil aus den gelesenen Zeilen; eine unlesbare Zeile macht den ganzen Teil zu "fehler". */
-export function medienAusZeilen(roh: readonly unknown[], gemessenAm: string, abgeschnitten = false): StudioMedienTeil {
+/**
+ * Medien-Teil aus den gelesenen Zeilen; eine unlesbare Medien-Zeile macht den ganzen Teil zu "fehler". Prüfprotokolle
+ * (Schritt 8): pruefungenRoh null = nicht gelesen bzw. Lesefehler (pruefungenGrund); eine unlesbare Protokoll-Zeile
+ * ebenso. Dann sperrt die Regel jedes Video mit „Prüfprotokolle nicht lesbar“, und der Teil warnt.
+ */
+export function medienAusZeilen(
+  roh: readonly unknown[],
+  gemessenAm: string,
+  abgeschnitten = false,
+  pruefungenRoh: readonly unknown[] | null = [],
+  slug: string | null = null,
+  pruefungenGrund: string | null = null,
+  protokolleAbgeschnitten = false,
+): StudioMedienTeil {
   let zeilen: StudioMedium[];
   try {
     zeilen = roh.map(leseMediumZeile).sort((a, b) => a.id - b.id);
@@ -538,9 +564,23 @@ export function medienAusZeilen(roh: readonly unknown[], gemessenAm: string, abg
     if (e instanceof StudioLeseFehler) return medienFehler(gemessenAm, "supabase", `Zeile nicht lesbar: ${e.message}`);
     throw e;
   }
-  const { ketten, einzeln } = medienKetten(zeilen);
+  let pruefungen: StudioPruefung[] | null = null;
+  let protokollGrund = pruefungenGrund;
+  if (pruefungenRoh !== null) {
+    try {
+      pruefungen = pruefungenRoh.map(leseProtokollZeile);
+    } catch (e) {
+      if (!(e instanceof StudioLeseFehler)) throw e;
+      protokollGrund = e.message;
+    }
+  }
+  const { ketten, einzeln } = medienKetten(zeilen, pruefungen, slug === null ? undefined : medienVorgaben(slug));
   const hinweis = verbinde(
+    pruefungen === null && ketten.length > 0 ? `Prüfprotokolle nicht lesbar${protokollGrund ? `: ${protokollGrund}` : ""} — jedes Video gilt als gesperrt` : null,
     abgeschnitten ? `nur ${zeilen.length} Zeilen geladen` : null,
+    protokolleAbgeschnitten && pruefungen !== null
+      ? `nur die jüngsten ${pruefungen.length} Prüfprotokolle gelesen — ein Video ohne gelesenes Protokoll bleibt gesperrt`
+      : null,
     einzeln.length > 0 ? `${einzeln.length} Zeile(n) in keiner vollständigen Kette (Teilstand eines Einspielens?)` : null,
     ketten.some((k) => k.luecken.length > 0) ? "Kette mit Lücken" : null,
   );
@@ -598,4 +638,59 @@ export function creditsAusMedien(medien: StudioMedienTeil, deckel: number | null
     gemessen_am: summe === null ? null : medien.gemessen_am,
     ...(hinweis ? { hinweis } : {}),
   };
+}
+
+// ── Prüfprotokolle und Medien-Regel (Schritt 8, 10.11.2026) ─────────────────────────────────────
+
+export const PRUEFUNG_SPALTEN =
+  "id, medium_id, medium_sha256, durch, pruefer_kuerzel, klauseln, anker_abgleich, ki_hinweis_eingebrannt, durchsicht_volle_bildrate, rechte_status, rechte_nachweis, notiz, urteil, geprueft_am";
+
+/** Manifest des Objekts und Wortlaut des KI-Hinweises als Vorgaben der Regel. */
+export function medienVorgaben(slug: string): MedienRegelVorgaben {
+  const m = ankerManifest(slug);
+  return { anker: m === null ? null : m.eintraege, ki_hinweis_bild: KI_HINWEIS_BILD };
+}
+
+/** Eine Zeile aus studio_pruefung; wirft StudioLeseFehler, wenn ein Feld nicht die Form der Tabelle hat. */
+export function leseProtokollZeile(z: unknown): StudioPruefung {
+  if (!istObjekt(z)) throw new StudioLeseFehler("Prüfprotokoll: unerwartete Zeilenform");
+  const id = typeof z.id === "number" && Number.isSafeInteger(z.id) && z.id > 0 ? z.id : null;
+  if (id === null) throw new StudioLeseFehler("Prüfprotokoll ohne lesbare id");
+  const fehler = (feld: string) => new StudioLeseFehler(`Prüfprotokoll ${id}: ${feld} unlesbar`);
+  if (typeof z.medium_id !== "number" || !Number.isSafeInteger(z.medium_id)) throw fehler("medium_id");
+  for (const feld of ["medium_sha256", "durch", "pruefer_kuerzel"]) if (typeof z[feld] !== "string") throw fehler(feld);
+  if (!Array.isArray(z.klauseln)) throw fehler("klauseln");
+  const klauseln = (z.klauseln as unknown[]).map((k) => {
+    if (!istObjekt(k) || typeof k.id !== "string" || typeof k.bestanden !== "boolean") throw fehler("klauseln");
+    return { id: k.id, bestanden: k.bestanden };
+  });
+  const urteil = (feld: string) => {
+    if (z[feld] !== "bestanden" && z[feld] !== "nicht_bestanden") throw fehler(feld);
+    return z[feld] as "bestanden" | "nicht_bestanden";
+  };
+  for (const feld of ["ki_hinweis_eingebrannt", "durchsicht_volle_bildrate"]) if (typeof z[feld] !== "boolean") throw fehler(feld);
+  if (z.rechte_status !== "offen" && z.rechte_status !== "geklaert") throw fehler("rechte_status");
+  const geprueft = isoOderNull(z.geprueft_am);
+  if (geprueft === null) throw fehler("geprueft_am");
+  return {
+    id,
+    medium_id: z.medium_id,
+    medium_sha256: z.medium_sha256 as string,
+    durch: z.durch as string,
+    pruefer_kuerzel: z.pruefer_kuerzel as string,
+    klauseln,
+    anker_abgleich: urteil("anker_abgleich"),
+    ki_hinweis_eingebrannt: z.ki_hinweis_eingebrannt as boolean,
+    durchsicht_volle_bildrate: z.durchsicht_volle_bildrate as boolean,
+    rechte_status: z.rechte_status,
+    rechte_nachweis: typeof z.rechte_nachweis === "string" ? z.rechte_nachweis : null,
+    notiz: typeof z.notiz === "string" ? z.notiz : null,
+    urteil: urteil("urteil"),
+    geprueft_am: geprueft,
+  };
+}
+
+/** Protokolle nach Zeitpunkt (DB-Uhr) und id, jüngstes zuerst — dieselbe Ordnung, nach der die Regel das jüngste wählt. */
+export function jungeZuerst(liste: readonly StudioPruefung[]): StudioPruefung[] {
+  return [...liste].sort((a, b) => Date.parse(b.geprueft_am) - Date.parse(a.geprueft_am) || b.id - a.id);
 }

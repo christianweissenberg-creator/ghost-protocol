@@ -4,6 +4,7 @@ import { createServiceClient } from "@/lib/supabase";
 import { werteCounselAus } from "@/lib/counsel-urteil";
 import { geprueftenTextAusSchritten, pruefeFreigabe } from "@/lib/freigabe-regeln";
 import { bereinigeFehler, pruefeAnfrageHerkunft } from "@/lib/status-server";
+import { mediumZurFreigabe } from "@/lib/studio/medien-urteil";
 
 // Content-Freigabe-Aktionen: Übergänge zwischen den Status der content-Tabelle.
 // Auth über die bestehende Middleware (Session-Cookie) — hier keine Zusatzprüfung.
@@ -42,6 +43,13 @@ import { bereinigeFehler, pruefeAnfrageHerkunft } from "@/lib/status-server";
 // COUNSEL genau den Freigabetext geprüft hat (geprueftenTextAusSchritten aus metadata.steps und
 // review_notes, lib/freigabe-regeln.ts). Sonst 409 mit Sperrgrund "… (R2)" — auch für Altzeilen, deren
 // body die ungeprüfte PUBLISHER-Fassung ist.
+//
+// Objekt-Studio Stufe 2, Schritt 8 (10.11.2026): Trägt die Zeile metadata.medium_id (Caption zu einem Video), gilt
+// zusätzlich die Medien-Regel (lib/medien-freigabe.ts) serverseitig: Medium lesen (gleiches Objekt wie die Zeile),
+// Export-Datei vorher gestreamt nachhashen, Regel mit allen Gründen. Sperrt sie, antwortet die Route 409 mit dem
+// ersten Grund als fehler und allen Gründen als gruende und schreibt nichts; ist das Medium nicht lesbar, 502. Der
+// Beleg metadata.freigabe nennt dann zusätzlich medium_id, medium_sha256 (nachgemessen) und pruefung_id. Der Übergang
+// bleibt das bedingte Update (Status und updated_at); die Medien-Zeilen sind unveränderlich.
 
 type Aktion = "freigeben" | "ablehnen" | "gepostet" | "metriken";
 
@@ -195,6 +203,14 @@ export async function POST(request: NextRequest) {
         if (!pruefung.freigebbar || body === null) {
           return fehler(409, pruefung.grund ?? "Freigabetext nicht lesbar");
         }
+        // Schritt 8: Medien-Regel für Captions zu einem Video (metadata.medium_id gesetzt, auch unlesbar).
+        let medienBeleg: { medium_id: number; medium_sha256: string; pruefung_id: number } | null = null;
+        if (alteMetadata.medium_id !== undefined) {
+          const medium = await mediumZurFreigabe(supabase, alteMetadata);
+          if (medium.art === "lesefehler") return fehler(502, `Medium nicht lesbar: ${bereinigeFehler(medium.grund)}`);
+          if (medium.art === "gesperrt") return NextResponse.json({ fehler: medium.grund, gruende: medium.gruende }, { status: 409 });
+          medienBeleg = medium.beleg;
+        }
         const text = body.trim();
         update.status = ZIEL_STATUS.freigeben;
         metadata.freigabe = {
@@ -208,6 +224,8 @@ export async function POST(request: NextRequest) {
           // des getrimmten body (gleiche Zählung wie text_zeichen in /api/freigaben).
           text_sha256: createHash("sha256").update(text, "utf8").digest("hex"),
           text_zeichen: Array.from(text).length,
+          // Schritt 8: welches Video mit welchem Hash und nach welchem Prüfprotokoll freigegeben wurde.
+          ...(medienBeleg ?? {}),
         };
         break;
       }
