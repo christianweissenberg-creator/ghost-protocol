@@ -9,7 +9,9 @@
 //   Lauf starten“. Während der Bestätigung und des Laufs sind die Felder gesperrt.
 // - Lauf-ID wie auf /content (R10): Ist der Ausgang unbekannt (Netz, Antwort nicht lesbar, Antwort ohne Fehlertext der
 //   Route), sendet der nächste Versuch dieselbe ID — läuft der Lauf schon, antwortet der Server 409 statt einen zweiten
-//   bezahlten Lauf zu starten. Nach einem bekannten Ausgang gilt die ID als verbraucht.
+//   bezahlten Lauf zu starten. Nach einem bekannten Ausgang gilt die ID als verbraucht — außer bei einer Wiederholung
+//   (ausgangBeiWiederholung, wie auf /content, Nachtrag d2-text-erzeugen-1): Scheitert der erneute Versuch mit der offenen
+//   ID selbst (nicht gestartet, abgewiesen, abgebrochen), sagt das nichts über den früheren Versuch; die ID bleibt.
 // - Nach einem Ausgang mit Zeile lädt das Studio neu (fertig), die Caption erscheint als Asset-Karte.
 // Keine Zahl ohne Quelle: Gemessene Kosten je Lauf gibt es vorab nicht; die Antwort nennt die geschätzten Kosten des Laufs.
 
@@ -58,6 +60,8 @@ export type LaufAusgang =
   | { art: "unbekannt"; contentId: number | null; text: string };
 
 const AUSGANG_UNBEKANNT = "Ausgang unbekannt — der Lauf kann noch laufen; „Erneut senden“ schickt dieselbe Lauf-ID (kein zweiter bezahlter Lauf)";
+const AUSGANG_UNBEKANNT_FRUEHER =
+  "Ausgang unbekannt (früherer Versuch mit dieser Lauf-ID) — der Lauf kann noch laufen; „Erneut senden“ schickt dieselbe Lauf-ID (kein zweiter bezahlter Lauf)";
 
 function eintragsNummer(d: Record<string, unknown> | null): number | null {
   if (!d) return null;
@@ -103,6 +107,19 @@ export function laufAusgang(status: number | null, daten: unknown): LaufAusgang 
     return { art: "nicht_gestartet", text: maskiert(`Lauf nicht gestartet (HTTP ${status}): ${fehler}`) };
   }
   return { art: "unbekannt", contentId: nummer, text: `${AUSGANG_UNBEKANNT} · HTTP ${status} ohne lesbare Antwort` };
+}
+
+/**
+ * R10 bei Wiederholung (wie ausgangBeiWiederholung auf /content, Prüflauf 06.11.2026; Nachtrag d2-text-erzeugen-1):
+ * Sendet ein Versuch die offene Lauf-ID eines unbekannten Ausgangs erneut, belegt eine Antwort ohne Ergebnis (nicht
+ * gestartet, abgewiesen, abgebrochen) nur den Ausgang DIESES Versuchs. Der frühere Versuch kann gelaufen und bezahlt
+ * sein; er bleibt „unbekannt“, und die Lauf-ID bleibt, damit der Server einen zweiten Lauf weiter mit 409 abweist.
+ * Bekannt wird er nur durch ein Ergebnis oder 409. Vorher verwarf eine solche Antwort die ID, und der nächste
+ * bestätigte Klick startete einen zweiten bezahlten Lauf.
+ */
+export function ausgangBeiWiederholung(ausgang: LaufAusgang, wiederholung: boolean): LaufAusgang {
+  if (!wiederholung || ausgang.art === "ergebnis" || ausgang.art === "existiert" || ausgang.art === "unbekannt") return ausgang;
+  return { art: "unbekannt", contentId: null, text: `${AUSGANG_UNBEKANNT_FRUEHER} · Dieser Versuch: ${ausgang.text}` };
 }
 
 type Stand = { art: "zu" } | { art: "bestaetigen"; laufId: string } | { art: "laeuft"; laufId: string } | { art: "ausgang"; ausgang: LaufAusgang };
@@ -153,10 +170,12 @@ export function TextErzeugen({
     if (stand.art !== "bestaetigen" || sendet.current) return;
     sendet.current = true;
     const laufId = stand.laufId;
+    // Wiederholung: Dieser Versuch sendet die offene ID eines Versuchs mit unbekanntem Ausgang (vor dem Senden bestimmt).
+    const wiederholung = offeneLaufId === laufId;
     try {
       setStand({ art: "laeuft", laufId });
       setOffeneLaufId(laufId);
-      const ausgang = await sendeCaptionLauf(holen, laufKoerper(slug, medium.id, wahl, kategorie, laufId));
+      const ausgang = ausgangBeiWiederholung(await sendeCaptionLauf(holen, laufKoerper(slug, medium.id, wahl, kategorie, laufId)), wiederholung);
       setStand({ art: "ausgang", ausgang });
       // Nach einem bekannten Ausgang ist die ID verbraucht; nach einem unbekannten bleibt sie für den nächsten Versuch.
       setOffeneLaufId(ausgang.art === "unbekannt" ? laufId : null);

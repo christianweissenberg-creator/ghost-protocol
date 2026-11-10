@@ -553,6 +553,85 @@ test("M-C8 „Text erzeugen“: erst die Bestätigung mit „bezahlter Lauf (Cla
   assert.equal(text(element("data-text-erzeugen-knopf")), "Text erzeugen …", "danach wieder eine neue Lauf-ID");
 });
 
+/**
+ * „Text erzeugen“ gegen die echte Pipeline-Route (Agenten-Attrappe, nichts Bezahltes): Laufzeit, gesendete Körper und
+ * Schalter für eine verlorene Antwort und ein Tor, das die Antwort anhält (im finally öffnen).
+ */
+async function textErzeugenLaufzeit({ medium = { id: EXPORT_ID, sha256: "3".repeat(64) }, sperre } = {}) {
+  const { hookLaufzeit, ladeTextErzeugen, ladeStudioBausteine } = await import("./harness/studio.mjs");
+  const lz = hookLaufzeit();
+  const B = ladeStudioBausteine({ ...lz.attrappen, "@/lib/counsel-urteil": counselModul, "@/lib/freigabe-regeln": regeln });
+  const T = ladeTextErzeugen(lz.attrappen, { hilfen: B.hilfen });
+  const s = { gesendet: [], verloren: false, tor: null, fertig: 0 };
+  const holen = async (url, init) => {
+    assert.equal(url, "/api/content/pipeline");
+    s.gesendet.push(JSON.parse(init.body));
+    if (s.tor) await s.tor.warte;
+    const req = new NextRequest(`http://harness.local${url}`, { method: "POST", headers: { ...init.headers, cookie: "gp-auth=test" }, body: init.body });
+    const res = await pipeline.POST(req);
+    if (s.verloren) throw new TypeError("Verbindung nach dem Senden abgebrochen");
+    return res;
+  };
+  lz.setzeWurzel(T.TextErzeugen, { slug: SLUG, medium, holen, fertig: () => (s.fertig += 1), ...(sperre === undefined ? {} : { sperre }) });
+  const alle = (k, pred, aus = []) => {
+    if (Array.isArray(k)) for (const c of k) alle(c, pred, aus);
+    else if (k && typeof k === "object") {
+      if (pred(k)) aus.push(k);
+      alle(k.kinder, pred, aus);
+    }
+    return aus;
+  };
+  const text = (k) => (Array.isArray(k) ? k.map(text).join("") : k && typeof k === "object" ? text(k.kinder) : k === null || k === undefined || typeof k === "boolean" ? "" : String(k));
+  const element = (attr) => alle(lz.rendere(), (n) => n.props?.[attr] !== undefined)[0] ?? null;
+  const ausgang = () => element("data-text-erzeugen-ausgang");
+  /** Bestätigung öffnen und bestätigen; wartet, bis die Antwort eingeordnet ist. */
+  const lauf = async () => {
+    element("data-text-erzeugen-knopf").props.onClick();
+    element("data-text-erzeugen-start").props.onClick();
+    await lz.ruhe(40);
+  };
+  return { lz, T, s, element, text, ausgang, lauf };
+}
+
+test("M-C10 „Text erzeugen“, Wiederholung (Nachtrag d2-text-erzeugen-1): Antwort verloren, dann scheitert die Wiederholung mit 500 der Route — die Lauf-ID bleibt, der nächste Versuch sendet dieselbe und bekommt 409; es bleibt bei einem bezahlten Lauf (6 Aktivierungen)", async () => {
+  exportMit(RITTERGUT);
+  medien();
+  agenten();
+  const r = await textErzeugenLaufzeit();
+  // 1. Lauf läuft durch, die Antwort geht verloren: Ausgang unbekannt.
+  r.s.verloren = true;
+  await r.lauf();
+  r.s.verloren = false;
+  assert.equal(r.ausgang().props["data-text-erzeugen-ausgang"], "unbekannt");
+  assert.equal(welt.aktivierungen.length, 6);
+  const id = r.s.gesendet[0].lauf_id;
+  // 2. Wiederholung mit derselben ID; die Lauf-ID-Prüfung der Route scheitert vorübergehend → 500 „nicht gestartet“.
+  welt.stoerung = (a) => (a.art === "supabase" && a.tabelle === "content" && a.methode === "GET" && a.params.has("metadata->>lauf_id") ? { status: 500, body: { message: "Lesen fehlgeschlagen (vorübergehend)" } } : null);
+  try {
+    assert.equal(r.text(r.element("data-text-erzeugen-knopf")), "Erneut senden …");
+    await r.lauf();
+  } finally {
+    welt.stoerung = null;
+  }
+  assert.equal(r.s.gesendet[1].lauf_id, id, "Wiederholung mit derselben Lauf-ID");
+  assert.equal(r.ausgang().props["data-text-erzeugen-ausgang"], "unbekannt", "der frühere Versuch bleibt unbekannt");
+  assert.match(r.text(r.ausgang()), /^Ausgang unbekannt \(früherer Versuch mit dieser Lauf-ID\) — .* · Dieser Versuch: Lauf nicht gestartet \(HTTP 500\): Lauf-ID nicht prüfbar/);
+  assert.equal(r.text(r.element("data-text-erzeugen-knopf")), "Erneut senden …", "die Lauf-ID bleibt");
+  // 3. Der nächste Versuch sendet dieselbe ID → 409, kein zweiter Lauf.
+  r.element("data-text-erzeugen-knopf").props.onClick();
+  assert.match(r.text(r.element("data-text-erzeugen-bestaetigung")), /\(dieselbe wie beim Versuch mit unbekanntem Ausgang\)/);
+  r.element("data-text-erzeugen-start").props.onClick();
+  await r.lz.ruhe(40);
+  assert.equal(r.s.gesendet[2].lauf_id, id);
+  assert.equal(r.ausgang().props["data-text-erzeugen-ausgang"], "existiert");
+  assert.equal(welt.aktivierungen.length, 6, "es bleibt bei einem bezahlten Lauf");
+  assert.equal(welt.content.filter((z) => z.metadata?.medium_id === EXPORT_ID).length, 1, "eine Caption zum Video");
+  // Ohne Wiederholung verwirft ein bekannter Ausgang die ID weiter (Regel nur für die offene ID).
+  assert.deepEqual(r.T.ausgangBeiWiederholung({ art: "nicht_gestartet", text: "x" }, false), { art: "nicht_gestartet", text: "x" });
+  for (const art of ["ergebnis", "existiert", "unbekannt"]) assert.equal(r.T.ausgangBeiWiederholung({ art, contentId: 1, status: "complete", text: "x" }, true).art, art);
+  for (const art of ["nicht_gestartet", "abgewiesen", "abgebrochen"]) assert.equal(r.T.ausgangBeiWiederholung({ art, contentId: 1, text: "x" }, true).art, "unbekannt", art);
+});
+
 test("M-C9 laufAusgang: Antworten der Pipeline eingeordnet wie auf /content (Ergebnis, 409, 4xx, 5xx mit und ohne Zeile, unlesbar, Netz)", async () => {
   const { hookLaufzeit, ladeTextErzeugen, ladeStudioBausteine } = await import("./harness/studio.mjs");
   const lz = hookLaufzeit();
