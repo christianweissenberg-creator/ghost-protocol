@@ -26,6 +26,7 @@ import { STUDIO_REGELN } from "@/lib/studio/regeln";
 import type { MessplanStand } from "@/lib/studio/messplan";
 import type {
   AssetKosten,
+  MedienKette,
   ObjektKopf,
   StudioAntwort,
   StudioAsset,
@@ -276,22 +277,55 @@ export function entwurfHinweis(geladenAm: string | null | undefined): string {
   return `Entwurf: Ein Lauf kann diese Zeile noch füllen — angezeigt ist der Stand${zeit}; „neu laden“ zeigt den aktuellen.`;
 }
 
+/** Medium einer Caption zu einem Video auf der Karte: Export, Hash und das Urteil der Medien-Regel (Server). */
+function MediumZeile({ id, ketten }: { id: number | null; ketten: readonly MedienKette[] }) {
+  if (id === null) {
+    return (
+      <dd className="break-words" style={{ color: FARBE_ROT }} data-karten-medium="unlesbar">
+        Video — Medium der Zeile nicht lesbar (metadata.medium_id)
+      </dd>
+    );
+  }
+  const k = ketten.find((x) => x.export.id === id);
+  if (k === undefined) {
+    return (
+      <dd className="break-words" style={{ color: FARBE_BERNSTEIN }} data-karten-medium="fremd">
+        Video #{id} — nicht unter den Videos dieses Objekts (Grund unter „Freigabe“)
+      </dd>
+    );
+  }
+  return (
+    <dd className="break-words" data-karten-medium={k.urteil.freigebbar ? "frei" : "gesperrt"} title={k.urteil.gruende.map(maskiert).join("\n") || undefined}>
+      Video · Export #{k.export.id} ·{" "}
+      <span className="font-[family-name:var(--font-jbmono)]">{k.export.sha256.slice(0, 8)}…</span> · Medien-Regel:{" "}
+      <span style={{ color: k.urteil.freigebbar ? FARBE_GRUEN : FARBE_ROT }}>
+        {k.urteil.freigebbar ? "erfüllt" : `sperrt — ${maskiert(k.urteil.gruende[0] ?? "ohne Grund")}${k.urteil.gruende.length > 1 ? ` (+${k.urteil.gruende.length - 1})` : ""}`}
+      </span>
+    </dd>
+  );
+}
+
 function AssetKarte({
   a,
   kopiere,
   kopierStatus,
   geladenAm,
+  ketten = [],
 }: {
   a: StudioAsset;
   kopiere: (key: string, text: string) => void;
   kopierStatus: (key: string) => string;
   geladenAm?: string | null;
+  ketten?: readonly MedienKette[];
 }) {
   const status = assetStatus(a.status);
   const kanal = [a.kanal, a.format].filter((t): t is string => typeof t === "string" && t.trim() !== "").map(maskiert);
   // Anzeigeregel R2 wie in der Beleg-Kette und auf /content: grünes FREIGABE nur, wenn COUNSEL genau
   // den Freigabetext geprüft hat. Dieselbe gemerkte Freigabe-Lage, die die Beleg-Kette dieser Karte
-  // zeigt — Karte und Kette können sich nicht widersprechen.
+  // zeigt — beim COUNSEL-Urteil (R2) können sich Karte und Kette nicht widersprechen. Bei einer Caption zu
+  // einem Video prüft die Lage im Browser nur den Caption-Teil; das sagen Kette („Caption-Teil erfüllt …“) und
+  // Karte („Medium“ mit dem Urteil der Medien-Regel), die Freigabe-Zeile zeigt die Sperre des Servers mit
+  // Medien-Regel (Nachbesserung oberflaeche-3, caption9-3; vorher „Medium: keines (Text-Asset)“).
   const lage = freigabeLageGemerkt(a.beleg);
   const urteil = urteilAnzeige(a.counsel.urteil, lage.bezug);
   // Wie der Hinweis am Freigeben-Knopf auf /content: freigebbar, aber nicht genau dieser Text geprüft.
@@ -307,7 +341,8 @@ function AssetKarte({
           {status.label}
         </span>
         <span className="text-[11px] text-text-muted break-words">
-          Text{kanal.length > 0 ? ` · ${kanal.join(" · ")}` : " · Kanal und Format nicht gespeichert"}
+          {lage.medium ? `Caption zu Video${lage.medium.id === null ? "" : ` #${lage.medium.id}`}` : "Text"}
+          {kanal.length > 0 ? ` · ${kanal.join(" · ")}` : " · Kanal und Format nicht gespeichert"}
         </span>
       </div>
       <h3 className="text-sm font-semibold text-foreground break-words">{maskiert(a.titel ?? "ohne Titel")}</h3>
@@ -349,7 +384,7 @@ function AssetKarte({
         </div>
         <div className="min-w-0">
           <dt className="mono-label">Medium</dt>
-          <dd className="text-text-muted">keines (Text-Asset)</dd>
+          {lage.medium ? <MediumZeile id={lage.medium.id} ketten={ketten} /> : <dd className="text-text-muted">keines (Text-Asset)</dd>}
         </div>
         <div className="min-w-0">
           <dt className="mono-label">Erstellt</dt>
@@ -372,12 +407,14 @@ function AssetListe({
   kopiere,
   kopierStatus,
   stand,
+  ketten = [],
 }: {
   m: StudioAssetsTeil;
   slug: string;
   kopiere: (key: string, text: string) => void;
   kopierStatus: (key: string) => string;
   stand?: StudioStand;
+  ketten?: readonly MedienKette[];
 }) {
   return (
     <section className="mb-8 min-w-0" data-teil="assets" data-status={m.status}>
@@ -403,7 +440,7 @@ function AssetListe({
             </p>
           )}
           {m.wert.map((a) => (
-            <AssetKarte key={a.id} a={a} kopiere={kopiere} kopierStatus={kopierStatus} geladenAm={stand?.geladenAm} />
+            <AssetKarte key={a.id} a={a} kopiere={kopiere} kopierStatus={kopierStatus} geladenAm={stand?.geladenAm} ketten={ketten} />
           ))}
         </div>
       )}
@@ -676,7 +713,14 @@ export function StudioAnsicht({
           <Kennzahlen antwort={lesung.antwort} />
           <AnkerPanel slug={lesung.antwort.objekt_slug} />
           <MedienPanel slug={lesung.antwort.objekt_slug} medien={lesung.antwort.medien} credits={lesung.antwort.kosten_credits} neuLaden={neuLaden ?? OHNE_NEULADEN} />
-          <AssetListe m={lesung.antwort.assets} slug={lesung.antwort.objekt_slug} kopiere={kopiere} kopierStatus={kopierStatus} stand={stand} />
+          <AssetListe
+            m={lesung.antwort.assets}
+            slug={lesung.antwort.objekt_slug}
+            kopiere={kopiere}
+            kopierStatus={kopierStatus}
+            stand={stand}
+            ketten={lesung.antwort.medien.wert?.ketten ?? []}
+          />
         </>
       )}
 

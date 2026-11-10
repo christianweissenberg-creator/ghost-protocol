@@ -1636,3 +1636,28 @@ test("S-P4 Erste Lesung scheitert: Fehlerkarte mit „neu laden“; ein Klick li
   );
   assert.doesNotMatch(statisch, /data-neu-laden/);
 });
+
+test("S-P5 (Nachbesserung oberflaeche-3, caption9-3) Studio-Karte einer Caption zu einem Video: Medium mit Export und Urteil der Medien-Regel statt „keines (Text-Asset)“; die Beleg-Kette sagt „Caption-Teil erfüllt …“ statt grünem „erfüllt“", async () => {
+  standardWelt();
+  videoZeilen();
+  const PFLICHT = "Bild-/Videomaterial: KI-generierte Visualisierung, kein Foto der Bestandsimmobilie";
+  const text = `Caption zum Video, lang genug für die Regel.\n\n${PFLICHT}`;
+  legeAn({ id: 50, title: "Caption", status: "zur_freigabe", body: text, review_notes: "Befunde: keine.\nURTEIL: FREIGABE-EMPFEHLUNG", metadata: { objekt_slug: SLUG, steps: [{ agent: "researcher", output: "r" }, { agent: "scribe", output: text }], medium_id: 3 } });
+  const html = await studioHtml((await hole()).body);
+  const karte = /<article[^>]*data-asset="50".*?<\/article>/s.exec(html)?.[0] ?? "";
+  const t = sichtbar(karte);
+  assert.doesNotMatch(t, /keines \(Text-Asset\)/);
+  assert.match(t, /Caption zu Video #3/);
+  assert.match(t, /Video · Export #3 · 33333333… · Medien-Regel: sperrt — Prüfprotokoll fehlt \(\+3\)/, t.slice(0, 1500));
+  assert.match(karte, /data-karten-medium="gesperrt"/);
+  assert.match(t, /gesperrt: Prüfprotokoll fehlt/, "Freigabe: Sperre des Servers mit Medien-Regel");
+  assert.match(t, /Caption-Teil erfüllt \(Text und Pflichtzeile\) — die Medien-Regel prüft der Server beim Freigeben/);
+  assert.match(karte, /data-pruefregel="caption-teil"/);
+  // Caption ohne Video bleibt, wie sie war: „keines (Text-Asset)“, grünes „erfüllt“ in der Kette.
+  zuruecksetzen();
+  standardWelt();
+  legeAn({ id: 51, title: "Text", status: "zur_freigabe", body: text, review_notes: "Befunde: keine.\nURTEIL: FREIGABE-EMPFEHLUNG", metadata: { objekt_slug: SLUG, steps: [{ agent: "researcher", output: "r" }, { agent: "scribe", output: text }] } });
+  const ohne = /<article[^>]*data-asset="51".*?<\/article>/s.exec(await studioHtml((await hole()).body))?.[0] ?? "";
+  assert.match(sichtbar(ohne), /keines \(Text-Asset\)/);
+  assert.doesNotMatch(ohne, /data-pruefregel="caption-teil"|data-karten-medium/);
+});
