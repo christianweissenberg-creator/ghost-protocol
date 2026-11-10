@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServiceClient } from "@/lib/supabase";
-import { werteCounselAus } from "@/lib/counsel-urteil";
+import { enthaeltUrteil, ohneUrteilZeilen, werteCounselAus } from "@/lib/counsel-urteil";
 import {
   MIN_FREIGABE_ZEICHEN,
   STUFE_ENDPRUEFUNG,
@@ -10,7 +10,7 @@ import {
 } from "@/lib/freigabe-regeln";
 import { bereinigeFehler, leseProtokollEintraege, pruefeAnfrageHerkunft } from "@/lib/status-server";
 import { STEINADEL_REGELPAKET } from "@/lib/steinadel-regelpaket";
-import { baueKurzlink, pruefeKurzlinksImText } from "@/lib/steinadel-kurzlink";
+import { baueKurzlink, maskiereKampagnenseiten, pruefeKurzlinksImText } from "@/lib/steinadel-kurzlink";
 import type { KurzlinkPruefung, KurzlinkTextPruefung } from "@/lib/steinadel-kurzlink";
 import { DATIERUNG_AUSNAHMEN, istStudioObjekt } from "@/lib/studio/objekte";
 
@@ -900,6 +900,10 @@ const TEXTREGEL_GRUND = "Textregel nicht erfüllt";
  * CTA-Regel für SCRIBE und PUBLISHER: der Kurzlink wörtlich, kein anderer steinadel.de-Link.
  * Gegenprüfung 10.11.2026: Profil-CTAs der Plattform-Anweisungen (YouTube, TikTok, Instagram)
  * ersetzen den Link nicht, und Cross-Promotion-Texte tragen keinen eigenen Link.
+ * Nachbesserung PR #9: Cross-Promotion-Texte (Tweet, Newsletter-Teaser) tragen gar keinen Link mehr.
+ * Vorher war dort der CTA-Link erlaubt; er trägt die utm_source des Hauptkanals, ein Klick aus dem
+ * Teaser zählte also für die falsche Quelle. Prüfen kann das der Code nicht: Er weiß nicht, in welchem
+ * Teil des Texts ein Link steht (lib/steinadel-kurzlink.ts, pruefeKurzlinksImText).
  */
 function ctaBlock(k: Kurzlink): string {
   return `CTA-LINK (Pflicht, Zeichen für Zeichen übernehmen): ${k.link}
@@ -909,7 +913,8 @@ function ctaBlock(k: Kurzlink): string {
   setzt der Steinadel-Server beim Weiterleiten.
 - Sonst kein Link auf steinadel.de: keine Kampagnenseite /l/…, keine Objektseite, keine Kurzlink-Variante
   mit anderem Kürzel. Erlaubt ist daneben nur der Impressums-Verweis "Impressum: steinadel.de/impressum".
-- Cross-Promotion-Posts und Teaser tragen keinen Link oder genau diesen CTA-Link.`;
+- Cross-Promotion-Posts und Teaser (Tweet, Newsletter-Teaser) tragen keinen Link, auch nicht diesen
+  CTA-Link: Er zählt Klicks nur für diesen Kanal. Sie verweisen stattdessen auf den Hauptpost.`;
 }
 
 /**
@@ -939,31 +944,44 @@ function textPruefungBeleg(p: KurzlinkTextPruefung) {
   };
 }
 
-/**
- * URTEIL-Zeile im Content (Gegenprüfung 10.11.2026): Stünde im Text eine Zeile "URTEIL: …" und
- * zitierte COUNSEL sie, könnte werteCounselAus (lib/counsel-urteil.ts) sie als Urteil lesen. Ein
- * Content mit URTEIL-Zeile geht deshalb nie an COUNSEL; PUBLISHER bekommt das Review ohne URTEIL-Zeile.
- * Erkannt wird "URTEIL" mit Markdown- oder Leerzeichen bis zum Doppelpunkt, in jeder Schreibweise.
- */
-const URTEIL_IM_TEXT = /URTEIL[\s*_#`>~]*:/i;
+// URTEIL im Content (Gegenprüfung 10.11.2026; Nachbesserung PR #9): Ein Content mit einer Zeile, die
+// werteCounselAus als Urteil lesen könnte, geht nie an COUNSEL (enthaeltUrteil), und PUBLISHER bekommt
+// das Review ohne solche Zeilen (ohneUrteilZeilen). Beide Regeln stehen in lib/counsel-urteil.ts, mit
+// genau der Bereinigung von werteCounselAus; das eigene Muster URTEIL_IM_TEXT ist entfallen.
 
-function ohneUrteilZeilen(text: string): string {
-  return text
-    .split(/\r?\n/)
-    .filter((zeile) => !URTEIL_IM_TEXT.test(zeile))
-    .join("\n");
-}
+/** Markdown wie in lib/counsel-urteil.ts; vor der Datierungsprüfung entfernt, auch mitten im Wort ("Bau*jahr*"). */
+const DATIERUNG_MARKDOWN = /[*_#`>]/g;
+/**
+ * Zwischen den Wörtern: bis zu 4 Zeichen ohne Buchstabe und Ziffer — Leerraum, Satzzeichen, Klammern,
+ * Anführungszeichen, Pfeile, "~" und jede Art Gedankenstrich; der Unterstrich ist dann schon entfernt.
+ */
+const DATIERUNG_TRENNER = "[^\\p{L}\\p{N}]{0,4}";
+/** Füllwörter vor dem Jahr; ein Buchstabe direkt dahinter macht ein anderes Wort daraus ("warum", "etwas"). */
+const DATIERUNG_FUELLWOERTER = "um|ca|circa|zirka|etwa|ungefähr|rund|anno|ist|war";
 
 /**
  * Textregel der Spezifikation §8.1 für Objekte mit greifender Datierungs-Ausnahme: Der Text nennt das
  * Jahr nie als Baujahr (etwa "Baujahr 1335", "Baujahr: 1335", "Baujahr (1335)"). Das Regelpaket kennt
- * die Regel nicht, deshalb prüft sie der Code (Gegenprüfung 10.11.2026). null, wenn nichts auffällt.
+ * die Regel nicht, deshalb prüft sie der Code (Gegenprüfung 10.11.2026).
+ * Nachbesserung PR #9: Vorher rutschten "**Baujahr:** **1335**", "__Baujahr:__ 1335", "Baujahr: um 1335"
+ * und "Baujahr – um 1335" durch (Muster Baujahr\W{0,4}1335 auf dem Rohtext; "_" ist dort Wortzeichen).
+ * Jetzt wird erst Markdown entfernt. Dann zählen "Baujahr" (auch "Baujahres", "Baujahrs", "Baujahre")
+ * und die Abkürzung "Bj" vor dem Jahr, dazwischen nur Trenner und Füllwörter ("um", "ca.", "circa",
+ * "zirka", "etwa", "ungefähr", "rund", "anno", "ist", "war"). Andere Wörter dazwischen ("Baujahr
+ * unbekannt, 1335 …", "Baujahr ist nicht 1335") sind kein Befund, ebenso andere Jahre ("Baujahr um 1750").
+ * null, wenn nichts auffällt.
  */
 function datierungsBefund(text: string, datierung: Datierung | null): string | null {
   const beleg = datierung?.beleg;
   if (!beleg || !beleg.ausnahme_greift) return null;
-  const muster = new RegExp(`Baujahr\\W{0,4}${beleg.ausnahme_jahr}(?!\\d)`, "i");
-  return muster.test(text) ? `Jahr ${beleg.ausnahme_jahr} als Baujahr bezeichnet statt „${beleg.bezeichnung} ${beleg.ausnahme_jahr}“ (Objekt-Ausnahme)` : null;
+  const muster = new RegExp(
+    `(?:Baujahr(?:es|s|e)?|(?<!\\p{L})Bj)${DATIERUNG_TRENNER}` +
+      `(?:(?:${DATIERUNG_FUELLWOERTER})(?!\\p{L})${DATIERUNG_TRENNER})*${beleg.ausnahme_jahr}(?!\\d)`,
+    "iu",
+  );
+  return muster.test(text.replace(DATIERUNG_MARKDOWN, ""))
+    ? `Jahr ${beleg.ausnahme_jahr} als Baujahr bezeichnet statt „${beleg.bezeichnung} ${beleg.ausnahme_jahr}“ (Objekt-Ausnahme)`
+    : null;
 }
 
 type Dienst = ReturnType<typeof createServiceClient>;
@@ -1304,7 +1322,7 @@ export async function POST(request: NextRequest) {
           befunde.push(...pruefung.befunde);
         }
       }
-      if (URTEIL_IM_TEXT.test(text)) befunde.push("URTEIL-Zeile im Content (ein COUNSEL-Urteil gehört nicht in den Text)");
+      if (enthaeltUrteil(text)) befunde.push("URTEIL-Zeile im Content (ein COUNSEL-Urteil gehört nicht in den Text)");
       const datierungFalsch = datierungsBefund(text, datierung);
       if (datierungFalsch) befunde.push(datierungFalsch);
       return befunde.length > 0 ? { grund, befunde } : null;
@@ -1567,6 +1585,9 @@ ${objektBlock ?? "OBJEKTDATEN: keine (Freitext-Content ohne Steinadel-Objektbezu
     }
 
     // ═══ STEP 4: PUBLISHER — Formatierung & Scheduling ═══
+    // Das Review der Vorprüfung geht aufbereitet an PUBLISHER: ohne Zeilen, die ein Urteil tragen
+    // (lib/counsel-urteil.ts), Kampagnenseiten /l/… maskiert (Nachbesserung PR #9: sonst übernimmt
+    // PUBLISHER die aufgelöste Ziel-URL aus dem Review, lib/steinadel-kurzlink.ts), geschützter Name maskiert.
     await fuehreStufeAus(
       steps[3],
       `PUBLISHING-AUFTRAG: Bereite diesen Content für die Veröffentlichung vor.
@@ -1578,7 +1599,7 @@ CONTENT (von SCRIBE, COUNSEL-geprüft):
 ${steps[1].output}
 
 COUNSEL-REVIEW:
-${maskiereGeschuetzteNamen(ohneUrteilZeilen(counselOutput))}
+${maskiereGeschuetzteNamen(maskiereKampagnenseiten(ohneUrteilZeilen(counselOutput)))}
 
 AUFGABEN:
 1. Qualitätsprüfung: Fakten-Check, Ton, Länge
@@ -1591,7 +1612,7 @@ Liefere:
 - Finaler Content (mit deinen Korrekturen)
 - Metadaten (Title, Description, Tags, Hashtags)
 - Publishing-Zeitpunkt (Tag + Uhrzeit, DACH-optimiert)
-- Cross-Promotion-Posts (1 Tweet, 1 Newsletter-Teaser)
+- Cross-Promotion-Posts (1 Tweet, 1 Newsletter-Teaser)${kurzlink ? " — ohne Link, mit Verweis auf den Hauptpost" : ""}
 
 ENDFASSUNG (R2): Deine gesamte Antwort geht wörtlich an COUNSEL und danach unverändert zur
 Freigabe. Übernimm Pflichtzeilen (Modellrechnung-Disclaimer, KI-Kennzeichnung, Impressum)

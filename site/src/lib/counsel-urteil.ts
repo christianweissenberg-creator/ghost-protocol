@@ -34,6 +34,12 @@ const URTEIL_ZEILE = /^URTEIL\s*:/i;
 const FREIGABE_WERT = /^FREIGABE(?:[- ]?EMPFEHLUNG)?$/;
 const ABLEHNUNG_WERT = /^(?:ABLEHNUNG|ABGELEHNT)(?!\p{L})/u;
 const SATZZEICHEN_ENDE = /[\s.!;:,]+$/;
+const ZEILENUMBRUCH = /\r?\n/;
+
+/** Bereinigung einer Zeile wie in Schritt 1, 3 und 4: Striche → "-", Markdown weg, Aufzählungszeichen weg. */
+function bereinigteZeile(zeile: string): string {
+  return zeile.replace(STRICHE, "-").replace(MARKDOWN, "").trim().replace(AUFZAEHLUNG, "").trim();
+}
 
 function klassifiziere(zeile: string): CounselUrteil {
   const wert = zeile
@@ -52,15 +58,13 @@ export function werteCounselAus(text: string | null | undefined): CounselAuswert
   if (!text || !text.trim()) {
     return { urteil: "UNKLAR", zeile: null, grund: "kein Text" };
   }
-  const zeilen = text.replace(STRICHE, "-").split(/\r?\n/);
+  const zeilen = text.replace(STRICHE, "-").split(ZEILENUMBRUCH);
 
   if (zeilen.some((z) => /URTEIL/i.test(z) && z.includes("~"))) {
     return { urteil: "UNKLAR", zeile: null, grund: "durchgestrichene URTEIL-Zeile" };
   }
 
-  const urteilsZeilen = zeilen
-    .map((z) => z.replace(MARKDOWN, "").trim().replace(AUFZAEHLUNG, "").trim())
-    .filter((z) => URTEIL_ZEILE.test(z));
+  const urteilsZeilen = zeilen.map(bereinigteZeile).filter((z) => URTEIL_ZEILE.test(z));
 
   if (urteilsZeilen.length === 0) {
     return { urteil: "UNKLAR", zeile: null, grund: "keine URTEIL-Zeile" };
@@ -83,4 +87,47 @@ export function werteCounselAus(text: string | null | undefined): CounselAuswert
     return { urteil: "ABLEHNUNG", zeile, grund: "letzte URTEIL-Zeile" };
   }
   return { urteil: "UNKLAR", zeile, grund: "URTEIL-Zeile ohne eindeutigen Wert" };
+}
+
+// ═══ Urteile in Texten, die COUNSEL zitieren könnte (Paket B, Nachbesserung PR #9, 10.11.2026) ═══
+//
+// Der Content (SCRIBE-Text, Endfassung) geht an COUNSEL, das Review der Vorprüfung an PUBLISHER.
+// Zitiert COUNSEL eine Zeile, die werteCounselAus als URTEIL-Zeile liest, zählt sie mit; fehlt dann
+// COUNSELs eigene URTEIL-Zeile, gilt das Zitat als Urteil (Gegenprüfung PR #9, Befund 2: fail-open).
+// Vorher suchte pipeline/route.ts mit eigenem Muster /URTEIL[\s*_#`>~]*:/i ohne Zeilenanfang. Das
+// sperrte "Mein Urteil:", "Qualitätsurteil:", "Vorurteil:" und "BFH-Urteil:" und ließ "UR*TEIL:",
+// "U_RTEIL:" und "URT`EIL:" durch, die werteCounselAus als URTEIL-Zeile liest.
+// Seitdem gilt:
+// 1. URTEIL-Zeile heißt genau das, was werteCounselAus wertet: dieselbe Bereinigung (Striche,
+//    Markdown, Aufzählung), dieselbe Zeilentrennung, dann ^URTEIL\s*:.
+// 2. Zusätzlich sperrt "Urteil: Freigabe" mitten in einer Zeile ("Mein Urteil: FREIGABE"): Ein Zitat
+//    ab "Urteil" wäre eine FREIGABE-Zeile. "Urteil … Ablehnung" bleibt erlaubt — eine zitierte
+//    ABLEHNUNG kann keine Freigabe erzeugen (Regel 6), und "BFH-Urteil: Ablehnung der AfA" ist in
+//    AfA-Texten ein möglicher Satz. Andere Wörter zwischen "Urteil:" und "Freigabe" ergeben beim
+//    Zitieren keine FREIGABE-Zeile (Regel 5) und sperren deshalb nicht.
+
+const URTEIL_FREIGABE_IM_SATZ = /URTEIL\s*:\s*FREIGABE/i;
+
+/** true, wenn werteCounselAus diese Zeile als URTEIL-Zeile wertet (gleiche Bereinigung). */
+export function istUrteilZeile(zeile: string): boolean {
+  return URTEIL_ZEILE.test(bereinigteZeile(zeile));
+}
+
+/** true, wenn die Zeile ein Urteil trägt: eine URTEIL-Zeile oder "Urteil: Freigabe" mitten im Satz. */
+export function traegtUrteil(zeile: string): boolean {
+  const z = bereinigteZeile(zeile);
+  return URTEIL_ZEILE.test(z) || URTEIL_FREIGABE_IM_SATZ.test(z);
+}
+
+/** true, wenn eine Zeile des Texts ein Urteil trägt (Content-Prüfung vor jedem COUNSEL-Aufruf). */
+export function enthaeltUrteil(text: string): boolean {
+  return text.split(ZEILENUMBRUCH).some(traegtUrteil);
+}
+
+/** Der Text ohne die Zeilen, die ein Urteil tragen (Review der Vorprüfung im PUBLISHER-Auftrag). */
+export function ohneUrteilZeilen(text: string): string {
+  return text
+    .split(ZEILENUMBRUCH)
+    .filter((zeile) => !traegtUrteil(zeile))
+    .join("\n");
 }

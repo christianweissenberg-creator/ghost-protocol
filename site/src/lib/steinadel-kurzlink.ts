@@ -272,3 +272,33 @@ export function pruefeKurzlinksImText(text: string, ctaLink: string): KurzlinkTe
   if (ctaTreffer === 0) befunde.unshift(`CTA-Link fehlt im Text: ${ctaLink}`);
   return { ok: befunde.length === 0, cta_treffer: ctaTreffer, befunde };
 }
+
+// ═══ Kampagnenseiten im Review maskieren (Nachbesserung PR #9, 10.11.2026) ═══
+//
+// COUNSEL bekommt im Kurzlink-Block die aufgelöste Ziel-URL (/l/<kampagne>?utm_…). Zitiert COUNSEL sie
+// im Review der Vorprüfung, stand sie bisher im PUBLISHER-Auftrag. Übernahm PUBLISHER sie, fiel die
+// Endfassung durch die Kurzlink-Prüfung (Direktlink auf eine Kampagnenseite) — nach vier bezahlten
+// Aufrufen. Deshalb ersetzt maskiereKampagnenseiten jede Adresse, die pruefeKurzlinksImText als
+// Kampagnenseite erkennt (auch eingebettet, als //l/, %6C oder \l\), durch einen Platzhalter.
+
+/** Platzhalter für eine Kampagnenseite im Review; ohne steinadel.de, damit er selbst nichts auslöst. */
+export const KAMPAGNENSEITE_MASKIERT = "[Kampagnenseite — nie verlinken, verlinkt wird nur über den CTA-Link]";
+
+/** true, wenn die gefundene Adresse (ohne Satzzeichen am Ende) auf eine Kampagnenseite /l/… zeigt. */
+function istKampagnenseite(roh: string): boolean {
+  try {
+    const pfad = erkennungsPfad(new URL(/^https?:\/\//i.test(roh) ? roh : `https://${roh}`));
+    return pfad.startsWith("/l/") || pfad === "/l";
+  } catch {
+    // unlesbar (etwa ein ungültiger Port): wie in pruefeKurzlinksImText nach dem Pfad urteilen
+    return /[/\\]+l(?:[/\\]|$)/i.test(roh);
+  }
+}
+
+/** Jede Adresse einer Kampagnenseite auf steinadel.de durch KAMPAGNENSEITE_MASKIERT ersetzen. */
+export function maskiereKampagnenseiten(text: string): string {
+  return text.replace(STEINADEL_ADRESSE, (treffer) => {
+    const roh = treffer.replace(ENDE_OHNE_ADRESSE, "");
+    return istKampagnenseite(roh) ? `${KAMPAGNENSEITE_MASKIERT}${treffer.slice(roh.length)}` : treffer;
+  });
+}
