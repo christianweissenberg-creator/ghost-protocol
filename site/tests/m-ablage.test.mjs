@@ -84,6 +84,12 @@ function mp4(bytes) {
 
 const ANKER_BYTES = await rauschJpeg(400, 260, 4711);
 const ANKER_URL = "https://steinadel.de/objekte/test/test-anker.jpg";
+/** Anker-Datei mit derselben Größe, ein Byte in der Mitte gekippt (Hash weicht ab, Größe nicht). */
+const ANKER_GEKIPPT = (() => {
+  const b = Buffer.from(ANKER_BYTES);
+  b[b.length >> 1] ^= 0xff;
+  return b;
+})();
 const REZEPT = { x: 12, y: 30, breite: 320, hoehe: 180, skalierung: 1 };
 const MANIFEST = Object.freeze({
   gemessen_am: "2026-11-10T07:59:15Z",
@@ -346,6 +352,15 @@ test("M-P2 Prüflauf: Datei-Signatur passt nicht → 415; Anker-Hash weicht ab �
   assert.equal(r2.status, 409);
   assert.match(r2.body.fehler, /Anker test-anker: Live-Datei weicht vom Manifest ab/);
 
+  // Gleiche Größe, anderer Inhalt (ein Byte gekippt): Hier fällt nur der Hash auf, nicht die Größe (Nachbesserung
+  // mutanten-1, Mutant M2b „Hash-Vergleich nur im Pfad mit Bytes entfernt“).
+  steinadel.antwort = () => new Response(ANKER_GEKIPPT, { status: 200, headers: { "content-type": "image/jpeg" } });
+  const e2b = await hochladen();
+  const r2b = await pruefen(e2b);
+  assert.equal(r2b.status, 409, JSON.stringify(r2b.body));
+  assert.match(r2b.body.fehler, /Anker test-anker: Live-Datei weicht vom Manifest ab.*gleiche Größe, anderer Inhalt/);
+  assert.equal(zeilen().length, 0);
+
   steinadel.antwort = () => new Response("weg", { status: 503 });
   const e3 = await hochladen();
   const r3 = await pruefen(e3);
@@ -559,6 +574,23 @@ test("M-E5b Wettlauf: entsteht eine abweichende Zeile erst nach der Vorprüfung,
   }
 });
 
+test("M-E10 Einspielen mit JPEG-Startbild (Nachbesserung mutanten-4): Inhalts-Pfad und speicher_pfad enden auf .jpg, nie .jpeg", async () => {
+  const jpg = await sharp(ANKER_BYTES).extract({ left: REZEPT.x, top: REZEPT.y, width: REZEPT.breite, height: REZEPT.hoehe }).jpeg({ quality: 92 }).toBuffer();
+  const dateien = { ...DATEIEN, startbild: { bytes: jpg, mime: "image/jpeg" } };
+  const { eingang, v, e } = await ganzEinspielen(beleg({}, dateien), dateien);
+  assert.match(eingang.startbild, /^eingang\/[0-9a-f-]+\.jpg$/);
+  const ziel = `${SLUG}/${sha(jpg)}.jpg`;
+  assert.equal(v.body.vorschau[0].felder.speicher_pfad, ziel);
+  assert.equal(v.body.vorschau[0].felder.mime, "image/jpeg");
+  assert.equal(e.status, 200, JSON.stringify(e.body));
+  assert.equal(zeilen().length, 3);
+  assert.equal(zeilen()[0].speicher_pfad, ziel);
+  assert.ok(objektPfade().includes(ziel), objektPfade().join(" | "));
+  assert.ok(!objektPfade().some((p) => p.endsWith(".jpeg")), "keine .jpeg-Datei");
+  // Neu kodiert: gemessen und als nicht bestanden vermerkt — eingespielt wird trotzdem (die Regel sperrt später).
+  assert.equal(zeilen()[0].startbild_abgleich, "nicht_bestanden");
+});
+
 test("M-E9 Zeitüberschreitung beim Einfügen (postgrest-js liefert sie als error, ohne zu werfen) → 500 mit „Ausgang unbekannt“", async () => {
   welt.vorAntwort = async (a) => {
     if (a.methode === "POST" && a.tabelle === "studio_medium" && a.body?.fassung === "original") throw new DOMException("The operation was aborted due to timeout", "TimeoutError");
@@ -729,6 +761,14 @@ test("M-G1 abgleich: legt keine Zeile an, löscht das Bild danach und nennt Abgl
   const r3 = await post(abgleichRoute, "/abgleich", { eingang: signatur.abgleich, anker_id: "test-anker", ausschnitt: REZEPT });
   assert.equal(r3.status, 415);
   assert.ok(!objektPfade().includes(signatur.abgleich), "auch nach einem Fehler gelöscht");
+  // Anker mit gleicher Größe, anderem Inhalt → 409, ohne Abgleich (Nachbesserung mutanten-1).
+  steinadel.antwort = () => new Response(ANKER_GEKIPPT, { status: 200, headers: { "content-type": "image/jpeg" } });
+  const e4 = await hochladen({ abgleich: { bytes: STARTBILD, mime: "image/png" } });
+  const r4 = await post(abgleichRoute, "/abgleich", { eingang: e4.abgleich, anker_id: "test-anker", ausschnitt: REZEPT });
+  assert.equal(r4.status, 409, JSON.stringify(r4.body));
+  assert.match(r4.body.fehler, /Anker test-anker: Live-Datei weicht vom Manifest ab.*gleiche Größe, anderer Inhalt/);
+  assert.equal(r4.body.abgleich, undefined);
+  assert.ok(!objektPfade().includes(e4.abgleich), "auch nach der Abweisung gelöscht");
 });
 
 // ═══ datei ═══
