@@ -96,7 +96,7 @@ export const ANKER_MANIFESTE: Readonly<Record<StudioObjekt, AnkerManifest>> = Ob
         herkunft: { text: EXPOSE, expose_seite: 18 },
         personen: { stand: "ja", text: "ca. 8" },
         als_anker: true,
-        hinweis: "Vorlage der Probe vom 05.11.2026; der Steinadel-Export führt diese Datei als urls.cover.",
+        hinweis: "Vorlage der Probe vom 05.11.2026 (dieselbe Datei, SHA-256 gleich); der Steinadel-Export führt sie als urls.cover.",
       }),
       eintrag({
         id: "terrasse-pergola",
@@ -247,7 +247,8 @@ export function ankerManifest(slug: unknown): AnkerManifest | null {
  * Die Hash-Prüfung ruft nichts anderes ab — auch dann nicht, wenn jemand das Manifest falsch ändert.
  */
 export function istManifestUrl(url: unknown): url is string {
-  if (typeof url !== "string" || url.length > 300) return false;
+  // "?" und "#" auch leer nicht: new URL("…jpg?") hat search "" und sähe sonst normalisiert aus.
+  if (typeof url !== "string" || url.length > 300 || /[?#]/.test(url)) return false;
   let u: URL;
   try {
     u = new URL(url);
@@ -317,14 +318,18 @@ export type CoverVergleich =
   | { art: "kein_text" }
   /** Keine lesbare Web-Adresse (nicht zu parsen oder weder http noch https). */
   | { art: "unlesbar" }
-  /** adresse: Ursprung und Pfad (ohne Zugangsdaten, Abfrage, Fragment); zusatz: davon war etwas da. */
-  | { art: "adresse"; gleich: boolean; adresse: string; zusatz: boolean };
+  /**
+   * adresse: Ursprung und Pfad (ohne Zugangsdaten, Abfrage, Fragment); pfad_gleich: derselbe Ursprung und
+   * Pfad wie der Cover-Anker; zugang, abfrage, fragment: davon stand etwas in der Adresse.
+   */
+  | { art: "adresse"; adresse: string; pfad_gleich: boolean; zugang: boolean; abfrage: boolean; fragment: boolean };
 
 /**
- * Zeigt urls.cover auf die Datei des Cover-Ankers? Gleich heißt: derselbe Ursprung (https://steinadel.de)
- * und derselbe Pfad, ohne Zugangsdaten. Eine relative Angabe gilt wie im Steinadel-Export ab der Wurzel von
- * steinadel.de. Abfrage oder Fragment ändern die ausgelieferte Datei nicht (deren Inhalt prüft der Hash) und
- * werden nur als zusatz vermerkt. Die Adresse wird nie abgerufen.
+ * Was steht in urls.cover, gemessen an der Datei des Cover-Ankers? Eine relative Angabe gilt wie im
+ * Steinadel-Export ab der Wurzel von steinadel.de. Die Adresse wird nie abgerufen. Ob sie als "unverändert"
+ * zählt, entscheidet lib/studio/anker-pruefung.ts (coverAusExport): nur bei gleichem Ursprung und Pfad, ohne
+ * Zugangsdaten und ohne Abfrage — eine Abfrage könnte eine andere Auslieferung bedeuten, die der Hash der
+ * Manifest-Adresse nicht belegt. Ein Fragment geht nie an den Server.
  */
 export function vergleicheCover(cover: unknown, soll: string): CoverVergleich {
   if (cover === null || cover === undefined) return { art: "fehlt" };
@@ -340,11 +345,12 @@ export function vergleicheCover(cover: unknown, soll: string): CoverVergleich {
     return { art: "unlesbar" };
   }
   if (u.protocol !== "https:" && u.protocol !== "http:") return { art: "unlesbar" };
-  const zugang = u.username !== "" || u.password !== "";
   return {
     art: "adresse",
-    gleich: !zugang && u.origin === s.origin && u.pathname === s.pathname,
     adresse: `${u.origin}${u.pathname}`,
-    zusatz: zugang || u.search !== "" || u.hash !== "",
+    pfad_gleich: u.origin === s.origin && u.pathname === s.pathname,
+    zugang: u.username !== "" || u.password !== "",
+    abfrage: u.search !== "",
+    fragment: u.hash !== "",
   };
 }

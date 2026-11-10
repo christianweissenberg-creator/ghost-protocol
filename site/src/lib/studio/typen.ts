@@ -182,8 +182,8 @@ export interface AnkerAntwort {
   export_cover: CoverErgebnis;
 }
 
-/** Abweisung der ganzen Anfrage: 400 eingabe, 404 nicht_im_studio, 500 programmfehler. */
-export type StudioAbweisungsArt = "eingabe" | "nicht_im_studio" | "programmfehler";
+/** Abweisung der ganzen Anfrage: 400 eingabe, 403 herkunft (nur die Anker-Route), 404 nicht_im_studio, 500 programmfehler. */
+export type StudioAbweisungsArt = "eingabe" | "herkunft" | "nicht_im_studio" | "programmfehler";
 
 export interface StudioFehlerAntwort {
   fehler: string;

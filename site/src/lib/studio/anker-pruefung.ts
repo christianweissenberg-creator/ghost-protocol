@@ -8,7 +8,9 @@
 // - Zeitlimit je Datei ANKER_TIMEOUT_MS für Verbindung, Kopf und Inhalt; höchstens ANKER_GLEICHZEITIG
 //   Abrufe zugleich.
 // - Größenlimit: Gelesen wird höchstens die Byte-Zahl der Manifest-Datei. Ist die Live-Datei länger, bricht
-//   der Abruf dort ab; sie kann dann nicht die Manifest-Datei sein ("geaendert").
+//   der Abruf dort ab; sie kann dann nicht die Manifest-Datei sein ("geaendert"). Angefordert wird die Datei
+//   ohne Kodierung (Accept-Encoding: identity); eine komprimierte Antwort wird nicht gelesen — sonst zählte das
+//   Limit nur entpackte Bytes, und ein Strom, der zu nichts entpackt, liefe bis zum Zeitlimit (Prüfung 10.11.2026).
 // - Nichts wird abgelegt: Der Hash entsteht beim Lesen, die Bytes werden verworfen.
 // - Kein Takt: Geprüft wird nur auf Anfrage (Aufbau des Anker-Panels, „Alle prüfen“).
 // - Die Adresse aus urls.cover wird nur verglichen, nie abgerufen.
@@ -16,6 +18,7 @@
 
 import "server-only";
 import { createHash } from "node:crypto";
+import { domainToUnicode } from "node:url";
 import { maskiereGeschuetzteNamen } from "../freigabe-regeln";
 import { bereinigeFehler, istObjekt, istZeitueberschreitung } from "../status-server";
 import { dateiName, istManifestUrl, vergleicheCover } from "./anker";
@@ -30,6 +33,8 @@ export const ANKER_TIMEOUT_MS = 10_000;
 export const ANKER_GLEICHZEITIG = 4;
 /** Längste Anzeige von urls.cover. */
 export const COVER_ANZEIGE_MAX = 160;
+/** Längeres urls.cover wird weder verglichen noch angezeigt: Die Maskierung braucht Zeit und Speicher je Zeichen. */
+export const COVER_ROH_MAX = 2_000;
 export const QUELLE_COVER = "urls.cover im Steinadel-Export über /api/objekte";
 
 function zahl(n: number): string {
@@ -51,10 +56,11 @@ function mimeTyp(kopf: string | null): string | null {
   return m ? m[1].toLowerCase() : null;
 }
 
+/** Ergebnis einer Datei; gemessen_am ist der Zeitpunkt, zu dem es feststeht. */
 function ergebnis(
   e: AnkerEintrag,
   status: AnkerHashStatus,
-  felder: Partial<Pick<AnkerHashErgebnis, "sha256_live" | "bytes_live" | "http_status" | "hinweis" | "gemessen_am">>,
+  felder: Partial<Pick<AnkerHashErgebnis, "sha256_live" | "bytes_live" | "http_status" | "hinweis">>,
 ): AnkerHashErgebnis {
   return {
     id: e.id,
@@ -64,7 +70,7 @@ function ergebnis(
     bytes_soll: e.bytes,
     bytes_live: felder.bytes_live ?? null,
     http_status: felder.http_status ?? null,
-    gemessen_am: felder.gemessen_am ?? new Date().toISOString(),
+    gemessen_am: new Date().toISOString(),
     hinweis: felder.hinweis ?? null,
   };
 }
@@ -74,29 +80,41 @@ function ergebnis(
  * HTTP-Fehler, Weiterleitung und Abbruch beim Lesen werden zum Status der Datei, nie zur Ausnahme.
  */
 export async function pruefeAnkerDatei(e: AnkerEintrag): Promise<AnkerHashErgebnis> {
-  const versuchAm = new Date().toISOString();
+  // gemessen_am ist immer der Zeitpunkt des Ergebnisses (Prüfung 10.11.2026: vorher bei Netzfehlern der Versuchsbeginn).
   if (!istManifestUrl(e.url)) {
-    return ergebnis(e, "nicht_erreichbar", {
-      gemessen_am: versuchAm,
-      hinweis: "Adresse liegt nicht unter https://steinadel.de/objekte/ — nicht abgerufen",
-    });
+    return ergebnis(e, "nicht_erreichbar", { hinweis: "Adresse liegt nicht unter https://steinadel.de/objekte/ — nicht abgerufen" });
   }
   let res: Response;
   try {
-    res = await fetch(e.url, { cache: "no-store", redirect: "manual", signal: AbortSignal.timeout(ANKER_TIMEOUT_MS) });
+    res = await fetch(e.url, {
+      cache: "no-store",
+      redirect: "manual",
+      headers: { "Accept-Encoding": "identity" },
+      signal: AbortSignal.timeout(ANKER_TIMEOUT_MS),
+    });
   } catch (err) {
-    return ergebnis(e, "nicht_erreichbar", { gemessen_am: versuchAm, hinweis: abrufGrund(err) });
+    return ergebnis(e, "nicht_erreichbar", { hinweis: abrufGrund(err) });
   }
   if (res.status !== 200) {
     // Verbindung freigeben, ohne den Inhalt zu lesen.
     void res.body?.cancel().catch(() => undefined);
-    // In Node liefert redirect "manual" die 3xx-Antwort selbst (gemessen 10.11.2026, Node 25); eine
-    // Laufzeit nach Browser-Art gäbe "opaqueredirect" mit Status 0.
+    // redirect "manual": Node liefert die 3xx-Antwort selbst (gemessen 10.11.2026 mit Node 25; der Container
+    // läuft auf Node 22, dort nicht gemessen); eine Laufzeit nach Browser-Art gäbe "opaqueredirect" mit
+    // Status 0. Beides heißt hier "nicht erreichbar", das Ziel wird nie abgerufen.
     const weiter = res.type === "opaqueredirect" || (res.status >= 300 && res.status < 400);
     const code = res.status === 0 ? null : res.status;
     return ergebnis(e, "nicht_erreichbar", {
       http_status: code,
       hinweis: weiter ? `Weiterleitung${code === null ? "" : ` (HTTP ${code})`} — nicht gefolgt` : `HTTP ${res.status}`,
+    });
+  }
+  const kodierung = (res.headers.get("content-encoding") ?? "").trim().toLowerCase();
+  if (kodierung !== "" && kodierung !== "identity") {
+    void res.body?.cancel().catch(() => undefined);
+    const name = /^[\w.+-]{1,30}$/.test(kodierung) ? kodierung : "unbekannt";
+    return ergebnis(e, "nicht_erreichbar", {
+      http_status: 200,
+      hinweis: `Antwort mit Kodierung „${name}“, angefordert war die Datei ohne Kodierung — nicht gelesen`,
     });
   }
   const typ = mimeTyp(res.headers.get("content-type"));
@@ -134,14 +152,24 @@ export async function pruefeAnkerDatei(e: AnkerEintrag): Promise<AnkerHashErgebn
   });
 }
 
-/** f für jedes Element, höchstens n zugleich; Ergebnisse in der Reihenfolge der Liste. */
+/**
+ * f für jedes Element, höchstens n zugleich; Ergebnisse in der Reihenfolge der Liste. Wirft f, beginnt kein
+ * Arbeiter ein weiteres Element (laufende enden noch), und das Ganze scheitert mit diesem Fehler — sonst
+ * luden die übrigen Arbeiter nach einem Programmfehler weiter Dateien, ohne dass jemand das Ergebnis liest.
+ */
 export async function mitHoechstens<T, R>(n: number, liste: readonly T[], f: (t: T) => Promise<R>): Promise<R[]> {
   const aus: R[] = new Array<R>(liste.length);
   let naechster = 0;
+  let gescheitert = false;
   const arbeiter = async () => {
-    while (naechster < liste.length) {
+    while (!gescheitert && naechster < liste.length) {
       const i = naechster++;
-      aus[i] = await f(liste[i]);
+      try {
+        aus[i] = await f(liste[i]);
+      } catch (e) {
+        gescheitert = true;
+        throw e;
+      }
     }
   };
   await Promise.all(Array.from({ length: Math.max(1, Math.min(n, liste.length)) }, arbeiter));
@@ -160,8 +188,35 @@ function coverAnker(manifest: AnkerManifest): AnkerEintrag {
   return anker;
 }
 
-function anzeigeAdresse(adresse: string): string {
-  const text = maskiereGeschuetzteNamen(adresse);
+/** Gültige Prozent-Folgen auflösen; eine ungültige Folge bleibt stehen. */
+function entkodiere(text: string): string {
+  return text.replace(/(?:%[0-9A-Fa-f]{2})+/g, (folge) => {
+    try {
+      return decodeURIComponent(folge);
+    } catch {
+      return folge;
+    }
+  });
+}
+
+/**
+ * urls.cover für die Anzeige: Host aus Punycode und Pfad aus der Prozentkodierung zurückgewandelt, damit die
+ * Maskierung den geschützten Namen auch in diesen Formen findet (Prüfung 10.11.2026), dann Steuerzeichen
+ * entfernt, maskiert und gekürzt. null, wenn nicht anzeigbar: Bliebe eine Prozent-Folge stehen, könnte sich
+ * darin der Name verbergen.
+ */
+function anzeigeAdresse(adresse: string): string | null {
+  let u: URL;
+  try {
+    u = new URL(adresse);
+  } catch {
+    return null;
+  }
+  const pfad = entkodiere(u.pathname);
+  if (/%[0-9A-Fa-f]{2}/.test(pfad)) return null;
+  const host = domainToUnicode(u.hostname) || u.hostname;
+  const roh = `${u.protocol}//${host}${u.port ? `:${u.port}` : ""}${pfad}`.replace(/[\u0000-\u001f\u007f-\u009f]/g, "");
+  const text = maskiereGeschuetzteNamen(roh);
   return text.length > COVER_ANZEIGE_MAX ? `${text.slice(0, COVER_ANZEIGE_MAX - 1)}…` : text;
 }
 
@@ -183,21 +238,35 @@ export function coverAusExport(daten: unknown, slug: string, manifest: AnkerMani
     };
   }
   const urls = istObjekt(roh.urls) ? roh.urls : null;
-  const v = vergleicheCover(urls === null ? undefined : urls.cover, anker.url);
+  const coverRoh = urls === null ? undefined : urls.cover;
+  // Erst die Länge, dann Vergleich und Maskierung (Prüfung 10.11.2026: 10 MB kosteten sonst über 1 s und 1 GB).
+  if (typeof coverRoh === "string" && coverRoh.length > COVER_ROH_MAX) {
+    return { ...basis, status: "geaendert", ist: null, hinweis: `urls.cover ist länger als ${zahl(COVER_ROH_MAX)} Zeichen — weder verglichen noch angezeigt` };
+  }
+  const v = vergleicheCover(coverRoh, anker.url);
   const ziel = dateiName(anker.url);
   if (v.art === "fehlt") {
     return { ...basis, status: "geaendert", ist: null, hinweis: `Der Export nennt kein Cover (${urls === null ? "urls fehlt" : "urls.cover leer"})` };
   }
   if (v.art === "kein_text") return { ...basis, status: "geaendert", ist: null, hinweis: "urls.cover ist kein Text" };
   if (v.art === "unlesbar") return { ...basis, status: "geaendert", ist: null, hinweis: "urls.cover ist keine lesbare Web-Adresse" };
-  const zusatz = v.zusatz ? "Adresse mit Zugangsdaten, Abfrage oder Fragment; verglichen wurden Ursprung und Pfad" : null;
-  if (v.gleich) return { ...basis, status: "unveraendert", ist: anzeigeAdresse(v.adresse), hinweis: zusatz };
-  return {
-    ...basis,
-    status: "geaendert",
-    ist: anzeigeAdresse(v.adresse),
-    hinweis: zusatz === null ? `urls.cover zeigt nicht mehr auf ${ziel}` : `urls.cover zeigt nicht mehr auf ${ziel} (${zusatz})`,
-  };
+  const ist = anzeigeAdresse(v.adresse);
+  const anzeige = ist === null ? "; Adresse mit ungültiger Kodierung, nicht angezeigt" : "";
+  // Unverändert nur bei gleichem Ursprung und Pfad, ohne Zugangsdaten und ohne Abfrage (Prüfung 10.11.2026:
+  // dass steinadel.de eine Abfrage ignoriert, ist nicht belegt — der Hash gilt nur der Manifest-Adresse).
+  if (!v.pfad_gleich) return { ...basis, status: "geaendert", ist, hinweis: `urls.cover zeigt nicht mehr auf ${ziel}${anzeige}` };
+  if (v.zugang) {
+    return { ...basis, status: "geaendert", ist, hinweis: "urls.cover enthält Zugangsdaten (Name oder Passwort in der Adresse); angezeigt ohne sie" };
+  }
+  if (v.abfrage) {
+    return {
+      ...basis,
+      status: "geaendert",
+      ist,
+      hinweis: "urls.cover trägt eine Abfrage (?…); ob steinadel.de damit dieselbe Datei ausliefert, belegt die Hash-Prüfung nicht",
+    };
+  }
+  return { ...basis, status: "unveraendert", ist, hinweis: v.fragment ? "Adresse mit Fragment (#…); es geht nicht an den Server" : null };
 }
 
 /** Export nicht lesbar: der Cover-Abgleich mit Ursache und bereinigtem Grund des Export-Abrufs. */

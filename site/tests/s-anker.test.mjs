@@ -185,8 +185,8 @@ function exportMit(objekt = { ...RITTERGUT, urls: { cover: COVER_URL } }) {
   return { status: 200, body: { version: "1", quelle: "Testquelle", generiert_am: "2026-11-10T07:00:00Z", objekte: [objekt] } };
 }
 
-async function holeAnker(slug = SLUG, { cookie = "gp-auth=test", params, suche = "" } = {}) {
-  const req = new NextRequest(`http://harness.local/api/studio/${encodeURIComponent(slug)}/anker${suche}`, { headers: { cookie } });
+async function holeAnker(slug = SLUG, { cookie = "gp-auth=test", params, suche = "", kopf = {} } = {}) {
+  const req = new NextRequest(`http://harness.local/api/studio/${encodeURIComponent(slug)}/anker${suche}`, { headers: { cookie, ...kopf } });
   const res = await ankerRoute.GET(req, { params: params ?? Promise.resolve({ objekt: slug }) });
   return { status: res.status, kopf: res.headers, body: await res.json() };
 }
@@ -328,6 +328,8 @@ test("AN-S1 istManifestUrl: nur https://steinadel.de/objekte/….jpg in normalis
     "https://steinadel.de/objekte/a%2Fb.jpg",
     "https://steinadel.de/objekte/a.jpg?x=1",
     "https://steinadel.de/objekte/a.jpg#x",
+    "https://steinadel.de/objekte/a.jpg?",
+    "https://steinadel.de/objekte/a.jpg#",
     "https://steinadel.de/objekte/a.jpg/",
     "https://steinadel.de/api/objekte/export",
     "https://steinadel.de/objekte.jpg",
@@ -480,15 +482,42 @@ test("AN-H4 nicht erreichbar: HTTP-Fehler und Weiterleitung (nicht gefolgt), Inh
   assert.deepEqual([r2.status, r2.http_status, r2.hinweis], ["nicht_erreichbar", null, "Weiterleitung — nicht gefolgt"]);
 });
 
+test("AN-H4b Angefordert wird die Datei ohne Kodierung; eine komprimierte Antwort wird nicht gelesen (kein Entpacken)", async () => {
+  const z = { gezogen: 0, abgebrochen: false };
+  steinadel.dateien.set("/objekte/test/anker-a.jpg", () =>
+    new Response(strom([new Uint8Array(10)], z), { status: 200, headers: { "content-type": "image/jpeg", "content-encoding": "gzip" } }),
+  );
+  const r = await pruefung.pruefeAnkerDatei(testEintrag());
+  assert.deepEqual(
+    [r.status, r.http_status, r.sha256_live, r.hinweis],
+    ["nicht_erreichbar", 200, null, "Antwort mit Kodierung „gzip“, angefordert war die Datei ohne Kodierung — nicht gelesen"],
+  );
+  await new Promise((fertig) => setImmediate(fertig));
+  assert.equal(z.abgebrochen, true, "Inhalt verworfen");
+  assert.equal(new Headers(steinadel.abrufe[0].init.headers).get("accept-encoding"), "identity");
+  for (const [wert, name] of [["BR", "br"], [" zstd ", "zstd"], ["gzip, br", "unbekannt"], ["x".repeat(40), "unbekannt"]]) {
+    steinadel.dateien.set("/objekte/test/anker-a.jpg", () => new Response(BYTES_A, { status: 200, headers: { "content-encoding": wert } }));
+    assert.equal((await pruefung.pruefeAnkerDatei(testEintrag())).hinweis, `Antwort mit Kodierung „${name}“, angefordert war die Datei ohne Kodierung — nicht gelesen`, wert);
+  }
+  // "identity" oder leer: gelesen wie sonst.
+  for (const wert of ["identity", " Identity ", ""]) {
+    steinadel.dateien.set("/objekte/test/anker-a.jpg", () => new Response(BYTES_A, { status: 200, headers: { "content-encoding": wert } }));
+    assert.equal((await pruefung.pruefeAnkerDatei(testEintrag())).status, "unveraendert", JSON.stringify(wert));
+  }
+});
+
 test("AN-H5 nicht erreichbar: Netzfehler mit Code, Zeitlimit, Abbruch beim Lesen — Grund bereinigt, Zeitpunkt des Versuchs", async () => {
   const fehler = new TypeError("fetch failed", { cause: Object.assign(new Error("getaddrinfo"), { code: "ENOTFOUND" }) });
   steinadel.dateien.set("/objekte/test/anker-a.jpg", () => {
     throw fehler;
   });
-  const vorher = new Date().toISOString();
+  // Zeitpunkt des Ergebnisses, nicht des Versuchsbeginns (Prüfung 10.11.2026): Der Fehler kommt hier erst nach 30 ms.
+  steinadel.verzoegerungMs = 30;
+  const vorher = Date.now();
   const r1 = await pruefung.pruefeAnkerDatei(testEintrag());
+  steinadel.verzoegerungMs = 0;
   assert.deepEqual([r1.status, r1.http_status, r1.hinweis], ["nicht_erreichbar", null, "fetch failed (ENOTFOUND)"]);
-  assert.ok(r1.gemessen_am >= vorher);
+  assert.ok(Date.parse(r1.gemessen_am) >= vorher + 25, `${r1.gemessen_am} nach dem Fehler, nicht beim Versuchsbeginn`);
   // Steht der Code schon in der Meldung, kommt er nicht doppelt.
   steinadel.dateien.set("/objekte/test/anker-a.jpg", () => {
     throw new TypeError("getaddrinfo ENOTFOUND steinadel.de", { cause: { code: "ENOTFOUND" } });
@@ -562,6 +591,19 @@ test("AN-G1 mitHoechstens: höchstens n zugleich, Reihenfolge der Liste, jedes E
   }
   assert.deepEqual(await pruefung.mitHoechstens(4, [], async () => 1), []);
   assert.equal(pruefung.ANKER_GLEICHZEITIG, 4);
+  // Wirft f, scheitert das Ganze mit genau diesem Fehler, und kein weiteres Element wird begonnen.
+  const begonnen = [];
+  await assert.rejects(
+    pruefung.mitHoechstens(2, [0, 1, 2, 3, 4, 5], async (i) => {
+      begonnen.push(i);
+      await new Promise((fertig) => setTimeout(fertig, i === 0 ? 1 : 10));
+      if (i === 0) throw new Error("kaputt bei 0");
+      return i;
+    }),
+    /kaputt bei 0/,
+  );
+  await new Promise((fertig) => setTimeout(fertig, 40));
+  assert.deepEqual(begonnen, [0, 1], "nach dem Fehler nichts Neues begonnen");
 });
 
 test("AN-G2 pruefeAnkerDateien: alle Manifest-Dateien, höchstens 4 Abrufe zugleich, Ergebnisse in Manifest-Reihenfolge", async () => {
@@ -580,7 +622,7 @@ function cover(wert, objekt = null) {
   return pruefung.coverAusExport({ objekte: [o] }, SLUG, MANIFEST, "2026-11-10T08:00:00.000Z");
 }
 
-test("AN-C1 Cover unverändert: urls.cover zeigt auf hero-hof-nacht.jpg (absolut oder ab der Wurzel)", () => {
+test("AN-C1 Cover unverändert: urls.cover zeigt auf hero-hof-nacht.jpg (absolut oder ab der Wurzel), ein Fragment ändert nichts", () => {
   const r = cover(COVER_URL);
   assert.deepEqual(r, {
     anker_id: "hof-nacht",
@@ -593,16 +635,12 @@ test("AN-C1 Cover unverändert: urls.cover zeigt auf hero-hof-nacht.jpg (absolut
   });
   assert.equal(cover("/objekte/rittergut/hero-hof-nacht.jpg").status, "unveraendert");
   assert.equal(cover(`  ${COVER_URL}  `).status, "unveraendert");
-  // Abfrage oder Fragment: dieselbe Datei, nur vermerkt; die Abfrage erscheint nicht in der Anzeige.
-  for (const zusatz of ["?v=2", "#oben", "?token=geheim-123"]) {
-    const z = cover(`${COVER_URL}${zusatz}`);
-    assert.equal(z.status, "unveraendert", zusatz);
-    assert.equal(z.ist, COVER_URL);
-    assert.equal(z.hinweis, "Adresse mit Zugangsdaten, Abfrage oder Fragment; verglichen wurden Ursprung und Pfad");
-  }
+  // Ein Fragment geht nie an den Server: dieselbe Datei, nur vermerkt.
+  const f = cover(`${COVER_URL}#oben`);
+  assert.deepEqual([f.status, f.ist, f.hinweis], ["unveraendert", COVER_URL, "Adresse mit Fragment (#…); es geht nicht an den Server"]);
 });
 
-test("AN-C2 Cover geändert: anderer Pfad, Host, Protokoll, Zugangsdaten; leer, kein Text oder keine Web-Adresse", () => {
+test("AN-C2 Cover geändert: anderer Pfad, Host oder Protokoll; Zugangsdaten; Abfrage; leer, kein Text oder keine Web-Adresse", () => {
   const ziel = "urls.cover zeigt nicht mehr auf hero-hof-nacht.jpg";
   for (const [wert, ist] of [
     ["https://steinadel.de/objekte/rittergut/ki-cover-1.jpg", "https://steinadel.de/objekte/rittergut/ki-cover-1.jpg"],
@@ -612,16 +650,25 @@ test("AN-C2 Cover geändert: anderer Pfad, Host, Protokoll, Zugangsdaten; leer, 
     ["//evil.example/objekte/rittergut/hero-hof-nacht.jpg", "https://evil.example/objekte/rittergut/hero-hof-nacht.jpg"],
     ["hero-hof-nacht.jpg", "https://steinadel.de/hero-hof-nacht.jpg"],
     ["https://steinadel.de/objekte/rittergut/hero-hof-nacht.JPG", "https://steinadel.de/objekte/rittergut/hero-hof-nacht.JPG"],
+    ["https://nutzer:pw@steinadel.de/objekte/rittergut/anderes.jpg", "https://steinadel.de/objekte/rittergut/anderes.jpg"],
   ]) {
     const r = cover(wert);
-    assert.equal(r.status, "geaendert", wert);
-    assert.equal(r.ist, ist, wert);
-    assert.match(r.hinweis, new RegExp(`^${ziel}`), wert);
+    assert.deepEqual([r.status, r.ist, r.hinweis], ["geaendert", ist, ziel], wert);
   }
-  const zugang = cover("https://nutzer:pw@steinadel.de/objekte/rittergut/hero-hof-nacht.jpg");
-  assert.equal(zugang.status, "geaendert");
-  assert.equal(zugang.ist, COVER_URL, "Zugangsdaten erscheinen nicht");
-  assert.equal(zugang.hinweis, `${ziel} (Adresse mit Zugangsdaten, Abfrage oder Fragment; verglichen wurden Ursprung und Pfad)`);
+  // Gleicher Pfad mit Zugangsdaten: eigener Grund; angezeigt wird die Adresse ohne sie.
+  for (const wert of ["https://nutzer:pw@steinadel.de/objekte/rittergut/hero-hof-nacht.jpg", "https://nutzer@steinadel.de/objekte/rittergut/hero-hof-nacht.jpg?v=2"]) {
+    const r = cover(wert);
+    assert.deepEqual([r.status, r.ist, r.hinweis], ["geaendert", COVER_URL, "urls.cover enthält Zugangsdaten (Name oder Passwort in der Adresse); angezeigt ohne sie"], wert);
+  }
+  // Gleicher Pfad mit Abfrage: geändert (fail-closed), die Abfrage erscheint nicht in der Anzeige.
+  for (const zusatz of ["?v=2", "?token=geheim-123", "?w=400&format=webp#oben"]) {
+    const r = cover(`${COVER_URL}${zusatz}`);
+    assert.deepEqual(
+      [r.status, r.ist, r.hinweis],
+      ["geaendert", COVER_URL, "urls.cover trägt eine Abfrage (?…); ob steinadel.de damit dieselbe Datei ausliefert, belegt die Hash-Prüfung nicht"],
+      zusatz,
+    );
+  }
   for (const [wert, hinweis] of [
     [null, "Der Export nennt kein Cover (urls.cover leer)"],
     ["", "Der Export nennt kein Cover (urls.cover leer)"],
@@ -652,11 +699,39 @@ test("AN-C3 Cover nicht lesbar: Objekt fehlt im Export oder Antwort ohne Objektl
   assert.throws(() => pruefung.coverAusExport({ objekte: [] }, SLUG, { ...MANIFEST, cover_anker: "fehlt" }, "x"), /Cover-Anker „fehlt“ fehlt im Manifest/);
 });
 
-test("AN-C4 Cover-Anzeige: geschützter Name maskiert, lange Adresse gekürzt", () => {
+test("AN-C4 Cover-Anzeige: geschützter Name maskiert — auch prozentkodiert oder als Punycode —, Steuerzeichen entfernt, lange Adresse gekürzt", () => {
   const r = cover(`https://steinadel.de/${NAME}/cover.jpg`);
   assert.equal(r.status, "geaendert");
   assert.doesNotMatch(r.ist, ENTHAELT_NAMEN);
   assert.ok(r.ist.includes(regeln.NAMENS_ERSATZ));
+  // Prüfung 10.11.2026: Im Pfad stehen Leerzeichen, Sonderstriche und Doppelgänger prozentkodiert; die Maskierung
+  // erkennt nur Rohtext. Die Anzeige wandelt deshalb vorher zurück.
+  const [vorne, hinten] = ["Immo", "Nexus"];
+  for (const variante of [`${vorne} ${hinten}`, `${vorne}\u2013${hinten}`, `${vorne}\u00ad${hinten}`, `${vorne}\u200b${hinten}`, `Imm\u043e${hinten}`, `${vorne}\u2011${hinten}`]) {
+    assert.ok(regeln.enthaeltGeschuetztenNamen(variante), `Voraussetzung: Rohform erkannt (${JSON.stringify(variante)})`);
+    const k = cover(`https://steinadel.de/objekte/${variante}/cover.jpg`);
+    assert.equal(k.status, "geaendert");
+    assert.ok(typeof k.ist === "string" && k.ist.includes(regeln.NAMENS_ERSATZ), JSON.stringify([variante, k.ist]));
+    assert.ok(!regeln.enthaeltGeschuetztenNamen(k.ist) && !regeln.enthaeltGeschuetztenNamen(decodeURIComponent(k.ist)), JSON.stringify(k.ist));
+  }
+  // Name im Hostnamen (Punycode in der Adresse): zurückgewandelt und maskiert.
+  const idn = cover(`https://imm\u043enexus.example/cover.jpg`);
+  assert.ok(idn.ist.includes(regeln.NAMENS_ERSATZ) && !idn.ist.includes("xn--"), idn.ist);
+  // Steuerzeichen fallen weg; eine ungültige Kodierung wird nicht angezeigt (darin könnte sich der Name verbergen).
+  assert.equal(cover("https://steinadel.de/objekte/a%0Ab%09c.jpg").ist, "https://steinadel.de/objekte/abc.jpg");
+  const kaputt = cover("https://steinadel.de/objekte/%E2%80/x.jpg");
+  assert.deepEqual([kaputt.status, kaputt.ist, kaputt.hinweis], ["geaendert", null, "urls.cover zeigt nicht mehr auf hero-hof-nacht.jpg; Adresse mit ungültiger Kodierung, nicht angezeigt"]);
+  // Gültige Kodierung neben einer ungültigen: auch dann nicht angezeigt.
+  assert.equal(cover(`https://steinadel.de/objekte/${encodeURIComponent(`${vorne} ${hinten}`)}%E2/x.jpg`).ist, null);
+  // Port bleibt in der Anzeige.
+  const port = cover("https://steinadel.de:8443/objekte/rittergut/hero-hof-nacht.jpg");
+  assert.deepEqual([port.status, port.ist], ["geaendert", "https://steinadel.de:8443/objekte/rittergut/hero-hof-nacht.jpg"]);
+  // Überlang: weder verglichen noch maskiert noch angezeigt (Prüfung 10.11.2026: 10 MB kosteten sonst über 1 s und 1 GB).
+  const riesig = cover(`https://steinadel.de/${"a".repeat(3_000_000)}.jpg`);
+  assert.deepEqual([riesig.status, riesig.ist, riesig.hinweis], ["geaendert", null, "urls.cover ist länger als 2.000 Zeichen — weder verglichen noch angezeigt"]);
+  const grenze = `https://steinadel.de/${"c".repeat(pruefung.COVER_ROH_MAX - 25)}.jpg`;
+  assert.equal(grenze.length, pruefung.COVER_ROH_MAX);
+  assert.equal(cover(grenze).hinweis, "urls.cover zeigt nicht mehr auf hero-hof-nacht.jpg", "genau an der Grenze verglichen");
   const lang = cover(`https://steinadel.de/${"a".repeat(400)}.jpg`);
   assert.equal(lang.ist.length, pruefung.COVER_ANZEIGE_MAX);
   assert.ok(lang.ist.endsWith("…"));
@@ -685,8 +760,11 @@ test("AN-C6 coverFehler: Zeitpunkt, Grund und Ursache des Export-Abrufs; ohne An
 });
 
 test("AN-C5 vergleicheCover: relative Angaben ab der Wurzel von steinadel.de, die Adresse wird nie abgerufen", () => {
-  assert.deepEqual(anker.vergleicheCover("/objekte/rittergut/hero-hof-nacht.jpg", COVER_URL), { art: "adresse", gleich: true, adresse: COVER_URL, zusatz: false });
-  assert.deepEqual(anker.vergleicheCover("objekte/rittergut/hero-hof-nacht.jpg", COVER_URL), { art: "adresse", gleich: true, adresse: COVER_URL, zusatz: false });
+  const gleich = { art: "adresse", adresse: COVER_URL, pfad_gleich: true, zugang: false, abfrage: false, fragment: false };
+  assert.deepEqual(anker.vergleicheCover("/objekte/rittergut/hero-hof-nacht.jpg", COVER_URL), gleich);
+  assert.deepEqual(anker.vergleicheCover("objekte/rittergut/hero-hof-nacht.jpg", COVER_URL), gleich);
+  assert.deepEqual(anker.vergleicheCover("https://n@steinadel.de/objekte/rittergut/hero-hof-nacht.jpg?v=1#x", COVER_URL), { ...gleich, zugang: true, abfrage: true, fragment: true });
+  assert.deepEqual(anker.vergleicheCover("https://:pw@steinadel.de/x.jpg", COVER_URL), { ...gleich, adresse: "https://steinadel.de/x.jpg", pfad_gleich: false, zugang: true });
   assert.deepEqual(anker.vergleicheCover(COVER_URL, "kein url"), { art: "unlesbar" });
   assert.equal(steinadel.abrufe.length, 0);
 });
@@ -708,6 +786,23 @@ test("AN-R1 400 bei falscher Form, 404 außerhalb der Allow-List — ohne jeden 
   assert.equal(steinadel.abrufe.length, 0, "kein Abruf auf steinadel.de");
   assert.equal(welt.objektAbrufe, 0, "kein Export-Abruf");
   assert.equal(welt.log.length, 0, "keine Datenbank");
+});
+
+test("AN-R1b Herkunft: Sec-Fetch-Site cross-site oder same-site ergibt 403 ohne jeden Abruf; same-origin, none und ohne Kopf prüfen", async () => {
+  welt.objekteAntwort = exportMit();
+  for (const wert of ["cross-site", "same-site", "CROSS-SITE", " cross-site ", "irgendwas"]) {
+    const r = await holeAnker(SLUG, { kopf: { "sec-fetch-site": wert } });
+    assert.equal(r.status, 403, wert);
+    assert.deepEqual(r.body, { fehler: "Anfrage nicht von dieser Seite (Sec-Fetch-Site)", fehler_art: "herkunft" });
+    assert.equal(r.kopf.get("cache-control"), "no-store");
+  }
+  assert.equal(steinadel.abrufe.length, 0, "kein Abruf auf steinadel.de");
+  assert.equal(welt.objektAbrufe, 0, "kein Export-Abruf");
+  for (const wert of ["same-origin", "none", " Same-Origin "]) {
+    const r = await holeAnker(SLUG, { kopf: { "sec-fetch-site": wert } });
+    assert.equal(r.status, 200, wert);
+  }
+  assert.equal((await holeAnker()).status, 200, "ohne Kopf (Server, Werkzeuge)");
 });
 
 test("AN-R2 200: je Manifest-Datei ein Ergebnis in Manifest-Reihenfolge, Cover aus dem Export, ohne Cache", async () => {
@@ -788,6 +883,34 @@ test("AN-R5 Programmfehler: 500 mit bereinigtem Grund; eine gescheiterte Prüfun
   steinadel.dateien.clear();
   const danach = await holeAnker();
   assert.equal(danach.status, 200, "keine hängende Prüfung");
+});
+
+test("AN-R5b Scheitert die gemeinsame Prüfung, bekommen alle wartenden Anfragen 500; die nächste Anfrage prüft neu", async () => {
+  welt.objekteAntwort = exportMit();
+  steinadel.verzoegerungMs = 5;
+  steinadel.dateien.set("/objekte/rittergut/hero-hof-nacht.jpg", () => ({
+    status: 200,
+    type: "basic",
+    headers: {
+      get() {
+        throw new Error("Kopf kaputt");
+      },
+    },
+    body: null,
+  }));
+  const [a, b] = await Promise.all([holeAnker(), holeAnker()]);
+  assert.deepEqual([a.status, b.status], [500, 500]);
+  assert.equal(a.body.fehler, "Anker-Prüfung nicht ermittelbar: Kopf kaputt");
+  assert.deepEqual(a.body, b.body);
+  assert.equal(welt.objektAbrufe, 1, "eine gemeinsame Prüfung");
+  // Nach dem Fehler beginnt kein Arbeiter eine weitere Datei: nur die vier ersten Abrufe, auch später nicht mehr.
+  await new Promise((fertig) => setTimeout(fertig, 60));
+  assert.equal(steinadel.abrufe.length, 4, steinadel.abrufe.map((x) => x.url).join(", "));
+  steinadel.dateien.clear();
+  steinadel.verzoegerungMs = 0;
+  const c = await holeAnker();
+  assert.equal(c.status, 200);
+  assert.equal(welt.objektAbrufe, 2);
 });
 
 test("AN-R6 Cover über die Route: Export-Fehler mit derselben Ursache und demselben Grund wie der Objektkopf", async () => {
@@ -1059,6 +1182,42 @@ test("AN-P6 Abweichender Manifest-Stand des Servers wird sichtbar; Texte des Ser
   assert.doesNotMatch(ent(fehler), ENTHAELT_NAMEN);
 });
 
+test("AN-P6b Abweichender Manifest-Stand (alter Tab nach Deploy): fremde Ergebnisse, anderer Messzeitpunkt, Cover-Anker oder Hash — sichtbar, nie grün", () => {
+  const meldung = (html) => sichtbar(/<p[^>]*data-manifest-stand="abweichend"[^>]*>.*?<\/p>/s.exec(html)?.[0] ?? "").trim();
+  // Gleicher Stand: keine Meldung.
+  assert.equal(PANEL.standAbweichung(MANIFEST, antwortFuer()), null);
+  assert.doesNotMatch(panelHtml({ art: "daten", antwort: antwortFuer() }), /data-manifest-stand/);
+  // Ergebnis zu einer id, die diese Seite nicht kennt — hier "geändert": die Zusammenfassung bleibt nicht grün.
+  const fremd = antwortFuer();
+  fremd.anker.push({ ...fremd.anker[0], id: "neues-bild", status: "geaendert" });
+  const html1 = panelHtml({ art: "daten", antwort: fremd });
+  assert.equal(meldung(html1), "Der Server prüft gegen einen anderen Manifest-Stand als diese Seite (1 Ergebnis ohne Eintrag auf dieser Seite) — bitte die Seite neu laden.");
+  assert.ok(/<p[^>]*data-anker-stand="daten"[^>]*>/.exec(html1)[0].includes("var(--gp-amber)"), "nicht grün");
+  fremd.anker.push({ ...fremd.anker[0], id: "noch-eins" });
+  assert.equal(PANEL.standAbweichung(MANIFEST, fremd), "2 Ergebnisse ohne Eintrag auf dieser Seite");
+  // Anderer Messzeitpunkt, anderer Cover-Anker, nicht lesbarer Soll-Hash — zusammen genannt.
+  const alt = antwortFuer("unveraendert", { gutshaus: { sha256_soll: `kein-hex-${NAME}` } }, { anker_id: "gutshaus", soll: MANIFEST.eintraege[4].url });
+  alt.manifest_gemessen_am = "2026-11-09T12:00:00Z";
+  assert.equal(PANEL.standAbweichung(MANIFEST, alt), "anderer Messzeitpunkt, andere Soll-Hashes, anderer Cover-Anker");
+  const html2 = panelHtml({ art: "daten", antwort: alt });
+  assert.ok(meldung(html2).includes("(anderer Messzeitpunkt, andere Soll-Hashes, anderer Cover-Anker)"));
+  assert.doesNotMatch(ent(html2), ENTHAELT_NAMEN, "ein Hash-Feld mit Text erscheint nie roh");
+  assert.ok(!ent(html2).includes("kein-hex-"));
+  assert.ok(sichtbar(karte(html2, "gutshaus")).includes(`Hash-Status unverändert · ${MANIFEST.eintraege[4].sha256.slice(0, 16)}…`));
+  // Nur die Cover-Adresse anders.
+  assert.equal(PANEL.standAbweichung(MANIFEST, antwortFuer("unveraendert", {}, { soll: "https://steinadel.de/objekte/x.jpg" })), "anderer Cover-Anker");
+  // Nur die id des Cover-Ankers anders (Adresse gleich).
+  assert.equal(PANEL.standAbweichung(MANIFEST, antwortFuer("unveraendert", {}, { anker_id: "gutshaus" })), "anderer Cover-Anker");
+  // 64 Hex-Zeichen mit Anhang sind kein Hash: weder sichtbar noch im title.
+  const html4 = panelHtml({ art: "daten", antwort: antwortFuer("geaendert", { burghof: { sha256_live: `${"a".repeat(64)}${NAME}` } }) });
+  assert.doesNotMatch(ent(html4), ENTHAELT_NAMEN);
+  assert.ok(sichtbar(karte(html4, "burghof")).includes("Hash-Status geändert · Soll 1a26001503abba00…"));
+  // Live-Hash, der kein Hex ist: nicht angezeigt.
+  const html3 = panelHtml({ art: "daten", antwort: antwortFuer("geaendert", { burghof: { sha256_live: `x${NAME}` } }) });
+  assert.ok(sichtbar(karte(html3, "burghof")).includes("Hash-Status geändert · Soll 1a26001503abba00…"));
+  assert.doesNotMatch(ent(html3), ENTHAELT_NAMEN);
+});
+
 test("AN-P7 leseAnkerAntwort: nur lesbare Prüfergebnisse sind Daten; Fehlertext der Route maskiert", () => {
   const gut = antwortFuer();
   assert.deepEqual(PANEL.leseAnkerAntwort(200, gut), { art: "daten", antwort: gut });
@@ -1224,19 +1383,27 @@ test("AN-P9 Ohne Manifest (Kennung außerhalb der Liste): kein Abruf, sichtbarer
   }
 });
 
-test("AN-P10 Panel responsiv (Klassen): einspaltig bis lg, min-w-0, Umbruch für Pfade und Hashes, keine feste Breite", () => {
+test("AN-P10 Panel responsiv (Klassen): Karten einspaltig bis lg, Felder nach Kartenbreite, Umbruch ohne zerrissene Wörter, keine feste Breite", () => {
   const html = panelHtml({ art: "daten", antwort: antwortFuer("geaendert", { "hof-nacht": { sha256_live: "ab".repeat(32) } }) });
   assert.match(html, /^<section class="card-ghost p-5 mb-6 min-w-0" data-anker-panel="true"/);
   const raster = [...html.matchAll(/class="(grid [^"]*)"/g)].map((m) => m[1]);
-  assert.deepEqual([...new Set(raster)], ["grid grid-cols-1 lg:grid-cols-2 gap-4 mt-4", "grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-2 mt-3 text-xs"]);
-  assert.equal((html.match(/<article class="card-ghost p-4 min-w-0"/g) ?? []).length, 11);
-  // Herkunft und Hash-Status über beide Spalten der Karte (ab sm), die übrigen Felder je eine.
-  assert.equal((html.match(/<div class="min-w-0 sm:col-span-2">/g) ?? []).length, 22);
+  assert.deepEqual([...new Set(raster)], ["grid grid-cols-1 lg:grid-cols-2 gap-4 mt-4", "grid grid-cols-1 @sm:grid-cols-2 gap-x-4 gap-y-2 mt-3 text-xs"]);
+  // Prüfung "Anzeige" (10.11.2026): Die Felder richten sich nach der Kartenbreite (Container-Query), sonst wären
+  // sie bei 1024 px neben der Seitenleiste schmaler als auf dem Handy.
+  assert.equal((html.match(/<article class="card-ghost p-4 min-w-0 @container"/g) ?? []).length, 11);
+  // Herkunft und Hash-Status über beide Spalten der Karte (ab @sm), die übrigen Felder je eine.
+  assert.equal((html.match(/<div class="min-w-0 @sm:col-span-2">/g) ?? []).length, 22);
   assert.equal((html.match(/<div class="min-w-0"><dt class="mono-label">/g) ?? []).length, 44);
-  assert.equal((html.match(/<p class="text-\[11px\] break-all"><a /g) ?? []).length, 11, "Dateipfade brechen um");
-  assert.ok((html.match(/font-\[family-name:var\(--font-jbmono\)\] break-all/g) ?? []).length >= 11, "Hashes brechen um");
+  assert.doesNotMatch(html, /(?<!@)\bsm:(?:col-span-2|grid-cols-2)/, "keine Fenster-Breakpoints für die Felder");
+  // wrap-anywhere statt break-all: Wörter wie "statt" bleiben ganz, Pfade, Adressen und Hashes brechen nur bei Bedarf.
+  assert.doesNotMatch(html, /break-all/);
+  assert.equal((html.match(/<p class="text-\[11px\] wrap-anywhere"><a /g) ?? []).length, 11, "Dateipfade brechen um");
+  assert.ok((html.match(/font-\[family-name:var\(--font-jbmono\)\] wrap-anywhere/g) ?? []).length >= 11, "Hashes brechen um");
+  // Maße: Zahl und Einheit durch geschützte Leerzeichen verbunden.
+  assert.ok(html.includes("3000\u00a0×\u00a02018\u00a0px · 667.131\u00a0B"));
   assert.doesNotMatch(html, /(?:^|[\s"])(?:min-)?w-\[\d+px\]/);
-  assert.match(html, /<button type="button" class="shrink-0 /);
+  // Tippfläche mindestens 44 px hoch.
+  assert.match(html, /<button type="button" class="shrink-0 min-h-11 /);
   // Art-Abzeichen ohne CSS-Großschreibung: Der Seitentext (innerText) trägt den Wortlaut der Abnahme.
   const abzeichen = [...html.matchAll(/<span class="([^"]*)"[^>]*data-anker-art="true">([^<]*)<\/span>/g)];
   assert.equal(abzeichen.length, 11);

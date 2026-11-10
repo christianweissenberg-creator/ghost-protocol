@@ -15,9 +15,13 @@ import type { AnkerAntwort, StudioAbweisungsArt, StudioFehlerAntwort } from "@/l
 // Grenzen (nur Manifest-Adressen, keine Weiterleitung, Zeit- und Größenlimit, nichts abgelegt) in
 // lib/studio/anker-pruefung.ts. Keine bezahlten Aufrufe, keine Datenbank.
 // Die Route nimmt nur die Objekt-Kennung entgegen, keine Adresse; Abfrageparameter werden nicht gelesen.
-// Fehler: 400 bei falscher Form der Kennung, 404 außerhalb der Allow-List (beide ohne jeden Abruf),
-// 500 bei Programmfehler. Ein Fehler bei einer Datei oder beim Export steht als deren Status in der
-// Antwort (200).
+// Fehler: 403, wenn die Anfrage laut Browser von einer anderen Seite kommt; 400 bei falscher Form der Kennung,
+// 404 außerhalb der Allow-List (alle drei ohne jeden Abruf); 500 bei Programmfehler. Ein Fehler bei einer
+// Datei oder beim Export steht als deren Status in der Antwort (200).
+// Herkunft (Prüfung 10.11.2026): Der GET löst Abrufe auf steinadel.de aus, und das Sitzungs-Cookie ist
+// SameSite=Lax — eine fremde Seite könnte ihn per Navigation wiederholt auslösen. Abgewiesen wird deshalb
+// Sec-Fetch-Site "cross-site" und "same-site"; "same-origin" (das Panel), "none" (Adresse eingetippt) und
+// Anfragen ohne den Kopf (Server, Werkzeuge) bleiben möglich.
 // Läuft für ein Objekt schon eine Prüfung, wartet eine weitere Anfrage auf deren Ergebnis, statt die
 // Dateien ein zweites Mal zu laden (zwei Tabs, Doppelklick, Doppel-Effekt im Entwicklungsmodus). Danach
 // startet jede Anfrage eine neue Prüfung; zwischengespeichert wird nichts.
@@ -28,13 +32,19 @@ export const runtime = "nodejs";
 
 const laufend = new Map<StudioObjekt, Promise<AnkerAntwort>>();
 
-function abweisung(status: 400 | 404 | 500, fehler: string, art: StudioAbweisungsArt) {
+function abweisung(status: 400 | 403 | 404 | 500, fehler: string, art: StudioAbweisungsArt) {
   const antwort: StudioFehlerAntwort = { fehler: bereinigeFehler(fehler), fehler_art: art };
   return NextResponse.json(antwort, { status, headers: KEIN_CACHE });
 }
 
+const ERLAUBTE_HERKUNFT: readonly string[] = ["same-origin", "none"];
+
 export async function GET(request: NextRequest, { params }: { params: Promise<{ objekt: string }> }) {
   try {
+    const herkunft = request.headers.get("sec-fetch-site");
+    if (herkunft !== null && !ERLAUBTE_HERKUNFT.includes(herkunft.trim().toLowerCase())) {
+      return abweisung(403, "Anfrage nicht von dieser Seite (Sec-Fetch-Site)", "herkunft");
+    }
     const { objekt } = await params;
     const pruefung = pruefeStudioSlug(objekt);
     if (pruefung.art === "form") {

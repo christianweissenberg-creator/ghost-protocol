@@ -1,4 +1,7 @@
-// Anker-Panel des Objekt-Studios (Schritt 6, 10.11.2026).
+"use client";
+
+// Anker-Panel des Objekt-Studios (Schritt 6, 10.11.2026). Client-Baustein mit eigenem Zustand; die Grenze
+// steht hier, nicht nur auf der Seite, damit das Panel auch in einer Server-Komponente eingebettet laufen kann.
 //
 // Zeigt das Anker-Manifest (lib/studio/anker.ts) je Bild mit Art, Maßen, Exposé-Seite, Personen und
 // Herkunft, dazu den Hash-Status aus GET /api/studio/[objekt]/anker — „unverändert“, „geändert“ oder
@@ -95,6 +98,35 @@ function exposeText(e: AnkerEintrag): string {
   return e.herkunft.expose_seite === null ? "nicht belegt" : `S. ${e.herkunft.expose_seite}`;
 }
 
+const HEX64 = /^[0-9a-f]{64}$/;
+
+/** Ein SHA-256 des Servers nur als 64 Hex-Zeichen; alles andere gilt als nicht lesbar (und erscheint nie roh). */
+function hex(wert: unknown): string | null {
+  return typeof wert === "string" && HEX64.test(wert) ? wert : null;
+}
+
+/**
+ * Prüft der Server gegen einen anderen Manifest-Stand als diese Seite (etwa ein alter Tab nach einem Deploy)?
+ * Liefert die Gründe oder null. Verglichen werden Messzeitpunkt, Einträge, Hashes und der Cover-Anker.
+ */
+export function standAbweichung(m: AnkerManifest, antwort: AnkerAntwort): string | null {
+  const je = new Map(m.eintraege.map((e) => [e.id, e]));
+  const unbekannt = antwort.anker.filter((a) => !je.has(a.id)).length;
+  const hashAnders = antwort.anker.some((a) => {
+    const e = je.get(a.id);
+    return e !== undefined && hex(a.sha256_soll) !== e.sha256;
+  });
+  const cover = je.get(m.cover_anker);
+  const c = antwort.export_cover;
+  const gruende = [
+    antwort.manifest_gemessen_am !== m.gemessen_am ? "anderer Messzeitpunkt" : null,
+    unbekannt > 0 ? (unbekannt === 1 ? "1 Ergebnis ohne Eintrag auf dieser Seite" : `${unbekannt} Ergebnisse ohne Eintrag auf dieser Seite`) : null,
+    hashAnders ? "andere Soll-Hashes" : null,
+    c.anker_id !== m.cover_anker || cover === undefined || c.soll !== cover.url ? "anderer Cover-Anker" : null,
+  ].filter((g): g is string => g !== null);
+  return gruende.length > 0 ? gruende.join(", ") : null;
+}
+
 /** Zusammenfassung der Hash-Status über alle Manifest-Einträge; Einträge ohne Ergebnis zählen eigens. */
 export function zusammenfassung(m: AnkerManifest, antwort: AnkerAntwort): { text: string; farbe: string } {
   const jeId = new Map(antwort.anker.map((a) => [a.id, a]));
@@ -109,7 +141,8 @@ export function zusammenfassung(m: AnkerManifest, antwort: AnkerAntwort): { text
     .filter((s) => zaehlung[s] > 0)
     .map((s) => `${zaehlung[s]} ${HASH_STATUS_TEXT[s]}`);
   if (ohne > 0) teile.push(`${ohne} ohne Ergebnis`);
-  const farbe = zaehlung.geaendert > 0 ? FARBE_ROT : zaehlung.nicht_erreichbar > 0 || ohne > 0 ? FARBE_BERNSTEIN : FARBE_GRUEN;
+  const abweichung = standAbweichung(m, antwort) !== null;
+  const farbe = zaehlung.geaendert > 0 ? FARBE_ROT : zaehlung.nicht_erreichbar > 0 || ohne > 0 || abweichung ? FARBE_BERNSTEIN : FARBE_GRUEN;
   return { text: `Hash-Status: ${teile.join(" · ")}`, farbe };
 }
 
@@ -117,7 +150,7 @@ export function zusammenfassung(m: AnkerManifest, antwort: AnkerAntwort): { text
 
 function Feld({ titel, breit, children, ...daten }: { titel: string; breit?: boolean; children: ReactNode } & Record<`data-${string}`, string>) {
   return (
-    <div className={breit ? "min-w-0 sm:col-span-2" : "min-w-0"}>
+    <div className={breit ? "min-w-0 @sm:col-span-2" : "min-w-0"}>
       <dt className="mono-label">{titel}</dt>
       <dd className="break-words" {...daten}>
         {children}
@@ -148,8 +181,9 @@ function HashStatus({ e, r, lesung }: { e: AnkerEintrag; r: AnkerHashErgebnis | 
       </span>
     );
   }
-  const soll = typeof r.sha256_soll === "string" ? r.sha256_soll : e.sha256;
-  const live = typeof r.sha256_live === "string" ? r.sha256_live : null;
+  const sollServer = hex(r.sha256_soll);
+  const soll = sollServer ?? e.sha256;
+  const live = hex(r.sha256_live);
   const hash =
     r.status === "unveraendert" ? kurzHash(live ?? soll) : r.status === "geaendert" && live !== null ? `live ${kurzHash(live)} statt ${kurzHash(soll)}` : `Soll ${kurzHash(soll)}`;
   const titel = [
@@ -163,14 +197,15 @@ function HashStatus({ e, r, lesung }: { e: AnkerEintrag; r: AnkerHashErgebnis | 
       <span className="font-semibold" style={{ color: STATUS_FARBE[r.status] }}>
         {HASH_STATUS_TEXT[r.status]}
       </span>
-      <span className="font-[family-name:var(--font-jbmono)] break-all"> · {hash}</span>
+      {/* wrap-anywhere statt break-all: Wörter wie „statt“ bleiben ganz, ein langer Hash bricht nur, wenn er nicht passt. */}
+      <span className="font-[family-name:var(--font-jbmono)] wrap-anywhere"> · {hash}</span>
       <span className="text-text-muted"> · gemessen {zeitBerlin(r.gemessen_am, "ohne Zeitpunkt")}</span>
       {typeof r.hinweis === "string" && r.hinweis !== "" && (
         <span className="block text-[11px] break-words" style={{ color: "var(--gp-ink-2)" }} data-hash-hinweis>
           {maskiert(r.hinweis)}
         </span>
       )}
-      {soll !== e.sha256 && (
+      {sollServer !== e.sha256 && (
         <span className="block text-[11px] break-words" style={{ color: FARBE_BERNSTEIN }} data-manifest-abweichung>
           Der Server prüft gegen einen anderen Manifest-Stand als diese Seite — bitte die Seite neu laden.
         </span>
@@ -181,8 +216,10 @@ function HashStatus({ e, r, lesung }: { e: AnkerEintrag; r: AnkerHashErgebnis | 
 
 function AnkerKarte({ e, r, lesung, manifest }: { e: AnkerEintrag; r: AnkerHashErgebnis | undefined; lesung: AnkerLesung; manifest: AnkerManifest }) {
   const artFarbe = e.als_anker ? "var(--gp-gold)" : "var(--gp-ink-3)";
+  // Die Felder richten sich nach der Kartenbreite (Container-Query), nicht nach dem Fenster: Ab lg stehen die
+  // Karten zweispaltig neben der Seitenleiste und sind schmaler als auf dem Tablet.
   return (
-    <article className="card-ghost p-4 min-w-0" data-anker={e.id} data-hash-status={lesung.art === "daten" ? (r?.status ?? "ohne_ergebnis") : lesung.art}>
+    <article className="card-ghost p-4 min-w-0 @container" data-anker={e.id} data-hash-status={lesung.art === "daten" ? (r?.status ?? "ohne_ergebnis") : lesung.art}>
       <div className="flex flex-wrap items-center gap-2 mb-1.5">
         <span className="font-[family-name:var(--font-jbmono)] text-[11px]" style={{ color: "var(--gp-ink)" }}>
           {e.id}
@@ -192,15 +229,16 @@ function AnkerKarte({ e, r, lesung, manifest }: { e: AnkerEintrag; r: AnkerHashE
           {artText(e)}
         </span>
       </div>
-      <p className="text-[11px] break-all">
+      <p className="text-[11px] wrap-anywhere">
         <a href={e.url} target="_blank" rel="noopener noreferrer" className="text-text-muted hover:text-foreground transition-colors" data-anker-datei>
           {dateiPfad(e.url)}
         </a>
       </p>
-      <dl className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-2 mt-3 text-xs">
+      <dl className="grid grid-cols-1 @sm:grid-cols-2 gap-x-4 gap-y-2 mt-3 text-xs">
         <Feld titel="Maße" data-anker-masse={`${e.breite}x${e.hoehe}`}>
+          {/* Geschützte Leerzeichen: Zahl und Einheit bleiben zusammen, umbrochen wird nur am „·“. */}
           <span title={`an der Live-Datei gemessen ${zeitBerlin(manifest.gemessen_am, "ohne Zeitpunkt")}`}>
-            {e.breite} × {e.hoehe} px · {zahl(e.bytes)} B
+            {`${e.breite}\u00a0×\u00a0${e.hoehe}\u00a0px · ${zahl(e.bytes)}\u00a0B`}
           </span>
         </Feld>
         <Feld titel="Exposé-Seite" data-expose-seite={e.herkunft.expose_seite === null ? "keine" : String(e.herkunft.expose_seite)}>
@@ -246,7 +284,7 @@ function CoverZeile({ lesung, manifest }: { lesung: AnkerLesung; manifest: Anker
       <span className="font-semibold" style={{ color: status === null ? FARBE_BERNSTEIN : STATUS_FARBE[status] }}>
         {status === null ? "unbekannter Status" : COVER_STATUS_TEXT[status]}
       </span>
-      {typeof c.ist === "string" && <span className="break-all"> · zeigt auf {maskiert(c.ist)}</span>} · Soll: {soll} · geprüft{" "}
+      {typeof c.ist === "string" && <span className="wrap-anywhere"> · zeigt auf {maskiert(c.ist)}</span>} · Soll: {soll} · geprüft{" "}
       {zeitBerlin(c.gemessen_am, "ohne Zeitpunkt")}
       {typeof c.hinweis === "string" && c.hinweis !== "" && <span className="block">{maskiert(c.hinweis)}</span>}
     </p>
@@ -258,6 +296,7 @@ export function AnkerAnsicht({ manifest, lesung, pruefen }: { manifest: AnkerMan
   const laeuft = lesung.art === "laedt";
   const jeId = new Map<string, AnkerHashErgebnis>(lesung.art === "daten" ? lesung.antwort.anker.map((a) => [a.id, a]) : []);
   const summe = lesung.art === "daten" ? zusammenfassung(manifest, lesung.antwort) : null;
+  const abweichung = lesung.art === "daten" ? standAbweichung(manifest, lesung.antwort) : null;
   return (
     <section className="card-ghost p-5 mb-6 min-w-0" data-anker-panel data-pruefung={lesung.art}>
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -271,7 +310,7 @@ export function AnkerAnsicht({ manifest, lesung, pruefen }: { manifest: AnkerMan
           type="button"
           onClick={pruefen}
           disabled={laeuft}
-          className="shrink-0 px-4 py-2 rounded-lg text-xs font-medium bg-surface-elevated text-foreground hover:opacity-80 transition-opacity disabled:opacity-40"
+          className="shrink-0 min-h-11 px-4 py-2 rounded-lg text-xs font-medium bg-surface-elevated text-foreground hover:opacity-80 transition-opacity disabled:opacity-40"
           data-alle-pruefen
         >
           Alle prüfen
@@ -279,8 +318,8 @@ export function AnkerAnsicht({ manifest, lesung, pruefen }: { manifest: AnkerMan
       </div>
       <p className="text-[10px] text-text-muted mt-2 break-words">
         „Alle prüfen“ lädt die {manifest.eintraege.length} Dateien des Manifests neu von steinadel.de, vergleicht ihren SHA-256 mit dem
-        Manifest und prüft urls.cover im Export — ohne bezahlte Aufrufe. Manifest-Werte gemessen{" "}
-        {zeitBerlin(manifest.gemessen_am, "ohne Zeitpunkt")} an den ausgelieferten Dateien.
+        Manifest und prüft urls.cover im Export — ohne bezahlte Aufrufe. Läuft gerade schon eine Prüfung (etwa aus einem zweiten Tab),
+        gilt deren Ergebnis. Manifest-Werte gemessen {zeitBerlin(manifest.gemessen_am, "ohne Zeitpunkt")} an den ausgelieferten Dateien.
       </p>
       <div className="mt-3 space-y-1" aria-live="polite">
         {lesung.art === "laedt" && (
@@ -296,6 +335,11 @@ export function AnkerAnsicht({ manifest, lesung, pruefen }: { manifest: AnkerMan
         {lesung.art === "daten" && summe !== null && (
           <p className="text-[11px] break-words" style={{ color: summe.farbe }} data-anker-stand="daten">
             {summe.text} · Prüfung beendet {zeitBerlin(lesung.antwort.erzeugt_am, "ohne Zeitpunkt")}
+          </p>
+        )}
+        {abweichung !== null && (
+          <p className="text-[11px] break-words" style={{ color: FARBE_BERNSTEIN }} role="alert" data-manifest-stand="abweichend">
+            Der Server prüft gegen einen anderen Manifest-Stand als diese Seite ({abweichung}) — bitte die Seite neu laden.
           </p>
         )}
         <CoverZeile lesung={lesung} manifest={manifest} />
