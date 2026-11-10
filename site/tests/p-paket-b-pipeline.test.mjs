@@ -16,6 +16,9 @@
 //   unverändert streng), Datierung ohne abgeleitetes Alter (Prompt, COUNSEL-Prüfpunkt, Code „N Jahre“).
 // - Gegenprüfung PR #10: Regeltext ohne Rechenformel, Alter im Review an PUBLISHER maskiert, PUBLISHER-Satz,
 //   Eskalation über der URTEIL-Zeile, Gedankenstriche, verschobene Uhr (2027).
+// - Gegenprüfung des Nachtrags (neun niedrige Punkte): Masken-Reihenfolge und Markdown in der Zahl (P-P22),
+//   Pflichtzeilen im PUBLISHER-Satz und „seit N Jahren …“ (P-P19), RESEARCHER-Text an SCRIBE maskiert (P-P24),
+//   Textregel-Befunde einzeln (P-P25), Auftragskennung der COUNSEL-Prüfanweisungen (P-P26).
 // Die Umgebungswerte unten sind Testwerte dieses Prozesses, keine echten Schlüssel.
 // Z_ROUTE_<NAME>=<pfad> und Z_TSX_<NAME>=<pfad> prüfen Kopien statt der Repo-Dateien (Mutationstests).
 import { test, beforeEach } from "node:test";
@@ -1396,14 +1399,19 @@ const SCHLUSS =
   "Sie steht allein in ihrer Zeile, ohne Anführungszeichen und ohne Formatierung; dahinter steht nichts — kein ✓, kein Emoji, " +
   "keine Klammer, kein Kommentar. Eskalationen und Hinweise an den Betreiber stehen in den Befunden darüber, nie in oder " +
   "hinter der Urteilszeile. 'URTEIL:' steht nur in dieser Zeile.";
-/** Satz im PUBLISHER-Auftrag bei greifender Datierungs-Ausnahme (Gegenprüfung PR #10). */
+/**
+ * Satz im PUBLISHER-Auftrag bei greifender Datierungs-Ausnahme (Gegenprüfung PR #10). Nachtrag (NP-1): Das Verbot,
+ * Regeltexte wörtlich wiederzugeben, gilt nur für Qualitätsprüfung und Fakten-Check; die Pflichtzeilen sind ausgenommen.
+ */
 const PUBLISHER_SATZ =
   "Modellrechnung-Disclaimer wörtlich. Auch Qualitätsprüfung und Fakten-Check gehen mit zur Freigabe: Nenne darin keine " +
-  "Zahl von Jahren, die aus der Ersterwähnung 1335 gerechnet ist, und zitiere keine Regeln wörtlich.\n\n";
-/** Verbotene Formen in Datierungszeile und Prüfpunkt: „N“ statt der Zahl, keine Rechenformel. */
+  "Zahl von Jahren, die aus der Ersterwähnung 1335 gerechnet ist, und gib darin keine Regeltexte wörtlich wieder. " +
+  "Ausgenommen sind die Pflichtzeilen (Modellrechnung-Disclaimer, KI-Kennzeichnung, Impressum): Sie stehen im finalen " +
+  "Content und in jedem Teil, der sie braucht, weiter wörtlich.\n\n";
+/** Verbotene Formen in Datierungszeile und Prüfpunkt: „N“ statt der Zahl, keine Rechenformel; seit dem Nachtrag mit „seit N Jahren …“. */
 const FORMEN =
-  "„N Jahre Bausubstanz“, „N Jahre Geschichte“, „N Jahre alt“, „vor N Jahren …“, „N Jahre her/zurück“, „seit 1335 steht …“, " +
-  "„Substanz/Mauern aus 1335“";
+  "„N Jahre Bausubstanz“, „N Jahre Geschichte“, „N Jahre alt“, „seit N Jahren …“, „vor N Jahren …“, „N Jahre her/zurück“, " +
+  "„seit 1335 steht …“, „Substanz/Mauern aus 1335“";
 /**
  * Sätze mit abgeleitetem Alter → Befund (Treffer ohne Markdown). Vom Abnahmelauf, aus der Gegenprüfung PR #10
  * („Vor N Jahren erstmals urkundlich erwähnt“, Gedankenstriche U+2012 bis U+2014) und Randfälle.
@@ -1430,8 +1438,23 @@ const ALTER_TREFFER = [
   [`${ALTER - 1}–${ALTER} Jahre`, `${ALTER} Jahre`],
   [`Vor ${ALTER} Jahren erstmals urkundlich erwähnt.`, `${ALTER} Jahren`],
   [`Das ist ${ALTER} Jahre her.`, `${ALTER} Jahre`],
+  // Gegenprüfung des Nachtrags (NP-3): Umformung des erlaubten „seit 1335 urkundlich belegt“; steht seither in der Verbotsliste
+  [`Seit ${ALTER} Jahren urkundlich belegt.`, `${ALTER} Jahren`],
   // Jedes Markdown-Zeichen um die Zahl: Code-Prüfung und Maskierung entfernen dieselben Zeichen
   ...[..."*_#`>"].map((c) => [`${c}${ALTER}${c} Jahre`, `${ALTER} Jahre`]),
+];
+/**
+ * Gegenprüfung des Nachtrags (B2): Markdown INNERHALB der Zahl → [Satz, Satz nach maskiereAlter]. Die Code-Prüfung findet
+ * „N Jahre“ im Text ohne Markdown; die Maskierung rechnet die Fundstelle über alle Ziffern zurück. Formatierung außerhalb der
+ * Zahl bleibt, Markdown zwischen den Ziffern entfällt mit der Zahl.
+ */
+const [Z1, Z2, Z3] = String(ALTER);
+const ALTER_MARKDOWN_IN_ZAHL = [
+  [`${Z1}**${Z2}**${Z3} Jahre`, "N Jahre"],
+  [`**${Z1}${Z2}**${Z3} Jahre`, "**N Jahre"],
+  [`${Z1}${Z2}**${Z3}** Jahre`, "N** Jahre"],
+  [`${Z1}_${Z2}${Z3}_ Jahre Bausubstanz`, "N_ Jahre Bausubstanz"],
+  [`x ${Z1}\`${Z2}${Z3} Jahre`, "x N Jahre"],
 ];
 /** Kein Befund: Bauwörter in der Nähe (Auftrag), andere Zahlen, „Jahre“ nicht direkt hinter der Zahl. */
 const ALTER_KEIN_TREFFER = [
@@ -1525,6 +1548,12 @@ test("P-P19 Datierung im Auftrag: die Datierungszeile verbietet ein aus 1335 abg
   for (const agent of ["researcher", "scribe", "publisher", "amplifier"]) assert.ok(!auftrag(agent).includes("PRÜFPUNKT DATIERUNG"), agent);
   // PUBLISHER-Satz (Gegenprüfung PR #10): im ENDFASSUNG-Absatz, direkt vor dem Objektblock; nur bei PUBLISHER
   assert.ok(auftrag("publisher").includes(`${PUBLISHER_SATZ}OBJEKTDATEN`), auftrag("publisher").slice(-1600, -1000));
+  // Nachtrag (NP-1): Das Verbot gilt nur für Qualitätsprüfung und Fakten-Check, die Pflichtzeilen sind ausgenommen — genannt
+  // mit derselben Liste wie im ENDFASSUNG-Absatz („Übernimm Pflichtzeilen (…) unverändert“); die alte Fassung ist entfallen.
+  const pub = auftrag("publisher");
+  assert.ok(!pub.includes("zitiere keine Regeln wörtlich"), "alte Fassung entfallen");
+  assert.equal(pub.split("Pflichtzeilen (Modellrechnung-Disclaimer, KI-Kennzeichnung, Impressum)").length, 3, "Übernahme und Ausnahme nennen dieselben Zeilen");
+  assert.ok(pub.indexOf("Übernimm Pflichtzeilen") < pub.indexOf("Ausgenommen sind die Pflichtzeilen"));
   for (const [agent, nr] of [["researcher", 0], ["scribe", 0], ["counsel", 0], ["counsel", 1], ["amplifier", 0]]) {
     assert.ok(!auftrag(agent, nr).includes("Auch Qualitätsprüfung und Fakten-Check"), `${agent} ${nr}`);
   }
@@ -1568,6 +1597,12 @@ test("P-P20 Alter aus 1335 im Code: „N Jahre“ mit N = aktuelles Jahr − 133
     assert.deepEqual(welt.aktivierungen.map((a) => a.agent), ["researcher", "scribe"], `${satz}: kein COUNSEL-Aufruf`);
     assert.deepEqual([r.body.fehler.stufe, r.body.fehler.grund], ["scribe", "Textregel nicht erfüllt"], satz);
     assert.equal(r.body.fehler.detail, befund(treffer), satz);
+  }
+  // Markdown innerhalb der Zahl (Gegenprüfung des Nachtrags, B2): gefunden im Text ohne Markdown
+  for (const [satz] of ALTER_MARKDOWN_IN_ZAHL) {
+    const r = await lauf((task) => `${satz}\n${linkAusAuftrag(task)}`);
+    assert.equal(r.body.status, "fehler", satz);
+    assert.equal(r.body.fehler.detail, befund(`${ALTER} Jahre`), satz);
   }
   // Endfassung: Abbruch vor der Endprüfung
   const end = await lauf(undefined, (task) => `Final ${linkAusAuftrag(task)}\n${ALTER} Jahre Bausubstanz.`);
@@ -1665,6 +1700,29 @@ test("P-P22 Abgeleitetes Alter im Review der Vorprüfung: im PUBLISHER-Auftrag m
     assert.equal(t.body.status, "complete", satz);
     assert.equal(reviewAus(auftrag("publisher")), satz, satz);
   }
+  // Gegenprüfung des Nachtrags (B1): maskiereAlter ist die äußerste Maske. Ein Alter direkt vor dem geschützten Namen (ohne
+  // Trenner) blieb vorher stehen — der erste Buchstabe des Namens verhindert den Treffer, erst der Platzhalter „[…]“ der
+  // Namensmaske macht einen daraus —, und der Lauf endete nach vier Aufrufen bei publisher.
+  const E = regeln.NAMENS_ERSATZ;
+  for (const [satz, erwartet] of [
+    [`Befunde: keine. ${ALTER} Jahre${NAME}`, `Befunde: keine. N Jahre${E}`],
+    [`Befunde: keine. ${ALTER} Jahren${NAME.toUpperCase()}`, `Befunde: keine. N Jahren${E}`],
+    [`Befunde: keine. **${ALTER}** Jahre**${NAME}**`, `Befunde: keine. **N** Jahre**${E}**`],
+    [`Befunde: keine. ${NAME}${ALTER} Jahre`, `Befunde: keine. ${E}N Jahre`],
+  ]) {
+    const t = await lauf(satz);
+    assert.equal(t.body.status, "complete", `${satz}: ${JSON.stringify(t.body.fehler ?? null)}`);
+    assert.equal(welt.aktivierungen.length, 6, satz);
+    assert.equal(reviewAus(auftrag("publisher")), erwartet, satz);
+  }
+  // Gegenprüfung des Nachtrags (B2): Markdown innerhalb der Zahl — die Fundstelle reicht über alle Ziffern
+  // (stelle[start + Länge − 1] + 1); ein Mutant, der die Ziffern als zusammenhängend annimmt, ließe Reste stehen
+  // („N9**1 Jahre“).
+  for (const [satz, erwartet] of ALTER_MARKDOWN_IN_ZAHL) {
+    const t = await lauf(`Befunde: keine. ${satz}`);
+    assert.equal(t.body.status, "complete", `${satz}: ${JSON.stringify(t.body.fehler ?? null)}`);
+    assert.equal(reviewAus(auftrag("publisher")), `Befunde: keine. ${erwartet}`, satz);
+  }
   // Ohne greifende Ausnahme bleibt das Review, wie es ist
   zuruecksetzen();
   welt.pipelineModul = pipeline;
@@ -1701,4 +1759,173 @@ test("P-P23 Verschobene Uhr (2027): Code-Prüfung und Maskierung rechnen mit dem
   // Datierungszeile und Prüfpunkt nennen keine Zahl, sie sind in jedem Jahr gleich
   assert.ok(auftrag("scribe").includes(`Nicht: ${FORMEN}.`));
   assert.ok(auftrag("counsel", 0).includes(`etwa ${FORMEN}.`));
+});
+
+// ═══ Gegenprüfung des Nachtrags (10.11.2026): RESEARCHER-Text, Befundliste, Auftragskennung ═══
+
+const rechercheAus = (task) => /RECHERCHE-ERGEBNISSE \(von RESEARCHER\):\n([\s\S]*?)\n\nANWEISUNGEN:/.exec(task)?.[1];
+
+test("P-P24 RESEARCHER-Text an SCRIBE: abgeleitete Alter maskiert wie im Review an PUBLISHER — übernimmt SCRIBE die Recherche, endet der Lauf nicht nach zwei Aufrufen; der Beleg behält den Text", async () => {
+  const recherche =
+    `Kernfakten: Ersterwähnung 1335 — das sind ${ALTER} Jahre urkundliche Geschichte. ` +
+    `Hook-Material: „Seit ${ALTER - 1} Jahren …“, „**${ALTER + 1}**-jährig“; Gutshaus um 1750; Seite ${ALTER}.`;
+  const maskiert =
+    "Kernfakten: Ersterwähnung 1335 — das sind N Jahre urkundliche Geschichte. " +
+    `Hook-Material: „Seit N Jahren …“, „**N**-jährig“; Gutshaus um 1750; Seite ${ALTER}.`;
+  const lauf = async (vorbereiten, body = RITTERGUT_X) => {
+    zuruecksetzen();
+    welt.pipelineModul = pipeline;
+    vorbereiten();
+    // SCRIBE übernimmt die Recherche wörtlich in eine Notiz (der Fall aus der Gegenprüfung: verneint, „bewusst verzichtet“)
+    agentenMitLink({ scribe: (task) => `Thread 1/2 Ersterwähnung 1335.\nNotiz, bewusst verzichtet: ${rechercheAus(task)}\n2/2 Mehr: ${linkAusAuftrag(task)}` });
+    welt.agentAntworten.researcher = [agentOk("researcher", recherche)];
+    return pipePost(body);
+  };
+  // Ohne Maskierung endet dieser Lauf mit fehler bei scribe, nach zwei Aufrufen (Gegenprüfung des Nachtrags, NP-2)
+  const r = await lauf(() => exportMit(RITTERGUT));
+  assert.equal(r.body.status, "complete", JSON.stringify(r.body.fehler ?? null));
+  assert.equal(welt.aktivierungen.length, 6);
+  assert.equal(rechercheAus(auftrag("scribe")), maskiert);
+  assert.ok(r.body.steps[1].output.includes(`Notiz, bewusst verzichtet: ${maskiert}`));
+  // Der Beleg behält die Recherche ungekürzt; maskiert wird nur der Auftrag an SCRIBE
+  assert.equal(r.body.steps[0].output, recherche);
+  assert.equal(zeile(r.body.contentId).metadata.steps[0].output, recherche);
+  // Ohne greifende Ausnahme geht die Recherche unverändert an SCRIBE: Export nennt 1750, anderes Objekt, kein Objekt
+  const villa = structuredClone(STANDARD_OBJEKT);
+  villa.kampagnen[0] = { kampagne: "herbst", lpUrl: "https://steinadel.de/l/herbst", lpVariant: "herbst-a" };
+  for (const [fall, vorbereiten, body] of [
+    ["Export nennt 1750", () => exportMit({ ...RITTERGUT, baujahr: 1750 }), RITTERGUT_X],
+    ["anderes Objekt", () => exportMit(villa), { ...RITTERGUT_X, objekt_slug: "villa-x" }],
+    ["ohne Objekt", () => {}, OHNE_OBJEKT],
+  ]) {
+    const o = await lauf(vorbereiten, body);
+    assert.equal(o.body.status, "complete", `${fall}: ${JSON.stringify(o.body.fehler ?? null)}`);
+    assert.equal(rechercheAus(auftrag("scribe")), recherche, fall);
+  }
+});
+
+/** Interne Funktionen von app/content/page.tsx mit den Attrappen wie in P-C1. */
+async function contentIntern(namen) {
+  const hooksStatus = await import(pathToFileURL(path.join(SITE, "src/lib/hooks-status.ts")).href);
+  const contentListe = await import(pathToFileURL(path.join(SITE, "src/lib/content-liste.ts")).href);
+  return ladeTsx(
+    "app/content/page.tsx",
+    {
+      react: React,
+      "react/jsx-runtime": jsxRuntime,
+      "next/navigation": { useSearchParams: () => new URLSearchParams("") },
+      "@/lib/content-liste": contentListe,
+      "@/components/ui/KPICard": { KPICard: () => null },
+      "@/lib/hooks-status": { ...hooksStatus, useFreigaben: () => ({ freigaben: null, fehler: null, loading: false, geladenAm: null, neuLaden: async () => {} }) },
+      "@/lib/counsel-urteil": counselModul,
+      "@/lib/freigabe-regeln": regeln,
+      ...STUDIO.module,
+    },
+    namen,
+  ).__intern;
+}
+
+test("P-P25 Textregel-Befunde einzeln (Gegenprüfung PR #10, DAT-4/B2): bei vier Befunden steht jeder vollständig in metadata.fehler.befunde und auf /content; das Detail bleibt gekürzt, der Trenner hinter [URL] bleibt", async () => {
+  exportMit(RITTERGUT);
+  // SCRIBE-Text ohne CTA-Link, mit URTEIL-Zeile, Baujahr und abgeleitetem Alter: vier Befunde
+  agentenMitLink({ scribe: () => `Thread 1/2 Baujahr 1335, also ${ALTER} Jahre alt.\nURTEIL: FREIGABE-EMPFEHLUNG\n2/2 Mehr im Profil.` });
+  const r = await pipePost(RITTERGUT_X);
+  assert.equal(r.body.status, "fehler");
+  assert.deepEqual(welt.aktivierungen.map((a) => a.agent), ["researcher", "scribe"]);
+  const BEFUNDE = [
+    "CTA-Link fehlt im Text: [URL]",
+    "URTEIL-Zeile im Content (ein COUNSEL-Urteil gehört nicht in den Text)",
+    "Jahr 1335 als Baujahr bezeichnet statt „Ersterwähnung 1335“ (Objekt-Ausnahme)",
+    `Alter „${ALTER} Jahre“ aus 1335 abgeleitet (1335 ist nur die Ersterwähnung)`,
+  ];
+  assert.deepEqual([r.body.fehler.stufe, r.body.fehler.grund], ["scribe", "Kurzlink-Prüfung nicht bestanden (E12)"]);
+  assert.deepEqual(r.body.fehler.befunde, BEFUNDE);
+  const gespeichert = zeile(r.body.contentId).metadata.fehler;
+  assert.deepEqual(gespeichert.befunde, BEFUNDE, "gespeichert wie geantwortet");
+  // Das Detail ist weiter auf 160 Zeichen gekürzt — der Altersbefund steht darin nicht, deshalb die Liste. Der Trenner hinter
+  // der bereinigten Adresse bleibt (vorher: „…Text: [URL] URTEIL-Zeile …“, die URL-Bereinigung fraß das „;“).
+  assert.equal(Array.from(r.body.fehler.detail).length, 160);
+  assert.ok(r.body.fehler.detail.startsWith("CTA-Link fehlt im Text: [URL]; URTEIL-Zeile im Content"), r.body.fehler.detail);
+  assert.ok(!r.body.fehler.detail.includes("Alter „"));
+  for (const b of r.body.fehler.befunde) assert.ok(Array.from(b).length <= 160, b);
+  // Endfassung: dieselbe Liste in Stufe publisher (zwei Befunde, beide vollständig)
+  zuruecksetzen();
+  welt.pipelineModul = pipeline;
+  exportMit(RITTERGUT);
+  agentenMitLink({ publisher: (task) => `Final ${linkAusAuftrag(task)}\nBaujahr 1335 — ${ALTER} Jahre Bausubstanz.` });
+  const end = await pipePost(RITTERGUT_X);
+  assert.deepEqual([end.body.fehler.stufe, end.body.fehler.befunde], ["publisher", [BEFUNDE[2], BEFUNDE[3]]]);
+  assert.equal(end.body.fehler.detail, `${BEFUNDE[2]}; ${BEFUNDE[3]}`, "zwei Befunde passen ungekürzt wie bisher");
+
+  // /content zeigt alle Befunde: Ergebnis des Laufs (flussHinweis) und Vermerk der Zeile (vermerkText)
+  const seite = await contentIntern(["flussHinweis", "vermerkText"]);
+  const hinweis = seite.flussHinweis(r.body);
+  for (const b of BEFUNDE) assert.ok(hinweis.includes(b), `${b}: ${hinweis}`);
+  assert.ok(hinweis.startsWith("Abbruch in Stufe SCRIBE: Kurzlink-Prüfung nicht bestanden (E12) (CTA-Link fehlt im Text: [URL]; "), hinweis);
+  const vermerk = seite.vermerkText(gespeichert);
+  assert.equal(vermerk, `SCRIBE: Kurzlink-Prüfung nicht bestanden (E12) (${BEFUNDE.join("; ")})`);
+  // Zeilen davor (ohne befunde): wie bisher das Detail; leere oder unlesbare Liste zählt nicht
+  assert.equal(seite.vermerkText({ stufe: "scribe", grund: "Textregel nicht erfüllt", detail: "kurz" }), "SCRIBE: Textregel nicht erfüllt (kurz)");
+  assert.equal(seite.vermerkText({ grund: "Textregel nicht erfüllt", detail: "kurz", befunde: [] }), "Textregel nicht erfüllt (kurz)");
+  assert.equal(seite.vermerkText({ grund: "G", detail: "kurz", befunde: [1, " ", null] }), "G (kurz)");
+  // Maskiert wie jeder Vermerk
+  assert.equal(seite.vermerkText({ grund: "G", befunde: [`Befund ${NAME}`] }), `G (Befund ${regeln.NAMENS_ERSATZ})`);
+});
+
+test("P-P26 Auftragskennung (Gegenprüfung PR #10, B3): metadata.pruefauftrag belegt die Prüfanweisungen an COUNSEL — Hash über Kopf beider Aufträge, Prüfpunkt und Urteilsform; mit und ohne Prüfpunkt verschieden, in der Beleg-Kette sichtbar", async () => {
+  const { createHash } = await import("node:crypto");
+  /** Kennung aus den tatsächlich gesendeten COUNSEL-Aufträgen nachgerechnet: [Kopf vor, Kopf end, Prüfpunkt, Schluss]. */
+  const nachgerechnet = () => {
+    const vor = auftrag("counsel", 0);
+    const end = auftrag("counsel", 1);
+    const kopfMitPunkt = (t, marke) => t.slice(0, t.indexOf(marke));
+    const vorKopf = kopfMitPunkt(vor, "\n\nCONTENT:\n");
+    const endKopf = kopfMitPunkt(end, "\n\nENDFASSUNG (PUBLISHER):\n");
+    const i = vorKopf.indexOf("\n\nPRÜFPUNKT DATIERUNG");
+    const punkt = i < 0 ? "" : vorKopf.slice(i);
+    assert.equal(endKopf.slice(endKopf.length - punkt.length), punkt, "beide Aufträge tragen denselben Prüfpunkt");
+    const teile = [vorKopf.slice(0, vorKopf.length - punkt.length), endKopf.slice(0, endKopf.length - punkt.length), punkt, SCHLUSS];
+    assert.ok(vor.endsWith(`\n\n${SCHLUSS}`) && end.endsWith(`\n\n${SCHLUSS}`));
+    return createHash("sha256").update(JSON.stringify(teile), "utf8").digest("hex").slice(0, 16);
+  };
+  const lauf = async (vorbereiten, body) => {
+    zuruecksetzen();
+    welt.pipelineModul = pipeline;
+    vorbereiten();
+    agentenMitLink();
+    const r = await pipePost(body);
+    assert.equal(r.body.status, "complete", JSON.stringify(r.body.fehler ?? null));
+    return zeile(r.body.contentId);
+  };
+  const mit = await lauf(() => exportMit(RITTERGUT), RITTERGUT_X);
+  const p = mit.metadata.pruefauftrag;
+  assert.match(p.kennung, /^[0-9a-f]{16}$/);
+  assert.equal(p.kennung, nachgerechnet(), "die Kennung gehört zu genau den gesendeten Anweisungen");
+  assert.equal(p.datierung_pruefpunkt, true);
+  assert.match(p.umfang, /^SHA-256, erste 16 Hex-Zeichen, über Kopf von Vor- und Endprüfung, PRÜFPUNKT DATIERUNG und Urteilsform/);
+  const ohne = await lauf(() => exportMit({ ...RITTERGUT, baujahr: 1750 }), RITTERGUT_X);
+  assert.equal(ohne.metadata.pruefauftrag.kennung, nachgerechnet());
+  assert.equal(ohne.metadata.pruefauftrag.datierung_pruefpunkt, false);
+  assert.notEqual(ohne.metadata.pruefauftrag.kennung, p.kennung, "mit und ohne Prüfpunkt unterscheidbar");
+  const frei = await lauf(() => {}, OHNE_OBJEKT);
+  assert.equal(frei.metadata.pruefauftrag.kennung, ohne.metadata.pruefauftrag.kennung, "gleiche Anweisungen, gleiche Kennung");
+  const nochmal = await lauf(() => exportMit(RITTERGUT), RITTERGUT_X);
+  assert.deepEqual(nochmal.metadata.pruefauftrag, p, "gleich je Lauf (keine Zeit, keine Zeilen-ID darin)");
+  // Ab dem ersten Schreiben: auch ein Lauf, der vor COUNSEL endet, trägt die Kennung
+  zuruecksetzen();
+  welt.pipelineModul = pipeline;
+  exportMit(RITTERGUT);
+  agentenMitLink({ scribe: () => "Thread ohne Link" });
+  const abbruch = await pipePost(RITTERGUT_X);
+  assert.equal(abbruch.body.status, "fehler");
+  assert.deepEqual(zeile(abbruch.body.contentId).metadata.pruefauftrag, p);
+
+  // Beleg-Kette: Zeile Regelpaket nennt die Kennung; Läufe davor und unlesbare Kennungen zeigen nichts
+  const html = ketteHtml(mit);
+  assert.ok(html.includes(`data-pruefauftrag="true">Prüfauftrag COUNSEL ${p.kennung} · mit Prüfpunkt Datierung</p>`), html.slice(0, 800));
+  assert.ok(ketteHtml(ohne).includes(`>Prüfauftrag COUNSEL ${ohne.metadata.pruefauftrag.kennung}</p>`));
+  for (const pruefauftrag of [undefined, null, "x", { kennung: "abc" }, { kennung: `${p.kennung}0` }, { kennung: NAME }, { kennung: "ABCDEF0123456789" }]) {
+    const k = ketteHtml({ ...mit, metadata: { ...mit.metadata, pruefauftrag } });
+    assert.ok(!k.includes("data-pruefauftrag") && !k.includes("Prüfauftrag COUNSEL"), JSON.stringify(pruefauftrag));
+  }
 });

@@ -6,12 +6,17 @@
 // AnkerPanel.tsx) mit eigener Prüfung über GET /api/studio/[objekt]/anker. Bereiche späterer
 // Bauschritte stehen als "noch nicht gebaut (Schritt N)" da — ohne Zahl. Kein Knopf erzeugt, prüft mit
 // Kosten oder gibt frei: Freigegeben wird im Content-Tab; die Beleg-Kette kopiert auf Wunsch den
-// CTA-Link (wie auf /content), „Alle prüfen“ im Anker-Panel prüft die Anker neu (ohne bezahlte Aufrufe).
+// CTA-Link (wie auf /content), „Alle prüfen“ im Anker-Panel prüft die Anker neu (ohne bezahlte Aufrufe),
+// „Neu laden“ liest den Stand der Seite neu (nur lesend).
 // Jeder Text aus Export und Datenbank erscheint maskiert (der Server maskiert schon, die Ansicht
 // noch einmal). Jede Zahl trägt im title Quelle und Messzeitpunkt.
 // Zeitangaben des Studios stehen in Europe/Berlin mit Zonenangabe (wie die Zählung des Servers in
 // lib/studio/lesen.ts), unabhängig von der Zeitzone des Browsers. Die Beleg-Kette ist mit /content
 // geteilt und bleibt unverändert; sie zeigt Zeiten in der Zeitzone des Browsers (Vermerk an der Liste).
+// Nachtrag Paket B (10.11.2026): Die Seite liest nur beim Öffnen und auf Knopfdruck. Eine Stand-Zeile nennt den
+// Zeitpunkt der Lesung (erzeugt_am der Antwort) und trägt den Knopf „Neu laden“ (eine Lesung je Klick, kein Takt;
+// Begründung in app/studio/[objekt]/page.tsx). Eine Karte mit Status „entwurf“ sagt, dass der Lauf beim Laden
+// nicht abgeschlossen war.
 
 import Link from "next/link";
 import type { ReactNode } from "react";
@@ -268,6 +273,39 @@ function ObjektKopfKarte({ m, slug }: { m: StudioMesswert<ObjektKopf>; slug: str
   );
 }
 
+/** Neu laden: Knopf mit 44 px Höhe; während einer Lesung aria-disabled (Klick ignoriert, Fokus bleibt) wie „Alle prüfen“. */
+function NeuLadenKnopf({ neuLaden, laedtNeu }: { neuLaden: () => void; laedtNeu: boolean }) {
+  return (
+    <button
+      type="button"
+      onClick={() => {
+        if (!laedtNeu) neuLaden();
+      }}
+      aria-disabled={laedtNeu}
+      className="shrink-0 min-h-11 px-4 py-2 rounded-lg text-xs font-medium bg-surface-elevated text-foreground hover:opacity-80 transition-opacity aria-disabled:opacity-40 aria-disabled:cursor-not-allowed"
+      data-neu-laden
+    >
+      {laedtNeu ? "Lädt …" : "Neu laden"}
+    </button>
+  );
+}
+
+/**
+ * Stand der Seite (Nachtrag Paket B): Zeitpunkt der Lesung und der Hinweis, dass die Seite nicht von selbst nachlädt.
+ * Mit neuLaden steht daneben der Knopf; ohne (statische Ansicht) nur der Stand.
+ */
+function StandZeile({ erzeugtAm, neuLaden, laedtNeu }: { erzeugtAm: string; neuLaden?: () => void; laedtNeu: boolean }) {
+  return (
+    <div className="card-ghost p-4 mb-6 flex flex-wrap items-center justify-between gap-3 min-w-0" data-stand aria-busy={laedtNeu}>
+      <p className="text-[11px] break-words min-w-0" style={{ color: "var(--gp-ink-2)" }} aria-live="polite" data-stand-text>
+        Stand {zeitBerlin(erzeugtAm, "ohne Zeitpunkt")} · Die Seite lädt nicht von selbst nach: Was danach geschieht, etwa ein
+        laufender Content-Lauf, zeigt „Neu laden“.{laedtNeu ? " Lädt neu …" : ""}
+      </p>
+      {neuLaden && <NeuLadenKnopf neuLaden={neuLaden} laedtNeu={laedtNeu} />}
+    </div>
+  );
+}
+
 function AssetKarte({
   a,
   kopiere,
@@ -301,6 +339,14 @@ function AssetKarte({
         </span>
       </div>
       <h3 className="text-sm font-semibold text-foreground break-words">{maskiert(a.titel ?? "ohne Titel")}</h3>
+      {/* Nachtrag Paket B: Ein Entwurf ist ein Lauf, der beim Laden nicht fertig war — Urteil und Sperre unten gelten
+          nur für diesen Stand. */}
+      {a.status === "entwurf" && (
+        <p className="text-[11px] mt-1 break-words" style={{ color: FARBE_BERNSTEIN }} data-entwurf-hinweis>
+          Lauf beim Laden der Seite nicht abgeschlossen — er läuft noch oder brach ohne Vermerk ab. Das Ergebnis zeigt
+          „Neu laden“.
+        </p>
+      )}
       <dl className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-2 mt-3 text-xs">
         <div className="min-w-0">
           <dt className="mono-label">COUNSEL-Urteil (abgeleitet)</dt>
@@ -503,11 +549,17 @@ export function StudioAnsicht({
   lesung,
   kopiere,
   kopierStatus,
+  neuLaden,
+  laedtNeu = false,
 }: {
   slug: string;
   lesung: StudioLesung;
   kopiere: (key: string, text: string) => void;
   kopierStatus: (key: string) => string;
+  /** Eine neue Lesung anstoßen (Seite); ohne nur der Stand, kein Knopf. */
+  neuLaden?: () => void;
+  /** Eine neue Lesung läuft; der angezeigte Stand ist der vorige. */
+  laedtNeu?: boolean;
 }) {
   return (
     <div className="boot p-4 sm:p-6 lg:p-10 max-w-[1280px] min-w-0">
@@ -554,11 +606,17 @@ export function StudioAnsicht({
           <p className="text-[12px] break-words" style={{ color: "var(--gp-ink-2)" }}>
             {maskiert(lesung.text)}
           </p>
+          {neuLaden && (
+            <div className="pt-2">
+              <NeuLadenKnopf neuLaden={neuLaden} laedtNeu={laedtNeu} />
+            </div>
+          )}
         </div>
       )}
 
       {lesung.art === "daten" && (
         <>
+          <StandZeile erzeugtAm={lesung.antwort.erzeugt_am} neuLaden={neuLaden} laedtNeu={laedtNeu} />
           <ObjektKopfKarte m={lesung.antwort.objekt} slug={lesung.antwort.objekt_slug} />
           <Kennzahlen antwort={lesung.antwort} />
           <AnkerPanel slug={lesung.antwort.objekt_slug} />

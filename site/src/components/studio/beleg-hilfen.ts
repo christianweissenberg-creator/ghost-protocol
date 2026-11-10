@@ -27,7 +27,16 @@ export interface Vermerk {
   stufe?: string;
   grund?: string;
   detail?: string;
+  /** Nachtrag Paket B (10.11.2026): Befunde einer Textprüfung einzeln, je höchstens 160 Zeichen. */
+  befunde?: string[];
   am?: string;
+}
+
+/** Prüfanweisungen an COUNSEL (metadata.pruefauftrag, Nachtrag Paket B): Kennung und Umfang. */
+export interface PruefauftragVermerk {
+  kennung?: string;
+  datierung_pruefpunkt?: boolean;
+  umfang?: string;
 }
 
 export interface CounselVermerk {
@@ -95,6 +104,8 @@ export interface ContentMetadata {
   /** Paket B (R2): Urteil der ersten Prüfung (SCRIBE-Text), wenn die Endprüfung gelaufen ist. */
   counsel_vorpruefung?: CounselVermerk;
   regelpaket?: { version?: string | null; stand?: string | null };
+  /** Nachtrag Paket B (10.11.2026): Kennung der Prüfanweisungen an COUNSEL; fehlt bei Läufen davor. */
+  pruefauftrag?: PruefauftragVermerk;
   objekt_snapshot?: ObjektSnapshot | null;
   researcher_quellen?: string;
   freigabe_hinweis?: { geprueft?: string; zur_freigabe?: string; identisch?: boolean };
@@ -276,6 +287,31 @@ export function kurzlinkAnzeige(meta: ContentMetadata): { ziel: string | null; p
   };
   const teile = [teil("SCRIBE-Text", k.pruefung_scribe), teil("Endfassung", k.pruefung_endfassung)].filter((t): t is string => t !== null);
   return { ziel, pruefungen: teile.length ? `Kurzlink im Text geprüft: ${teile.join(" · ")}` : null };
+}
+
+/**
+ * Kennung der COUNSEL-Prüfanweisungen für die Kette (Nachtrag Paket B, 10.11.2026): „Prüfauftrag COUNSEL <16 Hex>“,
+ * mit Prüfpunkt Datierung, wenn der Lauf ihn trug. null bei Läufen davor oder ohne lesbare Kennung (metadata
+ * kommt ungeprüft aus der DB: nur genau 16 Hex-Zeichen gelten).
+ */
+export function pruefauftragAnzeige(meta: ContentMetadata): { text: string; umfang: string | null } | null {
+  const p = alsObjekt(meta.pruefauftrag ?? null);
+  if (!p || typeof p.kennung !== "string" || !/^[0-9a-f]{16}$/.test(p.kennung)) return null;
+  return {
+    text: `Prüfauftrag COUNSEL ${p.kennung}${p.datierung_pruefpunkt === true ? " · mit Prüfpunkt Datierung" : ""}`,
+    umfang: typeof p.umfang === "string" && p.umfang ? maskiert(p.umfang) : null,
+  };
+}
+
+/**
+ * Detail eines Fehler- oder Warnvermerks für die Anzeige (Nachtrag Paket B, 10.11.2026): Trägt er die Befunde einer
+ * Textprüfung einzeln (befunde), stehen alle da — das Feld detail ist auf 160 Zeichen gekürzt und verlor bei drei
+ * und mehr Befunden den letzten. Sonst detail; null ohne beides. Nicht maskiert (das tut der Aufrufer).
+ */
+export function vermerkDetail(v: { detail?: unknown; befunde?: unknown }): string | null {
+  const befunde = Array.isArray(v.befunde) ? v.befunde.filter((b): b is string => typeof b === "string" && b.trim() !== "") : [];
+  if (befunde.length > 0) return befunde.join("; ");
+  return typeof v.detail === "string" && v.detail ? v.detail : null;
 }
 
 // ═══ FREIGABE-LAGE (R2, R4, R24) ═══

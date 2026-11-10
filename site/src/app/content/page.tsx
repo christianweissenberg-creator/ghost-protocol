@@ -31,6 +31,7 @@ import {
   maskiert,
   maskiertWert,
   urteilAnzeige,
+  vermerkDetail,
   zeitText,
 } from "@/components/studio/beleg-hilfen";
 import type { ContentMetadata, CounselVermerk, FassungsBezug, FreigabeLage, Vermerk } from "@/components/studio/beleg-hilfen";
@@ -393,12 +394,16 @@ function ohne<T>(eintraege: Record<number, T>, id: number): Record<number, T> {
   return kopie;
 }
 
-/** Fehler- oder Warnvermerk lesbar machen; alte Zeilen haben einen Text statt Vermerk. Maskiert. */
+/**
+ * Fehler- oder Warnvermerk lesbar machen; alte Zeilen haben einen Text statt Vermerk. Maskiert. Nachtrag Paket B
+ * (10.11.2026): Ein Abbruch an einer Textregel nennt alle Befunde (befunde), nicht nur das gekürzte Detail.
+ */
 function vermerkText(v: unknown): string | null {
   if (typeof v === "string") return v.trim() ? maskiert(v) : null;
   if (!istObjekt(v) || typeof v.grund !== "string" || !v.grund) return null;
   const stufe = typeof v.stufe === "string" && v.stufe ? `${v.stufe.toUpperCase()}: ` : "";
-  const detail = typeof v.detail === "string" && v.detail ? ` (${v.detail})` : "";
+  const detailText = vermerkDetail(v);
+  const detail = detailText ? ` (${detailText})` : "";
   return maskiert(`${stufe}${v.grund}${detail}`);
 }
 
@@ -661,9 +666,11 @@ function flussHinweis(r: PipelineResult): string | null {
     const stufeRoh =
       typeof f?.stufe === "string" && f.stufe ? stufenName(f.stufe) : gescheitert ? stufenName(gescheitert.agent) : null;
     const stufe = stufeRoh === null ? null : maskiert(stufeRoh);
+    // Nachtrag Paket B: alle Befunde einer Textprüfung (vermerkDetail), sonst das Detail.
+    const detailRoh = f ? vermerkDetail(f) : null;
     const grundRoh =
       typeof f?.grund === "string" && f.grund
-        ? `${f.grund}${typeof f.detail === "string" && f.detail ? ` (${f.detail})` : ""}`
+        ? `${f.grund}${detailRoh ? ` (${detailRoh})` : ""}`
         : (gescheitert?.fehler ?? null);
     return `Abbruch${stufe ? ` in Stufe ${stufe}` : ""}: ${grundRoh ? maskiert(grundRoh) : "ohne Grund"}${offenText}`;
   }

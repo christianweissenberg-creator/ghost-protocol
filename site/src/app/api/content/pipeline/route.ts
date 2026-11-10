@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { createServiceClient } from "@/lib/supabase";
 import { enthaeltUrteil, ohneUrteilZeilen, werteCounselAus } from "@/lib/counsel-urteil";
@@ -54,6 +55,11 @@ const BASE_URL = process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000";
 //   und „N Jahre her/zurück“; abgeleitete Alter im Review an PUBLISHER maskiert (maskiereAlter); PUBLISHER nennt
 //   in Qualitätsprüfung und Fakten-Check kein abgeleitetes Alter und zitiert keine Regeln; Eskalationen stehen
 //   über der URTEIL-Zeile; zwischen Zahl und „Jahre“ zählen auch Gedankenstriche (U+2010 bis U+2014).
+// - Gegenprüfung des Nachtrags (10.11.2026, neun niedrige Punkte): maskiereAlter läuft im Review an PUBLISHER als
+//   äußerste Maske und auch auf dem RESEARCHER-Text an SCRIBE; „seit N Jahren …“ unter den verbotenen Formen; der
+//   PUBLISHER-Satz nimmt die Pflichtzeilen vom Zitierverbot aus; Textregel-Befunde einzeln in metadata.fehler.befunde;
+//   Auftragskennung der COUNSEL-Prüfanweisungen in metadata.pruefauftrag; AMPLIFIER mit Umfangsrahmen (maxTokens 4096
+//   in lib/agent-prompts.ts).
 //
 // Stufe 1 (05.11.2026) — Freigabe und Beleg-Kette:
 // - Das COUNSEL-Urteil wertet werteCounselAus() aus (lib/counsel-urteil.ts); die frühere
@@ -224,6 +230,8 @@ interface Vermerk {
   stufe: Stufe | "objekt" | "pipeline";
   grund: string;
   detail?: string;
+  /** Befunde einer Textprüfung einzeln (je bereinigt, höchstens 160 Zeichen); nur bei Abbruch an einer Textregel. */
+  befunde?: string[];
   am: string;
 }
 
@@ -232,6 +240,19 @@ interface Vermerk {
 function vermerk(stufe: Vermerk["stufe"], grund: string, detail?: string): Vermerk {
   const am = new Date().toISOString();
   return detail ? { stufe, grund: fehlerText(grund), detail: fehlerText(detail), am } : { stufe, grund: fehlerText(grund), am };
+}
+
+/**
+ * Vermerk für einen Abbruch an einer Textregel (Kurzlink, URTEIL-Zeile, Datierung, Alter). Gegenprüfung PR #10
+ * (DAT-4/B2): Das Detail ist die Summe der Befunde und wird auf 160 Zeichen gekürzt (bereinigeFehler,
+ * lib/status-server.ts). Bei drei und mehr Befunden fiel der Altersbefund dabei weg, und die URL-Bereinigung
+ * verschluckte den Trenner hinter einer Adresse („[URL] Alter …“). Jetzt wird jeder Befund einzeln bereinigt
+ * und steht vollständig in befunde; das Detail entsteht aus den bereinigten Befunden (Trenner bleiben) und
+ * bleibt gekürzt wie bisher.
+ */
+function textregelVermerk(stufe: Stufe, grund: string, befunde: string[]): Vermerk {
+  const einzeln = befunde.map((b) => fehlerText(b));
+  return { ...vermerk(stufe, grund, einzeln.join("; ")), befunde: einzeln };
 }
 
 // Fehlertext für Speicher und Antwort (Fixrunde 06.11.2026, R17): bereinigeFehler
@@ -465,10 +486,11 @@ function ganzeZahl(wert: string | number | null): number | null {
  * Gegenprüfung PR #10: Auch keine Rechenformel („N = Jahre seit …“) — sie lädt zum Ausrechnen ein, und
  * „keine Altersableitung (wären 691 Jahre) ✓“ im Fakten-Check bricht nach vier bezahlten Aufrufen ab. „vor N
  * Jahren …“ und „N Jahre her/zurück“ stehen dabei, weil der Code auch sie abbricht („Vor 691 Jahren erstmals
- * urkundlich erwähnt“).
+ * urkundlich erwähnt“). Ebenso „seit N Jahren …“ (Gegenprüfung des Nachtrags, NP-3): die naheliegende Umformung
+ * des erlaubten „seit 1335 urkundlich belegt“ zu „Seit 691 Jahren urkundlich belegt“, auf die der Code abbricht.
  */
 function abgeleiteteAlter(jahr: number): string {
-  return `„N Jahre Bausubstanz“, „N Jahre Geschichte“, „N Jahre alt“, „vor N Jahren …“, „N Jahre her/zurück“, „seit ${jahr} steht …“, „Substanz/Mauern aus ${jahr}“`;
+  return `„N Jahre Bausubstanz“, „N Jahre Geschichte“, „N Jahre alt“, „seit N Jahren …“, „vor N Jahren …“, „N Jahre her/zurück“, „seit ${jahr} steht …“, „Substanz/Mauern aus ${jahr}“`;
 }
 
 function datierungFuer(o: ObjektApi): Datierung {
@@ -982,6 +1004,20 @@ const URTEIL_SCHLUSS =
   "keine Klammer, kein Kommentar. Eskalationen und Hinweise an den Betreiber stehen in den Befunden darüber, nie in oder " +
   "hinter der Urteilszeile. 'URTEIL:' steht nur in dieser Zeile.";
 
+/** Anfang des Auftrags der COUNSEL-Vorprüfung (SCRIBE-Text); danach folgen Prüfpunkt, Content, Objektdaten und der Schluss. */
+const VORPRUEFUNG_KOPF =
+  "Pruefe den folgenden Content STRIKT gegen dein STEINADEL-REGELPAKET (fail-closed). Zahlen NUR gegen die mitgelieferten " +
+  "Objektdaten abgleichen. Zitiere Verstoesse. HALTE das Review KOMPAKT (max. ~300 Woerter — nur Befunde, keine langen " +
+  "Tabellen) und schliesse ZWINGEND mit der URTEIL:-Zeile ab (Form: LETZTE ZEILE am Ende dieses Auftrags).";
+
+/** Anfang des Auftrags der COUNSEL-Endprüfung (Paket B, R2/E13); Aufbau wie bei der Vorprüfung. */
+const ENDPRUEFUNG_KOPF =
+  "ENDPRUEFUNG (R2): Pruefe die folgende ENDFASSUNG WOERTLICH und STRIKT gegen dein STEINADEL-REGELPAKET (fail-closed). " +
+  "Genau dieser Text geht unveraendert zur Freigabe — geprueft wird ALLES darin, auch Metadaten, Hashtags, " +
+  "Zeitpunkt-Empfehlung und Cross-Promotion-Texte. Zahlen NUR gegen die mitgelieferten Objektdaten abgleichen. Zitiere " +
+  "Verstoesse. HALTE das Review KOMPAKT (max. ~300 Woerter — nur Befunde, keine langen Tabellen) und schliesse ZWINGEND " +
+  "mit der URTEIL:-Zeile ab (Form: LETZTE ZEILE am Ende dieses Auftrags).";
+
 /**
  * Prüfpunkt beider COUNSEL-Aufträge bei greifender Datierungs-Ausnahme (Abnahmelauf 10.11.2026):
  * „Seit 1335 steht … 691 Jahre Bausubstanz“ kam durch beide Prüfungen („Seit 1335 ✓“), denn das Regelpaket
@@ -1000,18 +1036,56 @@ function datierungsPruefpunkt(datierung: Datierung | null): string {
   );
 }
 
+/** Beleg der Prüfanweisungen an COUNSEL (metadata.pruefauftrag). */
+interface PruefauftragBeleg {
+  /** Erste 16 Hex-Zeichen von SHA-256 über die Prüfanweisungen beider COUNSEL-Aufträge. */
+  kennung: string;
+  /** true, wenn die Aufträge den PRÜFPUNKT DATIERUNG trugen (greifende Datierungs-Ausnahme). */
+  datierung_pruefpunkt: boolean;
+  /** Was die Kennung abdeckt und was nicht. */
+  umfang: string;
+}
+
+const PRUEFAUFTRAG_UMFANG =
+  "SHA-256, erste 16 Hex-Zeichen, über Kopf von Vor- und Endprüfung, PRÜFPUNKT DATIERUNG und Urteilsform (LETZTE ZEILE); " +
+  "nicht darin: geprüfter Text, Objektdaten und Kurzlink-Block (Belege: objekt_snapshot, kurzlink) und der Systemprompt " +
+  "(Regelpaket: regelpaket)";
+
+/**
+ * Auftragskennung (Gegenprüfung PR #10, B3): Die Zeile belegte nur die Regelpaket-Version. Seit dem Abnahmelauf vom
+ * 10.11.2026 stehen aber Prüfanweisungen im Auftrag, die nicht im Regelpaket stehen — die Urteilsform und der
+ * Datierungs-Prüfpunkt, der zu ABLEHNUNG führt. Läufe mit verschiedenen Anweisungen sahen im Beleg gleich aus. Die
+ * Kennung ist ein Hash über genau die Teile beider COUNSEL-Aufträge, die Anweisung sind (Kopf, Prüfpunkt, Schluss), in
+ * dieser Reihenfolge als JSON-Liste. Ändert sich einer davon, ändert sich die Kennung; Läufe mit Prüfpunkt (Objekt mit
+ * greifender Ausnahme) haben eine andere Kennung als Läufe ohne.
+ */
+function pruefauftragBeleg(datierung: Datierung | null): PruefauftragBeleg {
+  const pruefpunkt = datierungsPruefpunkt(datierung);
+  const kennung = createHash("sha256")
+    .update(JSON.stringify([VORPRUEFUNG_KOPF, ENDPRUEFUNG_KOPF, pruefpunkt, URTEIL_SCHLUSS]), "utf8")
+    .digest("hex")
+    .slice(0, 16);
+  return { kennung, datierung_pruefpunkt: pruefpunkt !== "", umfang: PRUEFAUFTRAG_UMFANG };
+}
+
 /**
  * Satz im PUBLISHER-Auftrag bei greifender Datierungs-Ausnahme (Gegenprüfung PR #10): PUBLISHERs ganze Antwort ist
  * der Freigabetext, auch Qualitätsprüfung und Fakten-Check. Ein dort ausgerechnetes Alter („wären 691 Jahre“)
  * bricht den Lauf nach vier bezahlten Aufrufen ab (altersBefund), ein wörtliches Regelzitat steht im Freigabetext.
  * Leer ohne greifende Ausnahme.
+ * Gegenprüfung des Nachtrags (NP-1): Das Verbot, Regeln wörtlich zu zitieren, stand direkt neben „Pflichtzeilen …
+ * unverändert“ und „Disclaimer wörtlich“, und die Pflichttexte stehen im Auftrag nur als Teil von Regeln. Der Satz
+ * gilt deshalb ausdrücklich nur für Qualitätsprüfung und Fakten-Check und nimmt die Pflichtzeilen aus — sie
+ * bleiben im finalen Content und in jedem Teil, der sie braucht, wörtlich.
  */
 function datierungsHinweisPublisher(datierung: Datierung | null): string {
   const beleg = datierung?.beleg;
   if (!beleg || !beleg.ausnahme_greift) return "";
   return (
     ` Auch Qualitätsprüfung und Fakten-Check gehen mit zur Freigabe: Nenne darin keine Zahl von Jahren, die aus der ` +
-    `${beleg.bezeichnung} ${beleg.ausnahme_jahr} gerechnet ist, und zitiere keine Regeln wörtlich.`
+    `${beleg.bezeichnung} ${beleg.ausnahme_jahr} gerechnet ist, und gib darin keine Regeltexte wörtlich wieder. ` +
+    `Ausgenommen sind die Pflichtzeilen (Modellrechnung-Disclaimer, KI-Kennzeichnung, Impressum): Sie stehen ` +
+    `im finalen Content und in jedem Teil, der sie braucht, weiter wörtlich.`
   );
 }
 
@@ -1117,8 +1191,10 @@ const MARKDOWN_ZEICHEN = new RegExp(DATIERUNG_MARKDOWN.source);
  * Nennt COUNSEL ein abgeleitetes Alter („keine Ableitung wie 691 Jahre ✓“) und übernimmt PUBLISHER das, bricht
  * altersBefund den Lauf nach vier bezahlten Aufrufen ab. maskiereAlter ersetzt deshalb jede Zahl, die altersBefund
  * träfe, durch „N“ wie in der Datierungsregel. Gesucht wird wie dort im Text ohne Markdown; die Fundstellen werden
- * auf den Originaltext zurückgerechnet (wie maskiereGeschuetzteNamen), die Formatierung bleibt. Ohne greifende
- * Ausnahme bleibt der Text unverändert.
+ * auf den Originaltext zurückgerechnet (wie maskiereGeschuetzteNamen). Die Formatierung außerhalb der Zahl bleibt
+ * („**691** Jahre“ → „**N** Jahre“); Markdown zwischen den Ziffern entfällt mit der Zahl („6**9**1 Jahre“ →
+ * „N Jahre“, „**69**1 Jahre“ → „**N Jahre“). Ohne greifende Ausnahme bleibt der Text unverändert.
+ * Seit dem Nachtrag zur Gegenprüfung auch auf dem RESEARCHER-Text im SCRIBE-Auftrag.
  */
 function maskiereAlter(text: string, datierung: Datierung | null): string {
   const a = altersMuster(datierung);
@@ -1344,6 +1420,8 @@ export async function POST(request: NextRequest) {
       ...(laufId !== undefined ? { lauf_id: laufId } : {}),
       ...(objektSnapshot ? { objekt_snapshot: objektSnapshot } : {}),
       regelpaket: REGELPAKET,
+      // Gegenprüfung PR #10 (B3): welche Prüfanweisungen COUNSEL im Auftrag bekam (pruefauftragBeleg).
+      pruefauftrag: pruefauftragBeleg(datierung),
       researcher_quellen: RESEARCHER_QUELLEN_HINWEIS,
     };
 
@@ -1615,6 +1693,10 @@ format === "reel" ? `REEL (30-90 Sek):
 - Tonalität: Professionell-inspirierend, visual-first`,
     };
 
+    // Gegenprüfung des Nachtrags (NP-2): Der RESEARCHER-Text geht mit maskierten abgeleiteten Altern an SCRIBE
+    // (maskiereAlter, wie das Review an PUBLISHER). Übernahm SCRIBE ein „691 Jahre“ daraus, auch verneint oder in
+    // einer Notiz, brach altersBefund den Lauf nach zwei bezahlten Aufrufen ab. Der Beleg (steps[0].output) bleibt
+    // ungekürzt.
     await fuehreStufeAus(
       steps[1],
       `CONTENT-PRODUKTION: Schreibe Content zum Thema "${thema}".
@@ -1623,7 +1705,7 @@ PLATTFORM: ${platformLabel[platform]}
 KATEGORIE: ${kategorieLabel}
 
 RECHERCHE-ERGEBNISSE (von RESEARCHER):
-${steps[0].output}
+${maskiereAlter(steps[0].output ?? "", datierung)}
 
 ANWEISUNGEN:
 ${platformInstructions[platform] ?? platformInstructions.twitter}
@@ -1651,13 +1733,13 @@ Liefere den fertigen Content, sofort publishbar.${objektBlock ? `\n\n${objektBlo
     if (textScribe) {
       steps[1].status = "error";
       steps[1].fehler = textScribe.grund;
-      return brichAb(vermerk("scribe", textScribe.grund, textScribe.befunde.join("; ")));
+      return brichAb(textregelVermerk("scribe", textScribe.grund, textScribe.befunde));
     }
 
     // ═══ STEP 3: COUNSEL — Pflicht-Review, fail-closed ═══
     await fuehreStufeAus(
       steps[2],
-      `Pruefe den folgenden Content STRIKT gegen dein STEINADEL-REGELPAKET (fail-closed). Zahlen NUR gegen die mitgelieferten Objektdaten abgleichen. Zitiere Verstoesse. HALTE das Review KOMPAKT (max. ~300 Woerter — nur Befunde, keine langen Tabellen) und schliesse ZWINGEND mit der URTEIL:-Zeile ab (Form: LETZTE ZEILE am Ende dieses Auftrags).${datierungsPruefpunkt(datierung)}
+      `${VORPRUEFUNG_KOPF}${datierungsPruefpunkt(datierung)}
 
 CONTENT:
 ${steps[1].output}
@@ -1747,8 +1829,12 @@ ${URTEIL_SCHLUSS}`,
     // ═══ STEP 4: PUBLISHER — Formatierung & Scheduling ═══
     // Das Review der Vorprüfung geht aufbereitet an PUBLISHER: ohne Zeilen, die ein Urteil tragen
     // (lib/counsel-urteil.ts), Kampagnenseiten /l/… maskiert (Nachbesserung PR #9: sonst übernimmt
-    // PUBLISHER die aufgelöste Ziel-URL aus dem Review, lib/steinadel-kurzlink.ts), abgeleitete Alter
-    // maskiert (Gegenprüfung PR #10, maskiereAlter), geschützter Name maskiert.
+    // PUBLISHER die aufgelöste Ziel-URL aus dem Review, lib/steinadel-kurzlink.ts), geschützter Name
+    // maskiert, abgeleitete Alter maskiert (Gegenprüfung PR #10, maskiereAlter).
+    // maskiereAlter läuft zuletzt (Gegenprüfung des Nachtrags, B1): Steht „691 Jahre“ ohne Trenner vor dem
+    // geschützten Namen, verhindert dessen erster Buchstabe den Treffer ((?!\p{L}) in altersMuster); erst der
+    // Platzhalter „[…]“ der Namensmaske macht daraus ein Alter, das altersBefund trifft. Die Platzhalter
+    // beider Masken enthalten keine Ziffer, maskiereAlter ändert sie also nicht.
     await fuehreStufeAus(
       steps[3],
       `PUBLISHING-AUFTRAG: Bereite diesen Content für die Veröffentlichung vor.
@@ -1760,7 +1846,7 @@ CONTENT (von SCRIBE, COUNSEL-geprüft):
 ${steps[1].output}
 
 COUNSEL-REVIEW:
-${maskiereGeschuetzteNamen(maskiereKampagnenseiten(maskiereAlter(ohneUrteilZeilen(counselOutput), datierung)))}
+${maskiereAlter(maskiereGeschuetzteNamen(maskiereKampagnenseiten(ohneUrteilZeilen(counselOutput))), datierung)}
 
 AUFGABEN:
 1. Qualitätsprüfung: Fakten-Check, Ton, Länge
@@ -1821,7 +1907,7 @@ Modellrechnung-Disclaimer wörtlich.${datierungsHinweisPublisher(datierung)}${ob
     if (textEndfassung) {
       steps[3].status = "error";
       steps[3].fehler = textEndfassung.grund;
-      return brichAb(vermerk("publisher", textEndfassung.grund, textEndfassung.befunde.join("; ")));
+      return brichAb(textregelVermerk("publisher", textEndfassung.grund, textEndfassung.befunde));
     }
 
     // ═══ STEP 5: COUNSEL — Endprüfung der PUBLISHER-Fassung, wörtlich (Paket B, R2/E13) ═══
@@ -1829,7 +1915,7 @@ Modellrechnung-Disclaimer wörtlich.${datierungsHinweisPublisher(datierung)}${ob
     // AMPLIFIER nicht; das spart dessen Aufruf und hält die Zeile bei "abgelehnt".
     await fuehreStufeAus(
       steps[4],
-      `ENDPRUEFUNG (R2): Pruefe die folgende ENDFASSUNG WOERTLICH und STRIKT gegen dein STEINADEL-REGELPAKET (fail-closed). Genau dieser Text geht unveraendert zur Freigabe — geprueft wird ALLES darin, auch Metadaten, Hashtags, Zeitpunkt-Empfehlung und Cross-Promotion-Texte. Zahlen NUR gegen die mitgelieferten Objektdaten abgleichen. Zitiere Verstoesse. HALTE das Review KOMPAKT (max. ~300 Woerter — nur Befunde, keine langen Tabellen) und schliesse ZWINGEND mit der URTEIL:-Zeile ab (Form: LETZTE ZEILE am Ende dieses Auftrags).${datierungsPruefpunkt(datierung)}
+      `${ENDPRUEFUNG_KOPF}${datierungsPruefpunkt(datierung)}
 
 ENDFASSUNG (PUBLISHER):
 ${freigabeText}
@@ -1900,6 +1986,10 @@ ${URTEIL_SCHLUSS}`,
     }
 
     // ═══ STEP 6: AMPLIFIER — Distribution-Plan ═══
+    // Nachtrag Paket B: Im Abnahmelauf vom 10.11.2026 endete AMPLIFIER mit stop_reason max_tokens („Antwort
+    // abgeschnitten“, 4949 Zeichen bei maxTokens 2048). maxTokens gilt je Agent (lib/agent-prompts.ts, jetzt 4096;
+    // activate übernimmt ihn als max_tokens), die Pipeline kann ihn nicht je Stufe setzen. Dazu begrenzt der
+    // Auftrag den Umfang (UMFANG), damit der Plan mit Spielraum unter dem Limit vollständig bleibt.
     await fuehreStufeAus(
       steps[5],
       `AMPLIFICATION-AUFTRAG: Erstelle den Distribution- und Repurposing-Plan für diesen Content.
@@ -1919,7 +2009,8 @@ AUFGABEN:
 4. Hashtag-Strategie pro Plattform
 5. KPI-Ziele pro Plattform (Views, Engagement-Rate, Follower-Growth, 7-Tage-Ziel)
 
-Liefere einen konkreten Aktionsplan mit fertigen Repurpose-Entwürfen.`,
+Liefere einen konkreten Aktionsplan mit fertigen Repurpose-Entwürfen.
+UMFANG: HALTE den Plan KOMPAKT (max. ~900 Wörter — je Repurpose-Entwurf höchstens 3 Sätze, keine langen Tabellen). Lieber jeden Teil kurz als einen Teil unvollständig.`,
       cookie,
       false,
       warnungen
