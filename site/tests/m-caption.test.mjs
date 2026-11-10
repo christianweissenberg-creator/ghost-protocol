@@ -465,3 +465,110 @@ test("M-C7 Ohne medium_id: keine Abfrage auf studio_medium, keine Pflichtzeile, 
     for (let i = 0; i < welt.aktivierungen.length; i++) assert.equal(pflichtzeilen(welt.aktivierungen[i].task), 0, `${fall}: Auftrag ${i} ohne Pflichtzeile`);
   }
 });
+
+// ═══ „Text erzeugen“ im Studio (Nachbesserung Paket C, Auftrag C) ═══
+
+test("M-C8 „Text erzeugen“: erst die Bestätigung mit „bezahlter Lauf (Claude)“ — nichts gesendet; „Ja, bezahlten Lauf starten“ sendet genau einen Lauf mit Objekt, medium_id und Lauf-ID an die echte Pipeline (Agenten-Attrappe, nichts Bezahltes); ein zweiter Klick sendet nicht doppelt; nach verlorener Antwort dieselbe Lauf-ID → 409 statt zweitem Lauf", async () => {
+  exportMit(RITTERGUT);
+  medien();
+  agenten();
+  const { hookLaufzeit, ladeTextErzeugen, ladeStudioBausteine } = await import("./harness/studio.mjs");
+  const lz = hookLaufzeit();
+  const B = ladeStudioBausteine({ ...lz.attrappen, "@/lib/counsel-urteil": counselModul, "@/lib/freigabe-regeln": regeln });
+  const T = ladeTextErzeugen(lz.attrappen, { hilfen: B.hilfen });
+  const gesendet = [];
+  let antwortVerloren = false;
+  const holen = async (url, init) => {
+    assert.equal(url, "/api/content/pipeline");
+    gesendet.push(JSON.parse(init.body));
+    const req = new NextRequest(`http://harness.local${url}`, { method: "POST", headers: { ...init.headers, cookie: "gp-auth=test" }, body: init.body });
+    const res = await pipeline.POST(req);
+    if (antwortVerloren) throw new TypeError("Verbindung nach dem Senden abgebrochen");
+    return res;
+  };
+  let fertig = 0;
+  lz.setzeWurzel(T.TextErzeugen, { slug: SLUG, medium: { id: EXPORT_ID, sha256: "3".repeat(64) }, holen, fertig: () => (fertig += 1) });
+  const alle = (k, pred, aus = []) => {
+    if (Array.isArray(k)) for (const c of k) alle(c, pred, aus);
+    else if (k && typeof k === "object") {
+      if (pred(k)) aus.push(k);
+      alle(k.kinder, pred, aus);
+    }
+    return aus;
+  };
+  const text = (k) => (Array.isArray(k) ? k.map(text).join("") : k && typeof k === "object" ? text(k.kinder) : k === null || k === undefined || typeof k === "boolean" ? "" : String(k));
+  const baum = () => lz.rendere();
+  const element = (attr) => alle(baum(), (n) => n.props?.[attr] !== undefined)[0] ?? null;
+  // 1. Ausgangslage: nur „Text erzeugen …“, nichts gesendet.
+  assert.equal(text(element("data-text-erzeugen-knopf")), "Text erzeugen …");
+  assert.equal(element("data-text-erzeugen-bestaetigung"), null);
+  // 2. Erst zeigen: Hinweis „bezahlter Lauf (Claude)“ und genau das, was gesendet würde — gesendet wird nichts.
+  element("data-text-erzeugen-knopf").props.onClick();
+  const bestaetigung = text(element("data-text-erzeugen-bestaetigung"));
+  assert.match(bestaetigung, /^Bezahlter Lauf \(Claude\): bis zu 6 Stufen/);
+  assert.match(bestaetigung, new RegExp(`Objekt ${SLUG} · Video #${EXPORT_ID} \\(Export, SHA-256 33333333…\\) · Instagram · Reel \\(instagram/reel\\) · Kategorie KI & Automation · Lauf-ID [0-9a-f]{8}… \\(neu\\)`));
+  assert.equal(element("data-caption-kanal").props.disabled, true, "während der Bestätigung gesperrt");
+  assert.deepEqual([gesendet.length, welt.aktivierungen.length], [0, 0]);
+  element("data-text-erzeugen-zurueck").props.onClick();
+  assert.equal(element("data-text-erzeugen-bestaetigung"), null);
+  assert.equal(gesendet.length, 0);
+  // 3. Bestätigen: ein Lauf, auch bei zwei Klicks vor dem Neuzeichnen.
+  element("data-caption-kanal").props.onChange({ currentTarget: { value: "x|thread" } });
+  element("data-text-erzeugen-knopf").props.onClick();
+  const ja = element("data-text-erzeugen-start");
+  ja.props.onClick();
+  ja.props.onClick();
+  await lz.ruhe(40);
+  assert.equal(gesendet.length, 1, "ein Lauf");
+  const lauf1 = gesendet[0];
+  assert.deepEqual({ ...lauf1, lauf_id: "…" }, { platform: "x", format: "thread", category: "ki_automation", objekt_slug: SLUG, medium_id: EXPORT_ID, lauf_id: "…" });
+  assert.match(lauf1.lauf_id, /^[0-9a-f-]{36}$/);
+  assert.equal(welt.aktivierungen.length, 6, "sechs Stufen gegen die Attrappe");
+  assert.equal(element("data-text-erzeugen-ausgang").props["data-text-erzeugen-ausgang"], "ergebnis");
+  assert.match(text(element("data-text-erzeugen-ausgang")), /^Lauf beendet: Caption #\d+ — zur Freigabe im Stapel · (geschätzt \$\d+\.\d{4}|Kosten nicht gemeldet)/);
+  assert.equal(fertig, 1, "das Studio lädt neu");
+  const caption = welt.content.find((z) => z.metadata?.lauf_id === lauf1.lauf_id) ?? welt.content.at(-1);
+  assert.equal(caption.metadata.medium_id, EXPORT_ID);
+  assert.equal(caption.status, "zur_freigabe");
+  // 4. Antwort verloren (der Lauf lief): Ausgang unbekannt, die Lauf-ID bleibt; „Erneut senden“ schickt dieselbe → 409.
+  antwortVerloren = true;
+  element("data-text-erzeugen-knopf").props.onClick();
+  element("data-text-erzeugen-start").props.onClick();
+  await lz.ruhe(40);
+  antwortVerloren = false;
+  assert.equal(gesendet.length, 2);
+  assert.notEqual(gesendet[1].lauf_id, lauf1.lauf_id, "nach bekanntem Ausgang eine neue Lauf-ID");
+  assert.equal(element("data-text-erzeugen-ausgang").props["data-text-erzeugen-ausgang"], "unbekannt");
+  assert.equal(text(element("data-text-erzeugen-knopf")), "Erneut senden …");
+  element("data-text-erzeugen-knopf").props.onClick();
+  assert.match(text(element("data-text-erzeugen-bestaetigung")), /\(dieselbe wie beim Versuch mit unbekanntem Ausgang\)/);
+  const aktivierungenVorher = welt.aktivierungen.length;
+  element("data-text-erzeugen-start").props.onClick();
+  await lz.ruhe(40);
+  assert.equal(gesendet.length, 3);
+  assert.equal(gesendet[2].lauf_id, gesendet[1].lauf_id, "dieselbe Lauf-ID");
+  assert.equal(element("data-text-erzeugen-ausgang").props["data-text-erzeugen-ausgang"], "existiert");
+  assert.match(text(element("data-text-erzeugen-ausgang")), /^Lauf existiert bereits \(#\d+\) — kein zweiter Lauf gestartet/);
+  assert.equal(welt.aktivierungen.length, aktivierungenVorher, "kein zweiter (bezahlter) Lauf");
+  assert.equal(text(element("data-text-erzeugen-knopf")), "Text erzeugen …", "danach wieder eine neue Lauf-ID");
+});
+
+test("M-C9 laufAusgang: Antworten der Pipeline eingeordnet wie auf /content (Ergebnis, 409, 4xx, 5xx mit und ohne Zeile, unlesbar, Netz)", async () => {
+  const { hookLaufzeit, ladeTextErzeugen, ladeStudioBausteine } = await import("./harness/studio.mjs");
+  const lz = hookLaufzeit();
+  const B = ladeStudioBausteine({ ...lz.attrappen, "@/lib/counsel-urteil": counselModul, "@/lib/freigabe-regeln": regeln });
+  const T = ladeTextErzeugen(lz.attrappen, { hilfen: B.hilfen });
+  const a = T.laufAusgang;
+  assert.equal(a(200, { status: "complete", steps: [], contentId: 12, summary: { total_cost_usd: 0.1656 } }).text, "Lauf beendet: Caption #12 — zur Freigabe im Stapel · geschätzt $0.1656");
+  assert.equal(a(200, { status: "abgelehnt", steps: [], contentId: 13 }).text, "Lauf beendet: Caption #13 — COUNSEL lehnt ab — nicht im Stapel · Kosten nicht gemeldet");
+  assert.deepEqual(a(409, { fehler: "Lauf-ID schon vergeben", content_id: 12 }), { art: "existiert", contentId: 12, text: "Lauf existiert bereits (#12) — kein zweiter Lauf gestartet · Lauf-ID schon vergeben" });
+  assert.equal(a(400, { fehler: "medium_id ungültig" }).art, "abgewiesen");
+  assert.equal(a(500, { fehler: "Agent nicht erreichbar", content_id: 14, status: "fehler" }).art, "abgebrochen");
+  assert.equal(a(500, { fehler: "Lauf-ID nicht prüfbar" }).art, "nicht_gestartet");
+  assert.equal(a(502, null).art, "unbekannt");
+  assert.equal(a(200, { ok: true }).art, "unbekannt");
+  assert.equal(a(null, { fehler: "Netzfehler: fetch failed" }).art, "unbekannt");
+  assert.equal(T.neueLaufId({ randomUUID: () => "kurz" }), null, "Lauf-ID nach Vertrag, sonst kein Lauf");
+  assert.match(T.neueLaufId(), /^[0-9a-f-]{36}$/);
+  assert.deepEqual(T.laufKoerper(SLUG, 3, "tiktok|tiktok_short", "business_automation", "id-0000001"), { platform: "tiktok", format: "tiktok_short", category: "business_automation", objekt_slug: SLUG, medium_id: 3, lauf_id: "id-0000001" });
+});

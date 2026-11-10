@@ -553,7 +553,7 @@ test("S-B15 Route: nur GET, dynamic 'force-dynamic', runtime 'nodejs'; lesen.ts 
 // ═══ C: Studio-Ansicht und -Seite ═══
 
 /** Knöpfe der Studio-Seite im statischen Markup (ohne Stand-Zeile, ohne Vorschau): siehe S-C7. */
-const ERLAUBTE_KNOEPFE = ["Kopieren", "Alle prüfen", "Hochladen und Prüflauf starten", "Abgleich messen"];
+const ERLAUBTE_KNOEPFE = ["Kopieren", "Alle prüfen", "Hochladen und Prüflauf starten", "Abgleich messen", "Text erzeugen …"];
 
 async function ansicht() {
   const studio = ladeStudioBausteine({ ...ECHT, "@/lib/counsel-urteil": counsel, "@/lib/freigabe-regeln": regeln });
@@ -693,23 +693,37 @@ test("S-C6 Seite: Maskierung — kein geschützter Name im Markup, auch nicht au
   assert.ok(html.includes('data-cta-sperre="name"'), "CTA mit Namen gesperrt wie auf /content");
 });
 
-test("S-C7 Seite: keine Knöpfe, die etwas auslösen; Regeln mit Fundstellen, darunter der Bauträger — ohne Namen", async () => {
+test("S-C7 Seite: keine Knöpfe, die ohne Bestätigung etwas auslösen; Regeln mit Fundstellen, darunter der Bauträger — ohne Namen", async () => {
   gemessenerStand();
   const html = await studioHtml((await hole()).body);
   const t = sichtbar(html);
   // Knöpfe: "Kopieren" des CTA-Links in den Beleg-Ketten (wie /content), seit Schritt 6 genau ein
   // "Alle prüfen" im Anker-Panel (prüft die Anker neu, ohne bezahlte Aufrufe) und seit Schritt 7 im Medien-Panel
   // "Hochladen und Prüflauf starten" und "Abgleich messen" (Server-Arbeit ohne bezahlte Aufrufe; eingefügt wird
-  // erst nach Vorschau, Häkchen und "So einspielen") — keiner sonst, keiner erzeugt Text oder gibt frei.
+  // erst nach Vorschau, Häkchen und "So einspielen") — keiner gibt frei.
+  // Bewusst angepasst (Nachbesserung Paket C, Auftrag C; Spez. Stufe 2 §4.2, §4.3, §4.4 Schritt 5): je Video genau ein
+  // "Text erzeugen …" im Medien-Panel. Er sendet nichts, er zeigt den bezahlten Lauf; gesendet wird erst mit
+  // "Ja, bezahlten Lauf starten" — der steht nie im statischen Markup (unten mit einem Video geprüft).
   const knoepfe = [...html.matchAll(/<button[^>]*>(.*?)<\/button>/g)].map((m) => m[1]);
   assert.equal(knoepfe.filter((k) => k === "Alle prüfen").length, 1, knoepfe.join(" | "));
   assert.ok(knoepfe.every((k) => ERLAUBTE_KNOEPFE.includes(k)), knoepfe.join(" | "));
   const panel = /<section[^>]*data-anker-panel[^>]*>.*?<\/section>/s.exec(html)?.[0] ?? "";
   assert.match(panel, /<button[^>]*data-alle-pruefen[^>]*>Alle prüfen<\/button>/);
-  for (const verboten of ["Neues Asset", "Text erzeugen", ">Freigeben</button>", ">So einspielen</button>"]) {
+  for (const verboten of ["Neues Asset", "Text erzeugen", "bezahlten Lauf starten", ">Freigeben</button>", ">So einspielen</button>"]) {
     const i = html.indexOf(verboten);
     assert.ok(i < 0, `${verboten}: ${html.slice(Math.max(0, i - 300), i + 40)}`);
   }
+  // Mit einem Video: genau ein "Text erzeugen …" — im Medien-Panel, bei diesem Video; keine Bestätigung im Markup.
+  zuruecksetzen();
+  gemessenerStand();
+  videoZeilen();
+  const mitVideo = await studioHtml((await hole()).body);
+  const knoepfeMitVideo = [...mitVideo.matchAll(/<button[^>]*>(.*?)<\/button>/g)].map((m) => m[1]);
+  assert.ok(knoepfeMitVideo.every((k) => ERLAUBTE_KNOEPFE.includes(k)), knoepfeMitVideo.join(" | "));
+  assert.equal(knoepfeMitVideo.filter((k) => k === "Text erzeugen …").length, 1, knoepfeMitVideo.join(" | "));
+  const medienPanel = /<section[^>]*data-medien-panel[^>]*>.*?<\/section>/s.exec(mitVideo)?.[0] ?? "";
+  assert.match(medienPanel, /data-text-erzeugen="3"[^>]*>.*?<button[^>]*data-text-erzeugen-knopf[^>]*>Text erzeugen …<\/button>/s);
+  for (const verboten of ["bezahlten Lauf starten", "data-text-erzeugen-bestaetigung", "Neues Asset", ">Freigeben</button>"]) assert.ok(!mitVideo.includes(verboten), verboten);
   const { STUDIO_REGELN } = await regelnStudio();
   assert.ok(STUDIO_REGELN.length >= 8);
   for (const r of STUDIO_REGELN) {

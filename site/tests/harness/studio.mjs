@@ -18,6 +18,7 @@ export const KNOPF = "@/components/studio/FreigabeKnopf";
 export const ANKER_PANEL = "@/components/studio/AnkerPanel";
 export const MEDIEN_PANEL = "@/components/studio/MedienPanel";
 export const PRUEF_ANSICHT = "@/components/studio/PruefAnsicht";
+export const TEXT_ERZEUGEN = "@/components/studio/TextErzeugen";
 
 /**
  * Lädt beleg-hilfen.ts, BelegKette.tsx und FreigabeKnopf.tsx mit den Attrappen der Seite, seit Schritt 6
@@ -63,14 +64,23 @@ export function ladePruefAnsicht(attrappen, { hilfen }) {
  * und den echten Modulen anker, types, hilfen und (seit Schritt 8) der Prüfansicht. Kopie für Mutationstests:
  * Z_TSX_COMPONENTS_STUDIO_MEDIENPANEL.
  */
-export function ladeMedienPanel(attrappen, { anker, types, hilfen, pruef }) {
+export function ladeMedienPanel(attrappen, { anker, types, hilfen, pruef, text }) {
   return ladeTsx("components/studio/MedienPanel.tsx", {
     ...attrappen,
     "@/lib/studio/anker": anker,
     "@/lib/types": types,
     [HILFEN]: hilfen,
     [PRUEF_ANSICHT]: pruef ?? ladePruefAnsicht(attrappen, { hilfen }),
+    [TEXT_ERZEUGEN]: text ?? ladeTextErzeugen(attrappen, { hilfen }),
   });
+}
+
+/**
+ * Lädt components/studio/TextErzeugen.tsx (Nachbesserung Paket C, Auftrag C) mit den Attrappen der Seite (React) und den
+ * Beleg-Hilfen. Kopie für Mutationstests: Z_TSX_COMPONENTS_STUDIO_TEXTERZEUGEN.
+ */
+export function ladeTextErzeugen(attrappen, { hilfen }) {
+  return ladeTsx("components/studio/TextErzeugen.tsx", { ...attrappen, [HILFEN]: hilfen });
 }
 
 /**

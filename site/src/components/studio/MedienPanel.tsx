@@ -12,6 +12,8 @@
 // das Panel zeigt seine Vorschau und schickt deren vorschau_sha256 mit „So einspielen“ zurück. Erst Häkchen,
 // dann Knopf (Bestätigung des Inhabers). Nach jedem Fehler verwirft der Server die hochgeladenen Dateien; dann
 // beginnt das Einspielen neu.
+// Je Video außerdem „Text erzeugen“ (components/studio/TextErzeugen.tsx): die Caption zu diesem Video über die Pipeline —
+// ein bezahlter Lauf, erst nach Bestätigung (Nachbesserung Paket C, Auftrag C).
 // Nachbesserung (Gegenprüfung von f5ba8eb, oberflaeche-1, -2, -5, -6, -8, -9, -10): Jeder Lauf hat eine Nummer; ein
 // veralteter Lauf setzt keinen Stand mehr. Während eines Laufs sind Dateiwahl und Felder gesperrt; jede Änderung
 // verwirft Vorschau bzw. Ergebnis. Der Upload meldet Fortschritt je Datei, lässt sich abbrechen und bricht nach
@@ -40,6 +42,7 @@ import type {
 import { berlinDatumZeit } from "@/lib/types";
 import { FARBE_BERNSTEIN, FARBE_GRUEN, FARBE_ROT, istObjekt, maskiert } from "@/components/studio/beleg-hilfen";
 import { PruefAnsicht, leereEingaben } from "@/components/studio/PruefAnsicht";
+import { TextErzeugen } from "@/components/studio/TextErzeugen";
 import type { PruefEingaben } from "@/components/studio/PruefAnsicht";
 
 // ── Texte ──
@@ -1049,6 +1052,8 @@ export function MedienPanel({
                     <>
                       <FreigabeUrteil k={k} />
                       <PruefBereich k={k} slug={slug} anker={manifest?.eintraege.find((e) => e.id === k.export.anker_id) ?? null} holen={holen} neuLaden={neuLaden} />
+                      {/* Caption zu diesem Video (Nachbesserung Paket C, Auftrag C; Ablauf Video-Asset, Schritt 5). */}
+                      <TextErzeugen slug={slug} medium={{ id: k.export.id, sha256: k.export.sha256 }} holen={holen} fertig={neuLaden} />
                     </>
                   }
                 />
