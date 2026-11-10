@@ -12,11 +12,16 @@
 // das Panel zeigt seine Vorschau und schickt deren vorschau_sha256 mit „So einspielen“ zurück. Erst Häkchen,
 // dann Knopf (Bestätigung des Inhabers). Nach jedem Fehler verwirft der Server die hochgeladenen Dateien; dann
 // beginnt das Einspielen neu.
+// Nachbesserung (Gegenprüfung von f5ba8eb, oberflaeche-1, -2, -5, -6, -8, -9, -10): Jeder Lauf hat eine Nummer; ein
+// veralteter Lauf setzt keinen Stand mehr. Während eines Laufs sind Dateiwahl und Felder gesperrt; jede Änderung
+// verwirft Vorschau bzw. Ergebnis. Der Upload meldet Fortschritt je Datei, lässt sich abbrechen und bricht nach
+// UPLOAD_STILLSTAND_MS ohne Daten ab; beim Verlassen der Seite bricht er ab. Die Vorschau nennt die Dateien, für die
+// sie gilt; das Abgleich-Ergebnis Bild, Anker und Rezept. Fehlerhinweise je Schritt, Zeiten in Europe/Berlin.
 // Keine Zahl ohne Quelle: Was der Beleg der erzeugenden Sitzung nennt (ffprobe, Credits), steht als „laut Beleg“
 // da; was der Server gemessen hat, als „gemessen“. Texte der Datenbank erscheinen maskiert. Zeiten in
 // Europe/Berlin mit Zonenangabe, wie im übrigen Studio.
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { ankerManifest, kurzHash } from "@/lib/studio/anker";
 import type { AnkerEintrag, AnkerManifest } from "@/lib/studio/anker";
@@ -34,7 +39,8 @@ import type {
 } from "@/lib/studio/typen";
 import { berlinDatumZeit } from "@/lib/types";
 import { FARBE_BERNSTEIN, FARBE_GRUEN, FARBE_ROT, istObjekt, maskiert } from "@/components/studio/beleg-hilfen";
-import { PruefAnsicht } from "@/components/studio/PruefAnsicht";
+import { PruefAnsicht, leereEingaben } from "@/components/studio/PruefAnsicht";
+import type { PruefEingaben } from "@/components/studio/PruefAnsicht";
 
 // ── Texte ──
 
@@ -67,7 +73,8 @@ export function creditsText(m: StudioMesswert<StudioCredits>): { wert: string; u
   if (m.status === "fehler" || c === null) return { wert: "nicht lesbar", unter: maskiert(m.hinweis ?? "Lesefehler") };
   const deckel = c.deckel === null ? "Deckel nicht entschieden (E18)" : `Deckel ${zahl(c.deckel)}`;
   if (c.summe === null) return { wert: c.originale === 0 ? "kein Video verbucht" : "keine Credit-Angabe", unter: `${deckel} · ${c.originale} Original(e)` };
-  const rest = c.rest === null ? "" : ` · Rest ${zahl(c.rest)}`;
+  // Ist die Summe nur eine Untergrenze (Status nicht ok), ist der Rest eine Obergrenze (Nachbesserung oberflaeche-8).
+  const rest = c.rest === null ? "" : ` · Rest ${m.status === "ok" ? "" : "höchstens "}${zahl(c.rest)}`;
   const ohne = c.originale_ohne_angabe > 0 ? ` · ${c.originale_ohne_angabe} ohne Angabe` : "";
   return { wert: `${m.status === "ok" ? "" : "≥ "}${zahl(c.summe)} Credits`, unter: `${deckel}${rest} · ${c.originale} Original(e)${ohne}` };
 }
@@ -82,11 +89,35 @@ export interface Abweisung {
   text: string;
   felder: string[];
   vorhanden: { startbild: number; original: number; export: number } | null;
+  /** Was mit den hochgeladenen Dateien geschieht — je nach Schritt verschieden (Nachbesserung oberflaeche-6). */
+  hinweis?: string;
 }
 
-function abweisungAus(httpStatus: number | null, daten: unknown, ersatz: string): Abweisung {
+/** Hinweise unter einer Abweisung, je nachdem, wo sie entstand (Nachbesserung oberflaeche-6). */
+export const HINWEIS_NICHTS_HOCHGELADEN = "Noch nichts hochgeladen; bitte neu beginnen.";
+export const HINWEIS_UPLOAD = "Schon hochgeladene Dateien dieses Laufs bleiben bis zu 2 h im Eingang; der Server räumt sie danach auf. Bitte neu beginnen.";
+export const HINWEIS_SERVER = "Der Server hat die hochgeladenen Dateien dieses Laufs verworfen, sofern er sie schon bearbeitet hatte; bitte neu beginnen.";
+export const HINWEIS_BELEGT = "Die hochgeladenen Dateien bleiben liegen; nach dem laufenden Job erneut starten.";
+export const HINWEIS_ABBRUCH = "Schon hochgeladene Dateien bleiben bis zu 2 h im Eingang; ein schon gesendeter Prüflauf endet auf dem Server, schreibt aber nichts.";
+
+/** Job-Arten der Prozess-Sperre in Klartext (medien-ablage.ts, JobArt). */
+const JOB_TEXT: Readonly<Record<string, string>> = { pruefen: "Prüflauf", einspielen: "Einspielen", abgleich: "Abgleich" };
+
+function abweisungAus(httpStatus: number | null, daten: unknown, ersatz: string, hinweis: string = HINWEIS_SERVER): Abweisung {
   const obj = istObjekt(daten) ? daten : null;
-  const text = obj && typeof obj.fehler === "string" && obj.fehler.trim() ? obj.fehler : obj && typeof obj.error === "string" ? obj.error : ersatz;
+  const feld = (k: string): string | null => {
+    const w = obj?.[k];
+    return typeof w === "string" && w.trim() ? w : null;
+  };
+  // Eigene Routen melden fehler; der Storage (PUT auf die signierte URL) meldet {statusCode, error, message}.
+  let text = feld("fehler") ?? feld("message") ?? feld("error") ?? ersatz;
+  let hinweisText = hinweis;
+  // Prozess-Sperre (409): Zeit in Europe/Berlin und die Job-Art in Klartext statt UTC und interner Kennung (oberflaeche-9).
+  const laeuft = obj && istObjekt(obj.laeuft) ? obj.laeuft : null;
+  if (laeuft && typeof laeuft.seit === "string") {
+    text = `Ein Job (${JOB_TEXT[String(laeuft.art)] ?? "unbekannte Art"}) läuft schon seit ${zeitBerlin(laeuft.seit, "unbekannt")} — bitte danach erneut`;
+    hinweisText = HINWEIS_BELEGT;
+  }
   const felder = obj && Array.isArray(obj.felder) ? obj.felder.filter((f): f is string => typeof f === "string").map(maskiert) : [];
   const v = obj && istObjekt(obj.vorhanden) ? obj.vorhanden : null;
   const vorhanden =
@@ -94,12 +125,17 @@ function abweisungAus(httpStatus: number | null, daten: unknown, ersatz: string)
       ? { startbild: v.startbild, original: v.original, export: v.export }
       : null;
   const status = httpStatus === null ? "Netz" : `HTTP ${httpStatus}`;
-  return { art: "abgewiesen", httpStatus, text: maskiert(`${httpStatus === 401 ? "Nicht angemeldet — bitte neu anmelden" : text} (${status})`), felder, vorhanden };
+  return { art: "abgewiesen", httpStatus, text: maskiert(`${httpStatus === 401 ? "Nicht angemeldet — bitte neu anmelden" : text} (${status})`), felder, vorhanden, hinweis: hinweisText };
 }
 
-async function postJson(holen: Holen, url: string, koerper: unknown): Promise<{ status: number | null; daten: unknown }> {
+/** Abbruch durch den Betreiber oder das Verlassen der Seite (kein Fehler des Servers). */
+function abgebrochen(hinweis: string): Abweisung {
+  return { art: "abgewiesen", httpStatus: null, text: "Abgebrochen — kein weiterer Schritt dieses Laufs.", felder: [], vorhanden: null, hinweis };
+}
+
+async function postJson(holen: Holen, url: string, koerper: unknown, signal?: AbortSignal): Promise<{ status: number | null; daten: unknown }> {
   try {
-    const res = await holen(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(koerper), cache: "no-store" });
+    const res = await holen(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(koerper), cache: "no-store", signal });
     return { status: res.status, daten: await res.json().catch(() => null) };
   } catch (e) {
     return { status: null, daten: { fehler: `Netzfehler: ${e instanceof Error ? e.message : "unbekannt"}` } };
@@ -120,33 +156,132 @@ export interface Datei {
   size: number;
 }
 
+/** Anzeigename einer Upload-Rolle (oberflaeche-9: keine Rollen-Kennungen im sichtbaren Text). */
+const UPLOAD_TEXT: Readonly<Record<UploadRolle, string>> = { startbild: "Startbild", original: "Original", export: "Export", abgleich: "Bild" };
+
+/** Höchste Zeit ohne übertragene Daten beim Upload einer Datei; danach Abbruch (Frist, Nachbesserung oberflaeche-2). */
+export const UPLOAD_STILLSTAND_MS = 60_000;
+
+/** PUT einer Datei auf die signierte URL; fortschritt mit den bisher übertragenen Bytes. */
+export type Senden = (
+  url: string,
+  datei: Blob,
+  kopf: Record<string, string>,
+  o: { signal: AbortSignal; fortschritt: (geladen: number) => void },
+) => Promise<{ status: number; text: string }>;
+
+/** PUT per XMLHttpRequest — nur so meldet der Browser den Upload-Fortschritt. Abbruch über das Signal. */
+export const sendenPerXhr: Senden = (url, datei, kopf, o) =>
+  new Promise((ja, nein) => {
+    if (o.signal.aborted) {
+      nein(o.signal.reason ?? new DOMException("Abgebrochen", "AbortError"));
+      return;
+    }
+    const x = new XMLHttpRequest();
+    x.open("PUT", url);
+    for (const [k, v] of Object.entries(kopf)) x.setRequestHeader(k, v);
+    x.upload.onprogress = (e) => o.fortschritt(e.loaded);
+    x.onload = () => ja({ status: x.status, text: x.responseText });
+    x.onerror = () => nein(new Error("Netzfehler beim Upload"));
+    x.onabort = () => nein(o.signal.reason ?? new DOMException("Abgebrochen", "AbortError"));
+    o.signal.addEventListener("abort", () => x.abort(), { once: true });
+    x.send(datei);
+  });
+
+/** PUT über holen (fetch); ohne Fortschritt. Für Tests und Umgebungen ohne XMLHttpRequest. */
+export function sendenPerHolen(holen: Holen): Senden {
+  return async (url, datei, kopf, o) => {
+    const res = await holen(url, { method: "PUT", headers: kopf, body: datei, signal: o.signal });
+    o.fortschritt(datei.size);
+    return { status: res.status, text: await res.text().catch(() => "") };
+  };
+}
+
+/** Im Browser der PUT mit Fortschritt; ohne XMLHttpRequest (Tests) undefined — dann über holen. */
+function browserSenden(): Senden | undefined {
+  return typeof XMLHttpRequest === "function" ? sendenPerXhr : undefined;
+}
+
+export interface LadeOptionen {
+  /** Abbruch des ganzen Laufs (Knopf „Abbrechen“, Verlassen der Seite). */
+  signal?: AbortSignal;
+  /** PUT einer Datei; ohne Angabe über holen. Das Panel nimmt im Browser sendenPerXhr (Fortschritt). */
+  senden?: Senden;
+  /** Frist ohne übertragene Daten (Standard UPLOAD_STILLSTAND_MS). */
+  stillstandMs?: number;
+}
+
+function jsonOderNull(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Upload-URLs anfordern und jede Datei per PUT auf ihre signierte URL laden (nie mit upsert). Liefert je Rolle den
- * Eingangspfad des Servers oder die Abweisung des ersten gescheiterten Schritts.
+ * Eingangspfad des Servers oder die Abweisung des ersten gescheiterten Schritts. Seit der Nachbesserung
+ * oberflaeche-2 mit Fortschritt je Datei (melde), Abbruch über o.signal und einer Frist: Kommen UPLOAD_STILLSTAND_MS
+ * lang keine Daten an, bricht der Upload ab. Ein Abbruch beginnt keinen weiteren Schritt.
  */
 export async function ladeHoch(
   slug: string,
   dateien: ReadonlyArray<{ rolle: UploadRolle; datei: Datei & Blob; mime: MediumMime }>,
   holen: Holen,
   melde: (text: string) => void = () => {},
+  o: LadeOptionen = {},
 ): Promise<{ art: "ok"; eingang: Partial<Record<UploadRolle, string>> } | Abweisung> {
+  const lauf = o.signal;
   melde("Upload-URLs anfordern …");
   const u = await postJson(holen, `/api/studio/${encodeURIComponent(slug)}/medien/upload-url`, {
     dateien: dateien.map((d) => ({ rolle: d.rolle, bytes: d.datei.size, mime: d.mime })),
-  });
-  if (u.status !== 200 || !istObjekt(u.daten) || !Array.isArray(u.daten.dateien)) return abweisungAus(u.status, u.daten, "Upload-URLs nicht erhalten");
+  }, lauf);
+  if (lauf?.aborted) return abgebrochen(HINWEIS_NICHTS_HOCHGELADEN);
+  if (u.status !== 200 || !istObjekt(u.daten) || !Array.isArray(u.daten.dateien)) return abweisungAus(u.status, u.daten, "Upload-URLs nicht erhalten", HINWEIS_NICHTS_HOCHGELADEN);
+  const senden = o.senden ?? sendenPerHolen(holen);
+  const stillstand = o.stillstandMs ?? UPLOAD_STILLSTAND_MS;
   const eingang: Partial<Record<UploadRolle, string>> = {};
   for (const d of dateien) {
+    const anzeige = UPLOAD_TEXT[d.rolle] ?? "Datei";
     const ziel = (u.daten.dateien as unknown[]).find((x): x is Record<string, unknown> => istObjekt(x) && x.rolle === d.rolle);
-    if (!ziel || typeof ziel.signedUrl !== "string" || typeof ziel.pfad !== "string") return abweisungAus(u.status, null, `Upload-URL für ${d.rolle} fehlt in der Antwort`);
-    melde(`${d.rolle} hochladen (${bytesText(d.datei.size)}) …`);
-    let status: number | null;
+    if (!ziel || typeof ziel.signedUrl !== "string" || typeof ziel.pfad !== "string") return abweisungAus(u.status, null, `Upload-URL für ${anzeige} fehlt in der Antwort`, HINWEIS_UPLOAD);
+    melde(`${anzeige} hochladen (${bytesText(d.datei.size)}) …`);
+    const datei = new AbortController();
+    const beiAbbruch = () => datei.abort(lauf?.reason);
+    lauf?.addEventListener("abort", beiAbbruch, { once: true });
+    let uhr: ReturnType<typeof setTimeout> | undefined;
+    const wache = () => {
+      clearTimeout(uhr);
+      uhr = setTimeout(() => datei.abort(new DOMException(`seit ${zahl(stillstand / 1000)} s keine Daten übertragen — abgebrochen`, "TimeoutError")), stillstand);
+    };
+    let prozentVorher = -1;
     try {
-      const res = await holen(ziel.signedUrl, { method: "PUT", headers: { "content-type": d.mime, "x-upsert": "false", "cache-control": "max-age=3600" }, body: d.datei });
-      status = res.status;
-      if (!res.ok) return abweisungAus(status, await res.json().catch(() => null), `Upload von ${d.rolle} gescheitert`);
+      wache();
+      const r = await senden(ziel.signedUrl, d.datei, { "content-type": d.mime, "x-upsert": "false", "cache-control": "max-age=3600" }, {
+        signal: datei.signal,
+        fortschritt: (geladen) => {
+          wache();
+          const prozent = d.datei.size > 0 ? Math.min(100, Math.floor((geladen / d.datei.size) * 100)) : 100;
+          if (prozent !== prozentVorher) {
+            prozentVorher = prozent;
+            melde(`${anzeige} hochladen: ${bytesText(geladen)} von ${bytesText(d.datei.size)} (${prozent} %) …`);
+          }
+        },
+      });
+      if (r.status < 200 || r.status >= 300) {
+        const antwort = jsonOderNull(r.text);
+        const obj = istObjekt(antwort) ? antwort : null;
+        const grund = [obj?.message, obj?.error].find((w): w is string => typeof w === "string" && w.trim() !== "") ?? null;
+        return abweisungAus(r.status, { fehler: `Upload von ${anzeige} gescheitert${grund ? `: ${grund}` : ""}` }, "", HINWEIS_UPLOAD);
+      }
     } catch (e) {
-      return abweisungAus(null, { fehler: `Upload von ${d.rolle} gescheitert: ${e instanceof Error ? e.message : "unbekannt"}` }, "Upload gescheitert");
+      if (lauf?.aborted) return abgebrochen(HINWEIS_UPLOAD);
+      const frist = datei.signal.aborted && datei.signal.reason instanceof DOMException && datei.signal.reason.name === "TimeoutError" ? datei.signal.reason.message : null;
+      return abweisungAus(null, { fehler: `Upload von ${anzeige} gescheitert: ${frist ?? (e instanceof Error ? e.message : "unbekannt")}` }, "Upload gescheitert", HINWEIS_UPLOAD);
+    } finally {
+      clearTimeout(uhr);
+      lauf?.removeEventListener("abort", beiAbbruch);
     }
     eingang[d.rolle] = ziel.pfad;
   }
@@ -192,18 +327,25 @@ export function leseEingespielt(status: number | null, daten: unknown): Eingespi
   return abweisungAus(status, daten, "Einspielen ohne lesbare Antwort");
 }
 
-export function pruefen(slug: string, eingang: Record<MedienRolle, string>, beleg: unknown, holen: Holen): Promise<Vorschau | Abweisung> {
-  return postJson(holen, `/api/studio/${encodeURIComponent(slug)}/medien`, { eingang, beleg, nur_pruefen: true }).then((r) => leseVorschau(r.status, r.daten));
+export function pruefen(slug: string, eingang: Record<MedienRolle, string>, beleg: unknown, holen: Holen, signal?: AbortSignal): Promise<Vorschau | Abweisung> {
+  return postJson(holen, `/api/studio/${encodeURIComponent(slug)}/medien`, { eingang, beleg, nur_pruefen: true }, signal).then((r) => leseVorschau(r.status, r.daten));
 }
 
-export function einspielen(slug: string, eingang: Record<MedienRolle, string>, beleg: unknown, vorschau: Vorschau, holen: Holen): Promise<Eingespielt | Abweisung> {
-  return postJson(holen, `/api/studio/${encodeURIComponent(slug)}/medien`, { eingang, beleg, bestaetigt: vorschau.vorschau_sha256, vorschau: vorschau.zeilen }).then((r) =>
+export function einspielen(slug: string, eingang: Record<MedienRolle, string>, beleg: unknown, vorschau: Vorschau, holen: Holen, signal?: AbortSignal): Promise<Eingespielt | Abweisung> {
+  return postJson(holen, `/api/studio/${encodeURIComponent(slug)}/medien`, { eingang, beleg, bestaetigt: vorschau.vorschau_sha256, vorschau: vorschau.zeilen }, signal).then((r) =>
     leseEingespielt(r.status, r.daten),
   );
 }
 
-export function abgleichen(slug: string, eingang: string, ankerId: string, ausschnitt: Record<string, number>, holen: Holen): Promise<{ art: "abgleich"; abgleich: AbgleichErgebnis; speicher: SpeicherMessung | null } | Abweisung> {
-  return postJson(holen, `/api/studio/${encodeURIComponent(slug)}/medien/abgleich`, { eingang, anker_id: ankerId, ausschnitt: { ...ausschnitt, skalierung: 1 } }).then((r) => {
+export function abgleichen(
+  slug: string,
+  eingang: string,
+  ankerId: string,
+  ausschnitt: Record<string, number>,
+  holen: Holen,
+  signal?: AbortSignal,
+): Promise<{ art: "abgleich"; abgleich: AbgleichErgebnis; speicher: SpeicherMessung | null } | Abweisung> {
+  return postJson(holen, `/api/studio/${encodeURIComponent(slug)}/medien/abgleich`, { eingang, anker_id: ankerId, ausschnitt: { ...ausschnitt, skalierung: 1 } }, signal).then((r) => {
     if (r.status === 200 && istObjekt(r.daten) && istObjekt(r.daten.abgleich)) {
       return { art: "abgleich" as const, abgleich: r.daten.abgleich as unknown as AbgleichErgebnis, speicher: istObjekt(r.daten.speicher) ? (r.daten.speicher as unknown as SpeicherMessung) : null };
     }
@@ -285,15 +427,21 @@ function FreigabeUrteil({ k }: { k: MedienKette }) {
   );
 }
 
-/** Prüfansicht erst beim Öffnen aufbauen: Ein geschlossenes Video lädt nichts. */
-function PruefBereich({ k, slug, anker, holen, neuLaden }: { k: MedienKette; slug: string; anker: AnkerEintrag | null; holen: Holen; neuLaden: () => void }) {
+/**
+ * Prüfansicht erst beim Öffnen aufbauen: Ein geschlossenes Video lädt nichts. Die Eingaben der Checkliste hält der
+ * Bereich (Nachbesserung oberflaeche-4): Schließen und wieder Öffnen verliert sie nicht, erst ein Neuladen der Seite.
+ */
+export function PruefBereich({ k, slug, anker, holen, neuLaden }: { k: MedienKette; slug: string; anker: AnkerEintrag | null; holen: Holen; neuLaden: () => void }) {
   const [offen, setOffen] = useState(false);
+  const [eingaben, setEingaben] = useState<PruefEingaben | null>(null);
+  const leer = () => leereEingaben(k.original?.prompt_klauseln ?? []);
+  const gehalten = { wert: eingaben ?? leer(), setze: (f: (e: PruefEingaben) => PruefEingaben) => setEingaben((alt) => f(alt ?? leer())) };
   return (
     <details className="mt-3" onToggle={(e) => setOffen(e.currentTarget.open)} data-pruefbereich={k.export.id}>
       <summary className="cursor-pointer text-[12px]" style={{ color: "var(--gp-ink)" }}>
         Prüfansicht öffnen (Export in voller Bildrate, Anker daneben, Prüfprotokoll)
       </summary>
-      {offen && <PruefAnsicht slug={slug} kette={k} anker={anker} dateiAdresse={(id) => dateiPfad(slug, id)} holen={holen} gespeichert={neuLaden} />}
+      {offen && <PruefAnsicht slug={slug} kette={k} anker={anker} dateiAdresse={(id) => dateiPfad(slug, id)} holen={holen} gespeichert={neuLaden} gehalten={gehalten} />}
     </details>
   );
 }
@@ -404,10 +552,32 @@ function Vorschautabelle({ v }: { v: Vorschau }) {
 
 type EinspielStand =
   | { art: "bereit" }
-  | { art: "laeuft"; text: string }
-  | { art: "vorschau"; eingang: Record<MedienRolle, string>; beleg: unknown; vorschau: Vorschau }
+  | { art: "laeuft"; text: string; abbrechbar: boolean }
+  | { art: "vorschau"; eingang: Record<MedienRolle, string>; beleg: unknown; vorschau: Vorschau; fuer: string }
   | { art: "fertig"; ergebnis: Eingespielt }
   | { art: "fehler"; abweisung: Abweisung };
+
+/** Lauf-Steuerung eines Panels: Nummer des aktuellen Laufs und sein Abbruch (Nachbesserung oberflaeche-1, -2). */
+interface LaufSteuerung {
+  nr: number;
+  steuerung: AbortController | null;
+}
+
+/** Neuen Lauf beginnen: der vorige bricht ab und zählt nicht mehr; aktuell() ist nur für diesen Lauf wahr. */
+function beginneLauf(l: LaufSteuerung): { signal: AbortSignal; aktuell: () => boolean } {
+  l.steuerung?.abort();
+  const steuerung = new AbortController();
+  const nr = (l.nr += 1);
+  l.steuerung = steuerung;
+  return { signal: steuerung.signal, aktuell: () => l.nr === nr };
+}
+
+/** Laufenden Lauf verwerfen (Abbruch, Eingabe geändert, Seite verlassen): späte Antworten zählen nicht mehr. */
+function verwirfLauf(l: LaufSteuerung): void {
+  l.nr += 1;
+  l.steuerung?.abort();
+  l.steuerung = null;
+}
 
 /** Gewählte Dateien und Beleg des Formulars. */
 export interface Auswahl {
@@ -431,14 +601,33 @@ export function auswahlFehler(a: Auswahl): string[] {
   return fehler;
 }
 
-function Dateiwahl({ titel, akzeptiert, datenFeld, wahl }: { titel: string; akzeptiert: string; datenFeld: string; wahl: (d: (Datei & Blob) | null) => void }) {
+/** Gewählte Dateien mit Name und Größe: Die Vorschau zeigt, für welche Auswahl sie gilt (Nachbesserung oberflaeche-1). */
+export function auswahlText(a: Auswahl): string {
+  const teil = (titel: string, d: (Datei & Blob) | null) => (d === null ? `${titel} —` : `${titel} „${maskiert(d.name)}“ (${bytesText(d.size)})`);
+  return [teil("Startbild", a.startbild), teil("Original", a.original), teil("Export", a.export), teil("Beleg", a.beleg)].join(" · ");
+}
+
+function Dateiwahl({
+  titel,
+  akzeptiert,
+  datenFeld,
+  wahl,
+  gesperrt = false,
+}: {
+  titel: string;
+  akzeptiert: string;
+  datenFeld: string;
+  wahl: (d: (Datei & Blob) | null) => void;
+  gesperrt?: boolean;
+}) {
   return (
     <label className="block min-w-0 text-[11px]">
       <span className="mono-label block">{titel}</span>
       <input
         type="file"
         accept={akzeptiert}
-        className="mt-1 block w-full min-w-0 text-[11px]"
+        disabled={gesperrt}
+        className="mt-1 block w-full min-w-0 text-[11px] disabled:opacity-40"
         data-dateiwahl={datenFeld}
         onChange={(e) => wahl(e.currentTarget.files?.[0] ?? null)}
       />
@@ -456,50 +645,85 @@ function Abweisungsanzeige({ a }: { a: Abweisung }) {
           Schon vorhanden: Startbild #{a.vorhanden.startbild}, Original #{a.vorhanden.original}, Export #{a.vorhanden.export}
         </p>
       )}
-      <p className="mt-1 text-text-muted">Der Server hat die hochgeladenen Dateien verworfen, sofern er sie schon bearbeitet hatte; bitte neu beginnen.</p>
+      <p className="mt-1 text-text-muted" data-medien-fehler-hinweis>
+        {a.hinweis ?? HINWEIS_SERVER}
+      </p>
     </div>
   );
+}
+
+/** Abbau, Neuladen und Schließen während eines Laufs: Abbruch bzw. Rückfrage des Browsers (Nachbesserung oberflaeche-2). */
+function useLaufSchutz(lauf: { current: LaufSteuerung }, laeuft: boolean): void {
+  // Seite verlassen (Navigation im Dashboard baut die Seite ab): laufenden Upload und Prüflauf abbrechen.
+  useEffect(() => {
+    const l = lauf.current;
+    return () => verwirfLauf(l);
+  }, [lauf]);
+  // Neu laden oder Tab schließen, solange ein Lauf läuft: Der Browser fragt nach (beforeunload).
+  useEffect(() => {
+    if (!laeuft || typeof window === "undefined") return;
+    const warne = (e: BeforeUnloadEvent) => e.preventDefault();
+    window.addEventListener("beforeunload", warne);
+    return () => window.removeEventListener("beforeunload", warne);
+  }, [laeuft]);
 }
 
 function Einspielen({ slug, holen, eingespielt }: { slug: string; holen: Holen; eingespielt: () => void }) {
   const [auswahl, setAuswahl] = useState<Auswahl>({ startbild: null, original: null, export: null, beleg: null });
   const [stand, setStand] = useState<EinspielStand>({ art: "bereit" });
   const [bestaetigt, setBestaetigt] = useState(false);
+  const lauf = useRef<LaufSteuerung>({ nr: 0, steuerung: null });
+  const ergebnis = useRef<HTMLDivElement | null>(null);
   const laeuft = stand.art === "laeuft";
   const fehlt = auswahlFehler(auswahl);
+  useLaufSchutz(lauf, laeuft);
+  // Fokus auf das Ergebnis, wenn ein Lauf endet: Der fokussierte Knopf verschwindet sonst (Nachbesserung oberflaeche-10).
+  useEffect(() => {
+    if (stand.art === "vorschau" || stand.art === "fertig" || stand.art === "fehler") ergebnis.current?.focus();
+  }, [stand.art]);
 
   const pruefeLauf = useCallback(async () => {
     if (auswahlFehler(auswahl).length > 0 || auswahl.beleg === null) return;
+    const l = beginneLauf(lauf.current);
+    const setze = (s: EinspielStand) => {
+      if (l.aktuell()) setStand(s);
+    };
     setBestaetigt(false);
-    setStand({ art: "laeuft", text: "Beleg lesen …" });
+    setze({ art: "laeuft", text: "Beleg lesen …", abbrechbar: true });
     let beleg: unknown;
     try {
       beleg = JSON.parse(await auswahl.beleg.text());
     } catch {
-      setStand({ art: "fehler", abweisung: { art: "abgewiesen", httpStatus: null, text: "Beleg ist kein gültiges JSON", felder: [], vorhanden: null } });
+      setze({ art: "fehler", abweisung: { art: "abgewiesen", httpStatus: null, text: "Beleg ist kein gültiges JSON", felder: [], vorhanden: null, hinweis: HINWEIS_NICHTS_HOCHGELADEN } });
       return;
     }
     const dateien = (["startbild", "original", "export"] as const).map((rolle) => {
       const datei = auswahl[rolle] as Datei & Blob;
       return { rolle, datei, mime: mimeFuerDatei(datei) as MediumMime };
     });
-    const hoch = await ladeHoch(slug, dateien, holen, (text) => setStand({ art: "laeuft", text }));
+    const hoch = await ladeHoch(slug, dateien, holen, (text) => setze({ art: "laeuft", text, abbrechbar: true }), { signal: l.signal, senden: browserSenden() });
+    if (!l.aktuell()) return;
     if (hoch.art !== "ok") {
-      setStand({ art: "fehler", abweisung: hoch });
+      setze({ art: "fehler", abweisung: hoch });
       return;
     }
     const eingang = { startbild: hoch.eingang.startbild as string, original: hoch.eingang.original as string, export: hoch.eingang.export as string };
-    setStand({ art: "laeuft", text: "Prüflauf: Server liest die Dateien und gleicht das Startbild ab …" });
-    const v = await pruefen(slug, eingang, beleg, holen);
-    setStand(v.art === "vorschau" ? { art: "vorschau", eingang, beleg, vorschau: v } : { art: "fehler", abweisung: v });
+    setze({ art: "laeuft", text: "Prüflauf: Server liest die Dateien und gleicht das Startbild ab …", abbrechbar: true });
+    const v = await pruefen(slug, eingang, beleg, holen, l.signal);
+    if (!l.aktuell()) return;
+    setBestaetigt(false);
+    setze(v.art === "vorschau" ? { art: "vorschau", eingang, beleg, vorschau: v, fuer: auswahlText(auswahl) } : { art: "fehler", abweisung: v });
   }, [auswahl, slug, holen]);
 
   const spieleEin = useCallback(async () => {
     if (stand.art !== "vorschau" || !bestaetigt) return;
     const { eingang, beleg, vorschau } = stand;
-    setStand({ art: "laeuft", text: "Einspielen: verschieben, nachmessen, Zeilen anlegen …" });
-    const r = await einspielen(slug, eingang, beleg, vorschau, holen);
+    const l = beginneLauf(lauf.current);
+    // Einspielen ist nicht abbrechbar: Ist die Anfrage gesendet, legt der Server die Zeilen an.
+    setStand({ art: "laeuft", text: "Einspielen: verschieben, nachmessen, Zeilen anlegen … (nicht abbrechbar)", abbrechbar: false });
+    const r = await einspielen(slug, eingang, beleg, vorschau, holen, l.signal);
     setBestaetigt(false);
+    if (!l.aktuell()) return;
     if (r.art === "eingespielt") {
       setStand({ art: "fertig", ergebnis: r });
       eingespielt();
@@ -508,7 +732,15 @@ function Einspielen({ slug, holen, eingespielt }: { slug: string; holen: Holen; 
     }
   }, [stand, bestaetigt, slug, holen, eingespielt]);
 
+  const abbrechen = () => {
+    verwirfLauf(lauf.current);
+    setBestaetigt(false);
+    setStand({ art: "fehler", abweisung: abgebrochen(HINWEIS_ABBRUCH) });
+  };
+
+  // Jede Änderung der Auswahl verwirft Vorschau und Häkchen; ein laufender Lauf zählt dann nicht mehr.
   const waehle = (feld: keyof Auswahl) => (d: (Datei & Blob) | null) => {
+    verwirfLauf(lauf.current);
     setAuswahl((a) => ({ ...a, [feld]: d }));
     setStand({ art: "bereit" });
     setBestaetigt(false);
@@ -525,29 +757,39 @@ function Einspielen({ slug, holen, eingespielt }: { slug: string; holen: Holen; 
         danach unveränderlich.
       </p>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-3">
-        <Dateiwahl titel="Startbild (PNG oder JPEG)" akzeptiert="image/png,image/jpeg" datenFeld="startbild" wahl={waehle("startbild")} />
-        <Dateiwahl titel="Original (MP4)" akzeptiert="video/mp4" datenFeld="original" wahl={waehle("original")} />
-        <Dateiwahl titel="Export (MP4)" akzeptiert="video/mp4" datenFeld="export" wahl={waehle("export")} />
-        <Dateiwahl titel="Beleg (JSON)" akzeptiert="application/json,.json" datenFeld="beleg" wahl={waehle("beleg")} />
+        <Dateiwahl titel="Startbild (PNG oder JPEG)" akzeptiert="image/png,image/jpeg" datenFeld="startbild" wahl={waehle("startbild")} gesperrt={laeuft} />
+        <Dateiwahl titel="Original (MP4)" akzeptiert="video/mp4" datenFeld="original" wahl={waehle("original")} gesperrt={laeuft} />
+        <Dateiwahl titel="Export (MP4)" akzeptiert="video/mp4" datenFeld="export" wahl={waehle("export")} gesperrt={laeuft} />
+        <Dateiwahl titel="Beleg (JSON)" akzeptiert="application/json,.json" datenFeld="beleg" wahl={waehle("beleg")} gesperrt={laeuft} />
       </div>
       {fehlt.length > 0 && <p className="text-[10px] mt-2 break-words text-text-muted" data-auswahl-fehlt>Noch offen: {fehlt.join(" · ")}</p>}
-      <button
-        type="button"
-        onClick={() => {
-          if (!laeuft && fehlt.length === 0) void pruefeLauf();
-        }}
-        aria-disabled={laeuft || fehlt.length > 0}
-        className="mt-3 min-h-11 px-4 py-2 rounded-lg text-xs font-medium bg-surface-elevated text-foreground hover:opacity-80 transition-opacity aria-disabled:opacity-40 aria-disabled:cursor-not-allowed"
-        data-pruefen-knopf
-      >
-        Hochladen und Prüflauf starten
-      </button>
+      <div className="flex flex-wrap gap-2 mt-3">
+        <button
+          type="button"
+          onClick={() => {
+            if (!laeuft && fehlt.length === 0) void pruefeLauf();
+          }}
+          aria-disabled={laeuft || fehlt.length > 0}
+          className="min-h-11 px-4 py-2 rounded-lg text-xs font-medium bg-surface-elevated text-foreground hover:opacity-80 transition-opacity aria-disabled:opacity-40 aria-disabled:cursor-not-allowed"
+          data-pruefen-knopf
+        >
+          Hochladen und Prüflauf starten
+        </button>
+        {stand.art === "laeuft" && stand.abbrechbar && (
+          <button type="button" onClick={abbrechen} className="min-h-11 px-4 py-2 rounded-lg text-xs font-medium bg-surface-elevated text-foreground hover:opacity-80 transition-opacity" data-einspielen-abbrechen>
+            Abbrechen
+          </button>
+        )}
+      </div>
+      {/* Nur der Statustext ist eine Live-Region; Vorschau und Fehler bekommen den Fokus (oberflaeche-10). */}
       <div aria-live="polite" className="mt-2">
         {stand.art === "laeuft" && (
-          <p className="text-[11px]" style={{ color: "var(--gp-ink-3)" }} data-medien-laeuft>
+          <p className="text-[11px] break-words" style={{ color: "var(--gp-ink-3)" }} data-medien-laeuft>
             {stand.text}
           </p>
         )}
+      </div>
+      <div ref={ergebnis} tabIndex={-1} className="outline-none min-w-0" data-einspiel-ergebnis>
         {stand.art === "fehler" && <Abweisungsanzeige a={stand.abweisung} />}
         {stand.art === "fertig" && (
           <p className="text-[11px] break-words" style={{ color: FARBE_GRUEN }} data-eingespielt>
@@ -562,6 +804,9 @@ function Einspielen({ slug, holen, eingespielt }: { slug: string; holen: Holen; 
               <span style={{ color: stand.vorschau.abgleich.urteil === "bestanden" ? FARBE_GRUEN : FARBE_ROT }} data-vorschau-abgleich={stand.vorschau.abgleich.urteil}>
                 {abgleichText(stand.vorschau.abgleich)}
               </span>
+            </p>
+            <p className="text-[10px] break-words" style={{ color: "var(--gp-ink-2)" }} data-vorschau-fuer>
+              Gilt für: {stand.fuer}
             </p>
             <p className="text-[10px] text-text-muted break-words">
               vorschau_sha256 {kurzHash(stand.vorschau.vorschau_sha256)} · {versionenText(stand.vorschau.abgleich.versionen)}
@@ -590,27 +835,62 @@ function Einspielen({ slug, holen, eingespielt }: { slug: string; holen: Holen; 
   );
 }
 
+type AbgleichStand =
+  | { art: "bereit" }
+  | { art: "laeuft"; text: string }
+  | { art: "fehler"; abweisung: Abweisung }
+  | { art: "fertig"; abgleich: AbgleichErgebnis; speicher: SpeicherMessung | null; datei: string };
+
+/** Was vor dem Abgleich fehlt (im Browser geprüft; maßgeblich ist der Server). */
+export function abgleichOffen(datei: Datei | null, ankerId: string, rezept: Record<"x" | "y" | "breite" | "hoehe", string>): string[] {
+  const offen: string[] = [];
+  const mime = datei === null ? null : mimeFuerDatei(datei);
+  if (datei === null) offen.push("Bild (PNG oder JPEG)");
+  else if (mime !== "image/png" && mime !== "image/jpeg") offen.push(`Bild: Dateityp ${datei.type || "unbekannt"} passt nicht`);
+  if (ankerId === "") offen.push("Anker");
+  for (const [k, name] of [["x", "x"], ["y", "y"], ["breite", "Breite"], ["hoehe", "Höhe"]] as const) {
+    if (!/^\d{1,6}$/.test(rezept[k])) offen.push(`${name} (ganze Zahl)`);
+  }
+  return offen;
+}
+
 function Abgleich({ slug, manifest, holen }: { slug: string; manifest: AnkerManifest | null; holen: Holen }) {
   const anker = manifest?.eintraege.filter((e) => e.als_anker) ?? [];
   const [datei, setDatei] = useState<(Datei & Blob) | null>(null);
   const [ankerId, setAnkerId] = useState(anker[0]?.id ?? "");
   const [rezept, setRezept] = useState({ x: "", y: "", breite: "", hoehe: "" });
-  const [stand, setStand] = useState<{ art: "bereit" } | { art: "laeuft"; text: string } | { art: "fehler"; abweisung: Abweisung } | { art: "fertig"; abgleich: AbgleichErgebnis; speicher: SpeicherMessung | null }>({ art: "bereit" });
-  const werte = Object.fromEntries(Object.entries(rezept).map(([k, v]) => [k, /^\d{1,6}$/.test(v) ? Number(v) : Number.NaN]));
-  const mime = datei === null ? null : mimeFuerDatei(datei);
-  const bereit = datei !== null && (mime === "image/png" || mime === "image/jpeg") && ankerId !== "" && Object.values(werte).every((n) => Number.isInteger(n)) && stand.art !== "laeuft";
+  const [stand, setStand] = useState<AbgleichStand>({ art: "bereit" });
+  const lauf = useRef<LaufSteuerung>({ nr: 0, steuerung: null });
+  const laeuft = stand.art === "laeuft";
+  const offen = abgleichOffen(datei, ankerId, rezept);
+  const bereit = offen.length === 0 && !laeuft;
+  useLaufSchutz(lauf, laeuft);
+
+  // Jede Änderung von Bild, Anker oder Rezept verwirft das Ergebnis (Nachbesserung oberflaeche-5).
+  const geaendert = () => {
+    verwirfLauf(lauf.current);
+    setStand({ art: "bereit" });
+  };
 
   const messen = useCallback(async () => {
+    const mime = datei === null ? null : mimeFuerDatei(datei);
     if (!bereit || datei === null || mime === null) return;
-    const hoch = await ladeHoch(slug, [{ rolle: "abgleich", datei, mime }], holen, (text) => setStand({ art: "laeuft", text }));
+    const l = beginneLauf(lauf.current);
+    const setze = (s: AbgleichStand) => {
+      if (l.aktuell()) setStand(s);
+    };
+    const werte = Object.fromEntries(Object.entries(rezept).map(([k, v]) => [k, Number(v)]));
+    const hoch = await ladeHoch(slug, [{ rolle: "abgleich", datei, mime }], holen, (text) => setze({ art: "laeuft", text }), { signal: l.signal, senden: browserSenden() });
+    if (!l.aktuell()) return;
     if (hoch.art !== "ok") {
-      setStand({ art: "fehler", abweisung: hoch });
+      setze({ art: "fehler", abweisung: hoch });
       return;
     }
-    setStand({ art: "laeuft", text: "Abgleich läuft …" });
-    const r = await abgleichen(slug, hoch.eingang.abgleich as string, ankerId, werte, holen);
-    setStand(r.art === "abgleich" ? { art: "fertig", abgleich: r.abgleich, speicher: r.speicher } : { art: "fehler", abweisung: r });
-  }, [bereit, datei, mime, slug, holen, ankerId, werte]);
+    setze({ art: "laeuft", text: "Abgleich läuft …" });
+    const r = await abgleichen(slug, hoch.eingang.abgleich as string, ankerId, werte, holen, l.signal);
+    if (!l.aktuell()) return;
+    setze(r.art === "abgleich" ? { art: "fertig", abgleich: r.abgleich, speicher: r.speicher, datei: datei.name } : { art: "fehler", abweisung: r });
+  }, [bereit, datei, slug, holen, ankerId, rezept]);
 
   const feld = (k: keyof typeof rezept, titel: string) => (
     <label className="block text-[11px] min-w-0">
@@ -618,11 +898,13 @@ function Abgleich({ slug, manifest, holen }: { slug: string; manifest: AnkerMani
       <input
         inputMode="numeric"
         value={rezept[k]}
+        disabled={laeuft}
         onChange={(e) => {
           const v = e.currentTarget.value;
           setRezept((r) => ({ ...r, [k]: v }));
+          geaendert();
         }}
-        className="mt-1 w-full min-w-0 rounded bg-surface-elevated px-2 py-1"
+        className="mt-1 w-full min-w-0 rounded bg-surface-elevated px-2 py-1 disabled:opacity-40"
         data-rezept={k}
       />
     </label>
@@ -639,11 +921,29 @@ function Abgleich({ slug, manifest, holen }: { slug: string; manifest: AnkerMani
       </p>
       <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 mt-3">
         <div className="sm:col-span-4 min-w-0">
-          <Dateiwahl titel="Bild (PNG oder JPEG)" akzeptiert="image/png,image/jpeg" datenFeld="abgleich" wahl={setDatei} />
+          <Dateiwahl
+            titel="Bild (PNG oder JPEG)"
+            akzeptiert="image/png,image/jpeg"
+            datenFeld="abgleich"
+            gesperrt={laeuft}
+            wahl={(d) => {
+              setDatei(d);
+              geaendert();
+            }}
+          />
         </div>
         <label className="sm:col-span-4 block text-[11px] min-w-0">
           <span className="mono-label block">Anker</span>
-          <select value={ankerId} onChange={(e) => setAnkerId(e.currentTarget.value)} className="mt-1 w-full min-w-0 rounded bg-surface-elevated px-2 py-1" data-abgleich-anker>
+          <select
+            value={ankerId}
+            disabled={laeuft}
+            onChange={(e) => {
+              setAnkerId(e.currentTarget.value);
+              geaendert();
+            }}
+            className="mt-1 w-full min-w-0 rounded bg-surface-elevated px-2 py-1 disabled:opacity-40"
+            data-abgleich-anker
+          >
             {anker.map((e) => (
               <option key={e.id} value={e.id}>
                 {e.id} ({e.breite}×{e.hoehe})
@@ -656,6 +956,11 @@ function Abgleich({ slug, manifest, holen }: { slug: string; manifest: AnkerMani
         {feld("breite", "Breite")}
         {feld("hoehe", "Höhe")}
       </div>
+      {offen.length > 0 && !laeuft && (
+        <p className="text-[10px] mt-2 break-words text-text-muted" data-abgleich-fehlt>
+          Noch offen: {offen.join(" · ")}
+        </p>
+      )}
       <button
         type="button"
         onClick={() => {
@@ -669,18 +974,23 @@ function Abgleich({ slug, manifest, holen }: { slug: string; manifest: AnkerMani
       </button>
       <div aria-live="polite" className="mt-2">
         {stand.art === "laeuft" && <p className="text-[11px]" style={{ color: "var(--gp-ink-3)" }}>{stand.text}</p>}
-        {stand.art === "fehler" && <Abweisungsanzeige a={stand.abweisung} />}
-        {stand.art === "fertig" && (
-          <div className="text-[11px] break-words" data-abgleich-ergebnis={stand.abgleich.urteil}>
-            <p style={{ color: stand.abgleich.urteil === "bestanden" ? FARBE_GRUEN : FARBE_ROT }}>{abgleichText(stand.abgleich)}</p>
-            <p className="text-[10px] text-text-muted">
-              {stand.abgleich.mittel !== null ? `Mittel ${zahl(stand.abgleich.mittel)} · Anteil über der Toleranz ${zahl((stand.abgleich.anteil_ueber_toleranz ?? 0) * 100, 2)} % · ` : ""}
-              {versionenText(stand.abgleich.versionen)}
-              {speicherText(stand.speicher) ? ` · ${speicherText(stand.speicher)}` : ""}
-            </p>
-          </div>
-        )}
       </div>
+      {stand.art === "fehler" && <Abweisungsanzeige a={stand.abweisung} />}
+      {stand.art === "fertig" && (
+        <div className="text-[11px] break-words" data-abgleich-ergebnis={stand.abgleich.urteil}>
+          <p style={{ color: stand.abgleich.urteil === "bestanden" ? FARBE_GRUEN : FARBE_ROT }}>{abgleichText(stand.abgleich)}</p>
+          <p className="text-[10px] break-words" style={{ color: "var(--gp-ink-2)" }} data-abgleich-gemessen>
+            Gemessen: Bild „{maskiert(stand.datei)}“ ({stand.abgleich.startbild.breite}×{stand.abgleich.startbild.hoehe}) gegen Anker {maskiert(stand.abgleich.anker.id)} (
+            {stand.abgleich.anker.breite}×{stand.abgleich.anker.hoehe}, SHA-256 {kurzHash(stand.abgleich.anker.sha256)}) · Rezept {stand.abgleich.ausschnitt.breite}×
+            {stand.abgleich.ausschnitt.hoehe} bei ({stand.abgleich.ausschnitt.x}, {stand.abgleich.ausschnitt.y})
+          </p>
+          <p className="text-[10px] text-text-muted">
+            {stand.abgleich.mittel !== null ? `Mittel ${zahl(stand.abgleich.mittel)} · Anteil über der Toleranz ${zahl((stand.abgleich.anteil_ueber_toleranz ?? 0) * 100, 2)} % · ` : ""}
+            {versionenText(stand.abgleich.versionen)}
+            {speicherText(stand.speicher) ? ` · ${speicherText(stand.speicher)}` : ""}
+          </p>
+        </div>
+      )}
     </details>
   );
 }

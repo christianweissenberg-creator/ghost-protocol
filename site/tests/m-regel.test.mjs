@@ -74,7 +74,7 @@ const FAELLE = [
   ["3 Klausel nicht bestanden", kette(), [protokoll({ klauseln: [{ id: "licht", bestanden: true }, { id: "rahmen", bestanden: false }] })], "Klausel „rahmen“ nicht bestanden"],
   ["3 Klausel fehlt", kette(), [protokoll({ klauseln: [{ id: "licht", bestanden: true }] })], "Klausel „rahmen“ fehlt im Prüfprotokoll"],
   ["3 Klausel doppelt", kette(), [protokoll({ klauseln: [{ id: "licht", bestanden: true }, { id: "rahmen", bestanden: true }, { id: "rahmen", bestanden: true }] })], "Klausel „rahmen“ steht mehrfach im Prüfprotokoll"],
-  ["4 Anker-Abgleich", kette(), [protokoll({ anker_abgleich: "nicht_bestanden" })], "Anker-Abgleich nicht bestanden (Architektur, Personen, Wasser)"],
+  ["4 Anker-Abgleich", kette(), [protokoll({ anker_abgleich: "nicht_bestanden" })], "Anker-Abgleich nicht bestanden (geprüft: Architektur, Personen, Wasser — Einzelurteile in der Notiz)"],
   ["5 nicht eingebrannt", kette(), [protokoll({ ki_hinweis_eingebrannt: false })], "KI-Hinweis nicht vom ersten bis zum letzten Bild eingebrannt (laut Prüfprotokoll)"],
   ["5 Wortlaut", kette({ export: { ki_hinweis_text: "Alter Hinweistext (Testwert)" } }), [protokoll()], "KI-Hinweis im Bild hat nicht den festgelegten Wortlaut"],
   ["6 Durchsicht", kette(), [protokoll({ durchsicht_volle_bildrate: false })], "Durchsicht in voller Bildrate nicht erklärt"],
@@ -106,7 +106,7 @@ test("MR-3 Alle Gründe zugleich, in der Reihenfolge der Bedingungen — Klausel
   ]);
   assert.deepEqual(r.gruende, [
     "Klausel „rahmen“ nicht bestanden",
-    "Anker-Abgleich nicht bestanden (Architektur, Personen, Wasser)",
+    "Anker-Abgleich nicht bestanden (geprüft: Architektur, Personen, Wasser — Einzelurteile in der Notiz)",
     "KI-Hinweis im Bild hat nicht den festgelegten Wortlaut",
     "Startbild-Abgleich nicht bestanden (größte Abweichung 7)",
   ]);
@@ -121,7 +121,7 @@ test("MR-3 Alle Gründe zugleich, in der Reihenfolge der Bedingungen — Klausel
     "Original und Export tragen nicht dieselbe job_id",
     "Klausel „licht“ nicht bestanden",
     "Klausel „rahmen“ fehlt im Prüfprotokoll",
-    "Anker-Abgleich nicht bestanden (Architektur, Personen, Wasser)",
+    "Anker-Abgleich nicht bestanden (geprüft: Architektur, Personen, Wasser — Einzelurteile in der Notiz)",
     "KI-Hinweis nicht vom ersten bis zum letzten Bild eingebrannt (laut Prüfprotokoll)",
     "KI-Hinweis im Bild hat nicht den festgelegten Wortlaut",
     "Durchsicht in voller Bildrate nicht erklärt",
@@ -137,7 +137,7 @@ test("MR-4 Das jüngste Protokoll zählt — in beide Richtungen; bei gleicher Z
   const neu = (extra) => protokoll({ id: 11, geprueft_am: "2026-11-11T11:00:00.000000+00:00", ...extra });
   const schlecht = { anker_abgleich: "nicht_bestanden" };
   const r1 = regel(kette(), [alt({}), neu(schlecht)]);
-  assert.deepEqual([r1.freigebbar, r1.gruende, r1.pruefung_id], [false, ["Anker-Abgleich nicht bestanden (Architektur, Personen, Wasser)"], 11]);
+  assert.deepEqual([r1.freigebbar, r1.gruende, r1.pruefung_id], [false, ["Anker-Abgleich nicht bestanden (geprüft: Architektur, Personen, Wasser — Einzelurteile in der Notiz)"], 11]);
   const r2 = regel(kette(), [neu({}), alt(schlecht)]);
   assert.deepEqual([r2.freigebbar, r2.gruende, r2.pruefung_id], [true, [], 11]);
   // Mikrosekunden der DB-Uhr: 10:00:00.000002 ist jünger als 10:00:00.000001 — Date.parse sieht beide gleich, dann die id.

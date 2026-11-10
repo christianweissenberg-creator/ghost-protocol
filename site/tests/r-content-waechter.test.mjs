@@ -812,9 +812,13 @@ test("R5-W8 Objekt-Studio Schritt 7: Kein Client-Modul liest studio_* oder den S
     const sf = ts.createSourceFile(datei, QUELLBAUM.get(datei), ts.ScriptTarget.Latest, true);
     assert.ok(sf.statements.some((s) => ts.isImportDeclaration(s) && !s.importClause && ts.isStringLiteral(s.moduleSpecifier) && s.moduleSpecifier.text === "server-only"), `${datei} ohne import "server-only"`);
   }
-  // Das einzige PUT des Panels geht an die signierte URL aus der Antwort der Route upload-url.
+  // Das einzige PUT des Panels geht an die signierte URL aus der Antwort der Route upload-url. Seit der Nachbesserung
+  // oberflaeche-2 über senden: im Browser per XMLHttpRequest (Upload-Fortschritt), ohne XMLHttpRequest per holen.
   const panel = QUELLBAUM.get("components/studio/MedienPanel.tsx");
-  assert.equal([...panel.matchAll(/method:\s*"PUT"/g)].length, 1);
-  assert.match(panel, /holen\(ziel\.signedUrl,\s*\{\s*method:\s*"PUT"/);
+  assert.equal([...panel.matchAll(/method:\s*"PUT"/g)].length, 1, "PUT über holen genau einmal (sendenPerHolen)");
+  assert.equal([...panel.matchAll(/\.open\(\s*"PUT"\s*,\s*url\s*\)/g)].length, 1, "PUT per XMLHttpRequest genau einmal (sendenPerXhr)");
+  assert.equal([...panel.matchAll(/new XMLHttpRequest\(/g)].length, 1, "ein XMLHttpRequest");
+  assert.equal([...panel.matchAll(/\bsenden\(/g)].length, 1, "senden genau einmal aufgerufen");
+  assert.match(panel, /\bsenden\(ziel\.signedUrl,/);
   assert.match(panel, /"x-upsert":\s*"false"/);
 });

@@ -46,6 +46,12 @@ export interface MedienFreigabePruefung {
 
 const HEX64 = /^[0-9a-f]{64}$/;
 
+/**
+ * Grund bei nicht bestandenem Anker-Abgleich (Bedingung 4). Neutral (Nachbesserung regel8-5): Das Protokoll hat nur
+ * das Gesamturteil; welcher der drei Punkte scheiterte, steht in der ersten Zeile der Notiz (Prüfansicht).
+ */
+export const ANKER_GRUND = "Anker-Abgleich nicht bestanden (geprüft: Architektur, Personen, Wasser — Einzelurteile in der Notiz)";
+
 function istEintrag(x: unknown): x is Record<string, unknown> {
   return typeof x === "object" && x !== null && !Array.isArray(x);
 }
@@ -135,7 +141,7 @@ export function pruefeMedienFreigabe(kette: unknown, pruefungen: unknown, vorgab
   }
 
   // 4. Anker-Abgleich
-  if (p !== null && p.anker_abgleich !== "bestanden") g.push("Anker-Abgleich nicht bestanden (Architektur, Personen, Wasser)");
+  if (p !== null && p.anker_abgleich !== "bestanden") g.push(ANKER_GRUND);
 
   // 5. KI-Hinweis eingebrannt und im festgelegten Wortlaut
   if (p !== null && p.ki_hinweis_eingebrannt !== true) g.push("KI-Hinweis nicht vom ersten bis zum letzten Bild eingebrannt (laut Prüfprotokoll)");

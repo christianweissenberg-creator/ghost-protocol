@@ -35,8 +35,8 @@ const fake = await import("./harness/fake.mjs");
 const { welt, legeAn, zeile, zuruecksetzen } = fake;
 fake.installiere();
 const { legeObjektAn } = await import("./harness/studio-ablage.mjs");
-const { React, jsxRuntime, renderToStaticMarkup } = await import("./harness/tsx.mjs");
-const { ladeStudioBausteine, hookLaufzeit } = await import("./harness/studio.mjs");
+const { React, jsxRuntime, renderToStaticMarkup, ladeTsx } = await import("./harness/tsx.mjs");
+const { ladeStudioBausteine, ladeMedienPanel, hookLaufzeit } = await import("./harness/studio.mjs");
 const { NextRequest } = await import("next/server");
 const regeln = await import("../src/lib/freigabe-regeln.ts");
 const counsel = await import("../src/lib/counsel-urteil.ts");
@@ -235,7 +235,7 @@ test("MP-5 „freigeben“ mit medium_id: Medien-Regel sperrt → 409 mit erstem
   const r = await freigeben(50);
   assert.equal(r.status, 409);
   assert.equal(r.body.fehler, "Klausel „rahmen“ nicht bestanden");
-  assert.deepEqual(r.body.gruende, ["Klausel „rahmen“ nicht bestanden", "Anker-Abgleich nicht bestanden (Architektur, Personen, Wasser)", "Startbild-Abgleich nicht bestanden (größte Abweichung 7)"]);
+  assert.deepEqual(r.body.gruende, ["Klausel „rahmen“ nicht bestanden", "Anker-Abgleich nicht bestanden (geprüft: Architektur, Personen, Wasser — Einzelurteile in der Notiz)", "Startbild-Abgleich nicht bestanden (größte Abweichung 7)"]);
   assert.deepEqual(zeile(50), vorher, "nichts geschrieben");
   assert.ok(!welt.log.some((l) => l.methode === "PATCH"), "kein Update");
   assert.ok(welt.studio.log.some((l) => l.op === "download" && l.pfad === EXPORT_PFAD), "Export vorher nachgehasht");
@@ -653,8 +653,11 @@ test("MP-8 Prüfansicht (rein): Bildschritt = 1/fps, Gesamtzahl round(dauer × f
     durchsicht_volle_bildrate: true,
     rechte_status: "geklaert",
     rechte_nachweis: "Verweis",
-    notiz: null,
+    // Nachbesserung regel8-5: die Einzelurteile zum Anker als erste Zeile der Notiz.
+    notiz: "Anker: Architektur bestanden · Personen bestanden · Wasser nicht bestanden",
   });
+  assert.equal(P.alsAnfrage({ ...voll, notiz: " eigene Notiz " }, EXPORT_SHA, klauseln).notiz, "Anker: Architektur bestanden · Personen bestanden · Wasser nicht bestanden\neigene Notiz");
+  assert.equal(P.ankerVermerk({ architektur: null, personen: "nicht_bestanden", wasser: "bestanden" }), "Anker: Architektur offen · Personen nicht bestanden · Wasser bestanden");
   assert.equal(P.alsAnfrage({ ...voll, wasser: "bestanden" }, EXPORT_SHA, klauseln).anker_abgleich, "bestanden");
   assert.equal(P.alsAnfrage(voll, EXPORT_SHA, klauseln).rechte_nachweis, null, "offen: kein Verweis");
   assert.deepEqual(P.ausschnittStil({ x: 0, y: 120, breite: 2400, hoehe: 1350, skalierung: 1 }, { breite: 2400, hoehe: 1600 }), {
@@ -685,6 +688,10 @@ test("MP-9 Prüfansicht (Markup): Export zuerst, Original nur auf Wunsch; Bildz�
   assert.match(html, /data-hinweis-wortlaut="passt"/);
   assert.match(html, new RegExp(`<img src="${HOF.url.replace(/[.]/g, "\\.")}"`));
   assert.match(html, /<button type="submit" aria-disabled="true"[^>]*data-protokoll-speichern/, "erst mit allen Pflichtfeldern");
+  // Nachbesserung regel8-4 und oberflaeche-10: Anker ab 768 px neben dem Video; das Video hat einen Namen.
+  assert.match(html, /class="grid grid-cols-1 md:grid-cols-2 gap-4"/);
+  assert.match(html, /<video[^>]*aria-label="Export #3 in voller Bildrate"/);
+  assert.match(html, /<textarea[^>]*maxLength="900"[^>]*data-notiz/);
 });
 
 test("MP-10 Prüfansicht (Ablauf): Auswahl → POST …/pruefung mit genau diesen Werten an die echte Route; Ergebnis und Neuladen", async () => {
@@ -734,7 +741,7 @@ test("MP-10 Prüfansicht (Ablauf): Auswahl → POST …/pruefung mit genau diese
     durchsicht_volle_bildrate: true,
     rechte_status: "offen",
     rechte_nachweis: null,
-    notiz: null,
+    notiz: "Anker: Architektur bestanden · Personen bestanden · Wasser nicht bestanden",
   });
   const ergebnis = finde(baum, (n) => n.props?.["data-pruef-ergebnis"] !== undefined);
   assert.equal(ergebnis.props["data-pruef-ergebnis"], "nicht_bestanden");
@@ -872,4 +879,133 @@ test("MP-18 Prüfansicht mit Video-Attrappe (Chrome-Verhalten): Zähler zählt d
   v2.zeige(1);
   v2.zeige(1);
   assert.equal(zaehler(), "2/108");
+});
+
+
+test("MP-22 Prüfansicht (Nachbesserung oberflaeche-4): Videofehler mit eigenem Zustand und neutraler Ursache; „Video neu laden“ lädt nur das Video (frische Anfrage), Eingaben und gesehene Bilder bleiben; der Prüfbereich hält die Eingaben über Schließen und Öffnen", async () => {
+  video();
+  const k = await kette();
+  const lz = hookLaufzeit();
+  const B = ladeStudioBausteine({ ...lz.attrappen, "@/lib/counsel-urteil": counsel, "@/lib/freigabe-regeln": regeln });
+  lz.setzeWurzel(B.pruef.PruefAnsicht, { slug: SLUG, kette: k, anker: HOF, dateiAdresse: (id) => `/api/studio/${SLUG}/medien/${id}/datei`, holen: async () => new Response("{}"), gespeichert: () => {} });
+  const baum = () => lz.rendere();
+  const radio = (wurzel, punkt, i) => {
+    const feld = findeKnoten(wurzel, (n) => n.type === "fieldset" && n.props["data-pruefpunkt"] === punkt);
+    const radios = [];
+    (function sammle(n) { if (Array.isArray(n)) n.forEach(sammle); else if (n && typeof n === "object") { if (n.type === "input" && n.props.type === "radio") radios.push(n); sammle(n.kinder); } })(feld);
+    return radios[i];
+  };
+  radio(baum(), "architektur", 0).props.onChange();
+  // Videofehler: eigener Zustand, neutrale Ursache, kein Rat zum Schließen.
+  findeKnoten(baum(), (n) => n.type === "video").props.onError();
+  const meldung = () => findeKnoten(baum(), (n) => n.props?.["data-video-fehler"] !== undefined);
+  assert.ok(meldung(), "Meldung da");
+  assert.equal(findeKnoten(meldung(), (n) => n.type === "p").kinder, B.pruef.VIDEO_FEHLER_TEXT);
+  assert.doesNotMatch(B.pruef.VIDEO_FEHLER_TEXT, /Ansicht neu öffnen/);
+  radio(baum(), "wasser", 1).props.onChange();
+  assert.ok(meldung(), "ein Klick auf einen Prüfpunkt löscht die Meldung nicht");
+  // Gesehene Bilder vor dem Neuladen.
+  const ref = findeKnoten(baum(), (n) => n.type === "video").props.ref;
+  const v1 = videoAttrappe({ fps: 24, bilder: 60 });
+  ref.current = v1;
+  lz.abbauen();
+  lz.wiederAufbauen();
+  v1.zeige(0);
+  v1.zeige(1);
+  const zaehler = () => findeKnoten(baum(), (n) => n.props?.["data-bildzaehler"] !== undefined).props["data-bildzaehler"];
+  assert.equal(zaehler(), "2/60");
+  // Neu laden: neue Anfrage an die Datei-Route, Meldung weg, Eingaben und Zählung bleiben.
+  const v2 = videoAttrappe({ fps: 24, bilder: 60 });
+  ref.current = v2;
+  findeKnoten(baum(), (n) => n.type === "button" && n.props["data-video-neu-laden"] !== undefined).props.onClick();
+  assert.equal(findeKnoten(baum(), (n) => n.type === "video").props.src, `/api/studio/${SLUG}/medien/3/datei?neu=1`);
+  assert.equal(meldung(), null);
+  assert.equal(v1.anmeldungen(), 0, "altes Element abgemeldet");
+  assert.equal(v2.anmeldungen(), 1, "neues Element angemeldet");
+  v2.zeige(1);
+  v2.zeige(2);
+  assert.equal(zaehler(), "3/60", "Bild 1 schon gesehen, Bild 2 neu");
+  assert.equal(radio(baum(), "architektur", 0).props.checked, true);
+  assert.equal(radio(baum(), "wasser", 1).props.checked, true);
+
+  // Prüfbereich (Medien-Panel) als Wurzel: Er reicht seine gehaltenen Eingaben an die Ansicht; Schließen und Öffnen
+  // verliert sie nicht. Die Ansicht wird mitgeschnitten, damit sichtbar ist, was sie bekommt.
+  const lz2 = hookLaufzeit();
+  const B2 = ladeStudioBausteine({ ...lz2.attrappen, "@/lib/counsel-urteil": counsel, "@/lib/freigabe-regeln": regeln });
+  const aufrufe = [];
+  const pruef = { ...B2.pruef, PruefAnsicht: (props) => (aufrufe.push(props), B2.pruef.PruefAnsicht(props)) };
+  const M = ladeMedienPanel({ ...lz2.attrappen, "@/lib/counsel-urteil": counsel, "@/lib/freigabe-regeln": regeln }, { anker: ladeTsx("lib/studio/anker.ts", {}), types: ladeTsx("lib/types.ts", {}), hilfen: B2.hilfen, pruef });
+  lz2.setzeWurzel(M.PruefBereich, { k, slug: SLUG, anker: HOF, holen: async () => new Response("{}"), neuLaden: () => {} });
+  const baum2 = () => lz2.rendere();
+  const oeffne = (offen) => findeKnoten(baum2(), (n) => n.type === "details").props.onToggle({ currentTarget: { open: offen } });
+  oeffne(true);
+  radio(baum2(), "personen", 1).props.onChange();
+  baum2();
+  assert.equal(aufrufe.at(-1).gehalten.wert.personen, "nicht_bestanden", "der Bereich hält die Eingabe");
+  oeffne(false);
+  assert.equal(findeKnoten(baum2(), (n) => n.type === "video"), null, "geschlossen: kein Video");
+  const vorher = aufrufe.length;
+  oeffne(true);
+  baum2();
+  assert.ok(aufrufe.length > vorher, "wieder geöffnet");
+  assert.equal(aufrufe.at(-1).gehalten.wert.personen, "nicht_bestanden", "nach dem Wiederöffnen erhalten");
+  assert.equal(radio(baum2(), "personen", 1).props.checked, true);
+});
+
+test("MP-23 Prüfansicht (Nachbesserung oberflaeche-7): Felder während des Speicherns gesperrt; nach Erfolg kein zweites Protokoll ohne Änderung; jede Änderung (auch eine Klausel) gibt den Knopf frei; Enter in einem Eingabefeld sendet nicht ab", async () => {
+  video();
+  const k = await kette();
+  const lz = hookLaufzeit();
+  const P2 = ladeStudioBausteine({ ...lz.attrappen, "@/lib/counsel-urteil": counsel, "@/lib/freigabe-regeln": regeln }).pruef;
+  const gesendet = [];
+  let tor = null;
+  const holen = async (url, init) => {
+    gesendet.push(JSON.parse(init.body));
+    if (tor) await tor;
+    const req = new NextRequest(`http://harness.local${url}`, { method: "POST", headers: { ...init.headers, "sec-fetch-site": "same-origin" }, body: init.body });
+    return pruefRoute.POST(req, { params: Promise.resolve({ objekt: SLUG, id: "3" }) });
+  };
+  lz.setzeWurzel(P2.PruefAnsicht, { slug: SLUG, kette: k, anker: HOF, dateiAdresse: (id) => `/x/${id}`, holen, gespeichert: () => {} });
+  const baum = () => lz.rendere();
+  const waehle = (punkt, wert) => {
+    const feld = findeKnoten(baum(), (n) => n.type === "fieldset" && n.props["data-pruefpunkt"] === punkt);
+    const radios = [];
+    (function sammle(n) { if (Array.isArray(n)) n.forEach(sammle); else if (n && typeof n === "object") { if (n.type === "input" && n.props.type === "radio") radios.push(n); sammle(n.kinder); } })(feld);
+    radios[wert === "bestanden" ? 0 : 1].props.onChange();
+  };
+  for (const [punkt, w] of [["klausel-licht", "bestanden"], ["klausel-rahmen", "bestanden"], ["architektur", "bestanden"], ["personen", "bestanden"], ["wasser", "bestanden"], ["hinweis", "bestanden"]]) waehle(punkt, w);
+  findeKnoten(baum(), (n) => n.props?.["data-durchsicht"] !== undefined && n.type === "input").props.onChange({ currentTarget: { checked: true } });
+  findeKnoten(baum(), (n) => n.props?.["data-kuerzel"] !== undefined && n.type === "input").props.onChange({ currentTarget: { value: "TS" } });
+  const form = () => findeKnoten(baum(), (n) => n.type === "form");
+  const knopf = () => findeKnoten(baum(), (n) => n.type === "button" && n.props["data-protokoll-speichern"] !== undefined);
+  // Enter in einem Eingabefeld: kein Absenden; im Textfeld der Notiz: Zeilenumbruch erlaubt.
+  let verhindert = 0;
+  form().props.onKeyDown({ key: "Enter", target: { tagName: "INPUT" }, preventDefault: () => (verhindert += 1) });
+  form().props.onKeyDown({ key: "Enter", target: { tagName: "TEXTAREA" }, preventDefault: () => (verhindert += 1) });
+  assert.equal(verhindert, 1);
+  // Während des Speicherns: Felder gesperrt.
+  let oeffnen;
+  tor = new Promise((f) => (oeffnen = f));
+  form().props.onSubmit({ preventDefault() {} });
+  assert.equal(findeKnoten(baum(), (n) => n.type === "fieldset" && n.props["data-pruef-felder"] !== undefined).props.disabled, true, "Felder gesperrt");
+  assert.equal(knopf().props["aria-disabled"], true);
+  form().props.onSubmit({ preventDefault() {} });
+  oeffnen();
+  tor = null;
+  await lz.ruhe();
+  assert.equal(gesendet.length, 1, "kein zweites Absenden während des Speicherns");
+  assert.ok(findeKnoten(baum(), (n) => n.props?.["data-pruef-ergebnis"] !== undefined), "Protokoll gespeichert");
+  // Nach Erfolg: gesperrt bis zur nächsten Änderung.
+  assert.equal(knopf().props["aria-disabled"], true, "nach Erfolg gesperrt");
+  form().props.onSubmit({ preventDefault() {} });
+  await lz.ruhe();
+  assert.equal(gesendet.length, 1, "kein zweites Protokoll ohne Änderung");
+  assert.equal(protokolle().length, 1);
+  // Eine Klausel ändern gibt frei (vorher setzten Klauseln den Stand nicht zurück).
+  waehle("klausel-rahmen", "nicht_bestanden");
+  assert.equal(knopf().props["aria-disabled"], false);
+  form().props.onSubmit({ preventDefault() {} });
+  await lz.ruhe();
+  assert.equal(gesendet.length, 2);
+  assert.equal(protokolle().length, 2);
 });

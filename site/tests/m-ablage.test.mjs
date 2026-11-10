@@ -1023,7 +1023,8 @@ test("M-K1 Medien-Panel (ladeHoch, pruefen, einspielen) gegen die echten Routen:
   const meldungen = [];
   const hoch = await P.ladeHoch(SLUG, dateien, holen, (m) => meldungen.push(m));
   assert.equal(hoch.art, "ok", JSON.stringify(hoch));
-  assert.ok(meldungen.some((m) => m.startsWith("original hochladen (15 MB)")), meldungen.join(" | "));
+  assert.ok(meldungen.some((m) => m.startsWith("Original hochladen (15 MB)")), meldungen.join(" | "));
+  assert.ok(meldungen.some((m) => m.startsWith("Original hochladen: 15 MB von 15 MB (100 %)")), "Fortschritt je Datei (Nachbesserung oberflaeche-2)");
   const puts = browser.filter(([m]) => m === "PUT");
   assert.equal(puts.length, 3);
   assert.ok(puts.every(([, p]) => p.startsWith("/storage/v1/object/upload/sign/studio/eingang/")), JSON.stringify(puts));
@@ -1061,4 +1062,242 @@ test("M-K1 Medien-Panel (ladeHoch, pruefen, einspielen) gegen die echten Routen:
     "Export: Dateityp image/png passt nicht",
     "Beleg (JSON) fehlt",
   ]);
+});
+
+// ═══ Medien-Panel als Bauteil (Hook-Laufzeit) gegen die echten Routen — Nachbesserung oberflaeche-1, -2, -5, -6, -8, -9, mutanten-6 ═══
+
+/** Knoten im aufgelösten Baum (Tiefensuche) bzw. alle passenden. */
+function findeAlle(k, pred, aus = []) {
+  if (Array.isArray(k)) for (const c of k) findeAlle(c, pred, aus);
+  else if (k && typeof k === "object") {
+    if (pred(k)) aus.push(k);
+    findeAlle(k.kinder, pred, aus);
+  }
+  return aus;
+}
+const findeEinen = (k, pred) => findeAlle(k, pred)[0] ?? null;
+/** Sichtbarer Text eines Teilbaums. */
+function textVon(k) {
+  if (Array.isArray(k)) return k.map(textVon).join("");
+  if (k === null || k === undefined || typeof k === "boolean") return "";
+  if (typeof k !== "object") return String(k);
+  return textVon(k.kinder);
+}
+
+/**
+ * Medien-Panel in der Hook-Laufzeit; holen leitet eigene Routen an die echten Handler, alles andere (PUT auf die signierte
+ * URL) an die Storage-Attrappe. tor: optionale Sperre vor dem PUT einer Rolle (respektiert das Abbruchsignal).
+ */
+async function panelLaufzeit() {
+  const { jsxRuntime } = await import("./harness/tsx.mjs");
+  void jsxRuntime;
+  const { ladeStudioBausteine, hookLaufzeit } = await import("./harness/studio.mjs");
+  const regeln = await import("../src/lib/freigabe-regeln.ts");
+  const counsel = await import("../src/lib/counsel-urteil.ts");
+  const lz = hookLaufzeit();
+  const P = ladeStudioBausteine({ ...lz.attrappen, "@/lib/counsel-urteil": counsel, "@/lib/freigabe-regeln": regeln }).medien;
+  const log = [];
+  const tore = new Map();
+  const holen = async (url, init = {}) => {
+    const methode = init.method ?? "GET";
+    log.push([methode, url.startsWith("/") ? url : new URL(url).pathname, init.body && typeof init.body === "string" ? JSON.parse(init.body) : null]);
+    if (!url.startsWith("/")) {
+      const pfad = new URL(url).pathname;
+      const rolle = [...tore.keys()].find((r) => pfad.includes(r));
+      if (rolle !== undefined) {
+        await new Promise((ja, nein) => {
+          tore.get(rolle).oeffnen = ja;
+          init.signal?.addEventListener("abort", () => nein(init.signal.reason ?? new DOMException("Abgebrochen", "AbortError")), { once: true });
+        });
+      }
+      return fetch(url, init);
+    }
+    const route = url.endsWith("/upload-url") ? uploadRoute : url.endsWith("/abgleich") ? abgleichRoute : medienRoute;
+    const req = new NextRequest(`http://harness.local${url}`, { method: methode, headers: { ...init.headers, "sec-fetch-site": "same-origin", cookie: "gp-auth=test" }, body: init.body });
+    return route.POST(req, { params: Promise.resolve({ objekt: SLUG }) });
+  };
+  const s = await holeStudio();
+  let neu = 0;
+  lz.setzeWurzel(P.MedienPanel, { slug: SLUG, medien: s.medien, credits: s.kosten_credits, neuLaden: () => (neu += 1), holen });
+  const baum = () => lz.rendere();
+  return { lz, P, holen, log, tore, baum, neuGeladen: () => neu };
+}
+
+const alsDatei = (bytes, name, type) => new File([bytes], name, { type });
+const BELEG_DATEI = () => alsDatei(Buffer.from(JSON.stringify(beleg())), "beleg.json", "application/json");
+
+/** Dateien im Panel wählen (wie der Browser: onChange mit FileList). */
+function waehleDateien(t, dateien) {
+  for (const [feld, datei] of Object.entries(dateien)) {
+    const input = findeEinen(t.baum(), (n) => n.type === "input" && n.props["data-dateiwahl"] === feld);
+    input.props.onChange({ currentTarget: { files: datei === null ? [] : [datei] } });
+  }
+}
+const knopf = (t, attr) => findeEinen(t.baum(), (n) => n.type === "button" && n.props[attr] !== undefined);
+const einspielStand = (t) => findeEinen(t.baum(), (n) => n.type === "details" && n.props["data-einspielen"] !== undefined).props["data-einspielen"];
+
+test("M-K2 Panel: Während des Laufs sind Dateiwahl und Knopf gesperrt; „Abbrechen“ da; die Vorschau nennt die Dateien; ohne Häkchen kein Einspielen, mit Häkchen genau eine Anfrage (Nachbesserung oberflaeche-1, mutanten-6)", async () => {
+  const t = await panelLaufzeit();
+  t.tore.set("eingang/", {});
+  waehleDateien(t, { startbild: alsDatei(STARTBILD, "start.png", "image/png"), original: alsDatei(ORIGINAL, "original.mp4", "video/mp4"), export: alsDatei(EXPORT, "export.mp4", "video/mp4"), beleg: BELEG_DATEI() });
+  knopf(t, "data-pruefen-knopf").props.onClick();
+  await binnen((async () => { while (!t.tore.get("eingang/").oeffnen) await new Promise((r) => setImmediate(r)); })(), 5_000, "PUT am Tor");
+  t.lz.rendere();
+  assert.equal(einspielStand(t), "laeuft");
+  const eingaben = findeAlle(t.baum(), (n) => n.type === "input" && ["startbild", "original", "export", "beleg"].includes(n.props["data-dateiwahl"]));
+  assert.deepEqual(eingaben.map((n) => n.props.disabled), [true, true, true, true], "Dateiwahl gesperrt");
+  assert.equal(knopf(t, "data-pruefen-knopf").props["aria-disabled"], true);
+  assert.ok(knopf(t, "data-einspielen-abbrechen"), "Abbrechen während Upload und Prüflauf");
+  // Tor öffnen (und für die übrigen PUTs entfernen): Der Rest läuft durch bis zur Vorschau.
+  const tor = t.tore.get("eingang/");
+  t.tore.delete("eingang/");
+  tor.oeffnen();
+  await binnen((async () => { for (let i = 0; i < 400 && einspielStand(t) !== "vorschau"; i += 1) await t.lz.ruhe(2); })(), 10_000, "Vorschau");
+  assert.equal(einspielStand(t), "vorschau");
+  const fuer = textVon(findeEinen(t.baum(), (n) => n.props?.["data-vorschau-fuer"] !== undefined));
+  assert.match(fuer, /Startbild „start\.png“ \(127 kB\) · Original „original\.mp4“ \(15 MB\) · Export „export\.mp4“ \(650 kB\) · Beleg „beleg\.json“/);
+  // Ohne Häkchen: kein Einspielen (mutanten-6, X58).
+  const vorher = t.log.length;
+  knopf(t, "data-einspielen-knopf").props.onClick();
+  await t.lz.ruhe(5);
+  assert.ok(!t.log.slice(vorher).some(([m, , b]) => m === "POST" && b?.bestaetigt), "kein POST mit bestaetigt ohne Häkchen");
+  assert.equal(einspielStand(t), "vorschau");
+  // Mit Häkchen: genau eine Anfrage, drei Zeilen.
+  findeEinen(t.baum(), (n) => n.type === "input" && n.props["data-bestaetigen"] !== undefined).props.onChange({ currentTarget: { checked: true } });
+  knopf(t, "data-einspielen-knopf").props.onClick();
+  await binnen((async () => { for (let i = 0; i < 400 && einspielStand(t) !== "fertig"; i += 1) await t.lz.ruhe(2); })(), 10_000, "Einspielen");
+  assert.equal(t.log.slice(vorher).filter(([m, , b]) => m === "POST" && b?.bestaetigt).length, 1);
+  assert.equal(zeilen().length, 3);
+  assert.equal(t.neuGeladen(), 1);
+});
+
+test("M-K3 Panel: Ein veralteter Lauf setzt keinen Stand; Abbrechen und Abbau beenden Upload und Prüflauf (kein POST …/medien danach); Frist ohne Daten; Fortschritt in Prozent (Nachbesserung oberflaeche-1, -2)", async () => {
+  // (a) Auswahl während des Laufs geändert (Sperre umgangen): Der alte Lauf läuft ins Leere — keine alte Vorschau.
+  const t = await panelLaufzeit();
+  t.tore.set("eingang/", {});
+  const dateien = { startbild: alsDatei(STARTBILD, "start.png", "image/png"), original: alsDatei(ORIGINAL, "original.mp4", "video/mp4"), export: alsDatei(EXPORT, "export.mp4", "video/mp4"), beleg: BELEG_DATEI() };
+  waehleDateien(t, dateien);
+  knopf(t, "data-pruefen-knopf").props.onClick();
+  await binnen((async () => { while (!t.tore.get("eingang/").oeffnen) await new Promise((r) => setImmediate(r)); })(), 5_000, "PUT am Tor");
+  waehleDateien(t, { beleg: alsDatei(Buffer.from(JSON.stringify(beleg({ modell: "anderes-modell" }))), "beleg-2.json", "application/json") });
+  assert.equal(einspielStand(t), "bereit");
+  await t.lz.ruhe(20);
+  assert.equal(einspielStand(t), "bereit", "der alte Lauf setzt keine Vorschau");
+  assert.ok(!t.log.some(([m, u, b]) => m === "POST" && u.endsWith("/medien") && b?.nur_pruefen), "kein Prüflauf des alten Laufs");
+  // (b) Abbrechen während des Uploads: Abbruch-Hinweis, kein Prüflauf.
+  const t2 = await panelLaufzeit();
+  t2.tore.set("eingang/", {});
+  waehleDateien(t2, dateien);
+  knopf(t2, "data-pruefen-knopf").props.onClick();
+  await binnen((async () => { while (!t2.tore.get("eingang/").oeffnen) await new Promise((r) => setImmediate(r)); })(), 5_000, "PUT am Tor");
+  knopf(t2, "data-einspielen-abbrechen").props.onClick();
+  await t2.lz.ruhe(20);
+  assert.equal(einspielStand(t2), "fehler");
+  const fehler = textVon(findeEinen(t2.baum(), (n) => n.props?.["data-medien-fehler"] !== undefined));
+  assert.match(fehler, /Abgebrochen — kein weiterer Schritt dieses Laufs\./);
+  assert.match(fehler, /bleiben bis zu 2 h im Eingang/);
+  assert.ok(!t2.log.some(([m, u]) => m === "POST" && u.endsWith("/medien")), "kein Prüflauf nach dem Abbruch");
+  // (c) Seite verlassen (Abbau) während des Uploads: kein weiterer PUT, kein Prüflauf.
+  const t3 = await panelLaufzeit();
+  t3.tore.set("eingang/", {});
+  waehleDateien(t3, dateien);
+  knopf(t3, "data-pruefen-knopf").props.onClick();
+  await binnen((async () => { while (!t3.tore.get("eingang/").oeffnen) await new Promise((r) => setImmediate(r)); })(), 5_000, "PUT am Tor");
+  const puts = () => t3.log.filter(([m]) => m === "PUT").length;
+  const putsVorher = puts();
+  t3.lz.abbauen();
+  await t3.lz.ruhe(20);
+  assert.equal(puts(), putsVorher, "kein weiterer PUT nach dem Abbau");
+  assert.ok(!t3.log.some(([m, u]) => m === "POST" && u.endsWith("/medien")), "kein Prüflauf nach dem Abbau");
+  // (d) Frist: Kommen keine Daten an, bricht der Upload nach der Frist ab (hier 30 ms statt 60 s).
+  const { P } = t;
+  const meldungen = [];
+  const haengt = (_url, _datei, _kopf, o) => new Promise((_, nein) => o.signal.addEventListener("abort", () => nein(o.signal.reason)));
+  const r = await P.ladeHoch(SLUG, [{ rolle: "original", datei: alsDatei(ORIGINAL, "o.mp4", "video/mp4"), mime: "video/mp4" }], t.holen, (m) => meldungen.push(m), { senden: haengt, stillstandMs: 30 });
+  assert.equal(r.art, "abgewiesen");
+  assert.match(r.text, /^Upload von Original gescheitert: seit 0,03 s keine Daten übertragen — abgebrochen \(Netz\)$/);
+  assert.equal(r.hinweis, P.HINWEIS_UPLOAD);
+  assert.equal(P.UPLOAD_STILLSTAND_MS, 60_000);
+  // (e) Fortschritt: je Prozentschritt eine Meldung; jede Meldung setzt die Frist neu.
+  const schritte = (_url, datei, _kopf, o) =>
+    new Promise((ja) => {
+      let n = 0;
+      const weiter = () => {
+        n += 1;
+        o.fortschritt(Math.min(datei.size, Math.round((datei.size * n) / 4)));
+        if (n < 4) setTimeout(weiter, 15);
+        else ja({ status: 200, text: "{}" });
+      };
+      setTimeout(weiter, 15);
+    });
+  const m2 = [];
+  const ok = await P.ladeHoch(SLUG, [{ rolle: "export", datei: alsDatei(EXPORT, "e.mp4", "video/mp4"), mime: "video/mp4" }], t.holen, (m) => m2.push(m), { senden: schritte, stillstandMs: 40 });
+  assert.equal(ok.art, "ok", JSON.stringify(ok));
+  assert.deepEqual(m2.filter((m) => m.includes("%")), ["Export hochladen: 162,5 kB von 650 kB (25 %) …", "Export hochladen: 325 kB von 650 kB (50 %) …", "Export hochladen: 487,5 kB von 650 kB (75 %) …", "Export hochladen: 650 kB von 650 kB (100 %) …"]);
+});
+
+test("M-K4 Panel-Texte: PUT-Fehler nennt Datei und Ursache des Storage, Hinweis je Schritt; Sperre mit Zeit in Europe/Berlin und Job-Art; Credits: Rest als Obergrenze, wenn die Summe eine Untergrenze ist (Nachbesserung oberflaeche-6, -8, -9)", async () => {
+  const { P } = await panelLaufzeit();
+  const storageFehler = async (url, init) => (init?.method === "PUT" ? new Response(JSON.stringify({ statusCode: "403", error: "Unauthorized", message: "invalid signature" }), { status: 400, headers: { "content-type": "application/json" } }) : null);
+  const holen = async (url, init = {}) => {
+    const f = await storageFehler(url, init);
+    if (f) return f;
+    const req = new NextRequest(`http://harness.local${url}`, { method: init.method, headers: { ...init.headers, "sec-fetch-site": "same-origin", cookie: "gp-auth=test" }, body: init.body });
+    return uploadRoute.POST(req, { params: Promise.resolve({ objekt: SLUG }) });
+  };
+  const r = await P.ladeHoch(SLUG, [{ rolle: "original", datei: alsDatei(ORIGINAL, "o.mp4", "video/mp4"), mime: "video/mp4" }], holen);
+  assert.equal(r.text, "Upload von Original gescheitert: invalid signature (HTTP 400)");
+  assert.equal(r.hinweis, P.HINWEIS_UPLOAD);
+  // Sperre: Antwort der Route mit laeuft {art, seit} → Klartext und Berliner Zeit statt UTC und Kennung.
+  const eingang = await hochladen();
+  let oeffnen;
+  steinadel.tor = new Promise((f) => (oeffnen = f));
+  const angekommen = new Promise((f) => (steinadel.angekommen = f));
+  const erster = pruefen(eingang);
+  try {
+    await binnen(angekommen, 5_000, "erster Job");
+    const zweiter = await binnen(P.pruefen(SLUG, eingang, beleg(), async (url, init) => medienRoute.POST(new NextRequest(`http://harness.local${url}`, { method: "POST", headers: { ...init.headers, "sec-fetch-site": "same-origin", cookie: "gp-auth=test" }, body: init.body }), { params: Promise.resolve({ objekt: SLUG }) })), 5_000, "zweiter Job");
+    assert.equal(zweiter.art, "abgewiesen");
+    assert.match(zweiter.text, /^Ein Job \(Prüflauf\) läuft schon seit .+ \(Europe\/Berlin\) — bitte danach erneut \(HTTP 409\)$/);
+    assert.doesNotMatch(zweiter.text, /\d{4}-\d{2}-\d{2}T|\(pruefen\)/, "keine UTC-Zeit, keine interne Kennung");
+    assert.equal(zweiter.hinweis, P.HINWEIS_BELEGT);
+  } finally {
+    oeffnen();
+    steinadel.tor = null;
+  }
+  assert.equal((await erster).status, 200);
+  // Credits: Summe Untergrenze (Status warnung) → Rest höchstens.
+  const c = P.creditsText({ wert: { summe: 6.5, deckel: 100, rest: 93.5, originale: 2, originale_ohne_angabe: 1 }, status: "warnung", quelle: "Test", gemessen_am: "2026-11-10T15:00:00Z", hinweis: "1 ohne Angabe" });
+  assert.deepEqual(c, { wert: "≥ 6,5 Credits", unter: "Deckel 100 · Rest höchstens 93,5 · 2 Original(e) · 1 ohne Angabe" });
+  assert.equal(P.creditsText({ wert: { summe: 6.5, deckel: 100, rest: 93.5, originale: 1, originale_ohne_angabe: 0 }, status: "ok", quelle: "Test", gemessen_am: "2026-11-10T15:00:00Z" }).unter, "Deckel 100 · Rest 93,5 · 1 Original(e)");
+});
+
+test("M-K5 Abgleich im Panel: Eingaben während der Messung gesperrt; das Ergebnis nennt Bild, Anker und Rezept; jede Änderung verwirft es; „Noch offen“ nennt, was fehlt (Nachbesserung oberflaeche-5)", async () => {
+  const t = await panelLaufzeit();
+  const abgleichStand = () => findeEinen(t.baum(), (n) => n.type === "details" && n.props["data-abgleich"] !== undefined).props["data-abgleich"];
+  const offen = () => textVon(findeEinen(t.baum(), (n) => n.props?.["data-abgleich-fehlt"] !== undefined));
+  assert.match(offen(), /Noch offen: Bild \(PNG oder JPEG\) · x \(ganze Zahl\) · y \(ganze Zahl\) · Breite \(ganze Zahl\) · Höhe \(ganze Zahl\)/);
+  waehleDateien(t, { abgleich: alsDatei(STARTBILD, "a.png", "image/png") });
+  const tippe = (k, v) => findeEinen(t.baum(), (n) => n.type === "input" && n.props["data-rezept"] === k).props.onChange({ currentTarget: { value: v } });
+  for (const [k, v] of Object.entries({ x: REZEPT.x, y: REZEPT.y, breite: REZEPT.breite, hoehe: REZEPT.hoehe })) tippe(k, String(v));
+  // Das Panel liest das echte Manifest (Browser-Modul); die Route hier die Test-Attrappe — also deren Anker wählen.
+  findeEinen(t.baum(), (n) => n.type === "select" && n.props["data-abgleich-anker"] !== undefined).props.onChange({ currentTarget: { value: "test-anker" } });
+  assert.equal(knopf(t, "data-abgleich-knopf").props["aria-disabled"], false);
+  t.tore.set("eingang/", {});
+  knopf(t, "data-abgleich-knopf").props.onClick();
+  await binnen((async () => { while (!t.tore.get("eingang/").oeffnen) await new Promise((r) => setImmediate(r)); })(), 5_000, "PUT am Tor");
+  t.lz.rendere();
+  assert.equal(abgleichStand(), "laeuft");
+  assert.ok(findeAlle(t.baum(), (n) => n.type === "input" && n.props["data-rezept"] !== undefined).every((n) => n.props.disabled === true), "Rezept gesperrt");
+  assert.equal(findeEinen(t.baum(), (n) => n.type === "select" && n.props["data-abgleich-anker"] !== undefined).props.disabled, true, "Anker gesperrt");
+  const tor = t.tore.get("eingang/");
+  t.tore.delete("eingang/");
+  tor.oeffnen();
+  await binnen((async () => { for (let i = 0; i < 400 && abgleichStand() !== "fertig" && abgleichStand() !== "fehler"; i += 1) await t.lz.ruhe(2); })(), 10_000, "Abgleich");
+  assert.equal(abgleichStand(), "fertig", textVon(findeEinen(t.baum(), (n) => n.props?.["data-medien-fehler"] !== undefined)));
+  const gemessen = textVon(findeEinen(t.baum(), (n) => n.props?.["data-abgleich-gemessen"] !== undefined));
+  assert.match(gemessen, /^Gemessen: Bild „a\.png“ \(320×180\) gegen Anker test-anker \(400×260, SHA-256 [0-9a-f]{16}…\) · Rezept 320×180 bei \(12, 30\)$/);
+  tippe("y", "31");
+  assert.equal(abgleichStand(), "bereit", "Rezept geändert → Ergebnis verworfen");
+  assert.equal(findeEinen(t.baum(), (n) => n.props?.["data-abgleich-gemessen"] !== undefined), null);
 });
