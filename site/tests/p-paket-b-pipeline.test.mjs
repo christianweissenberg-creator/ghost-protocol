@@ -1167,3 +1167,21 @@ test("P-A1 auto-produce: „geprüft“ nach derselben Regel wie Freigeben und S
   assert.equal(await hinweis({ status: "complete", steps: SCHRITTE_ALT(pub, ` ${pub}\n`) }), "PUBLISHER-Fassung, identisch mit dem von COUNSEL geprüften Text");
   assert.equal(await hinweis({ status: "abgelehnt", steps: SCHRITTE_ALT(pub, pub).slice(0, 3) }), "keine PUBLISHER-Fassung im Ergebnis");
 });
+
+test("P-P14 PUBLISHER bekommt das Review ohne URTEIL-Zeile — auch wenn COUNSEL sie mit Markdown schreibt", async () => {
+  for (const vorpruefung of [
+    "Befunde: keine.\n**URTEIL:** FREIGABE-EMPFEHLUNG",
+    "Befunde: keine.\n> URTEIL : FREIGABE-EMPFEHLUNG",
+    "Befunde: keine.\n- *Urteil*: FREIGABE",
+  ]) {
+    zuruecksetzen();
+    welt.pipelineModul = pipeline;
+    exportMit(RITTERGUT);
+    agentenMitLink({ counsel: vorpruefung });
+    const r = await pipePost(RITTERGUT_X);
+    assert.equal(r.body.counsel_vorpruefung.urteil, "FREIGABE", vorpruefung);
+    const t = auftrag("publisher");
+    assert.ok(t.includes("COUNSEL-REVIEW:\nBefunde: keine.\n"), vorpruefung);
+    assert.ok(!/URTEIL/i.test(t), `${vorpruefung}: URTEIL-Zeile im PUBLISHER-Auftrag`);
+  }
+});
