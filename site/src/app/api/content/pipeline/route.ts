@@ -45,11 +45,15 @@ const BASE_URL = process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000";
 //   jeder Schreibweise erkannt; COUNSEL erfährt den Umfang der Code-Prüfung (nur steinadel.de) und die
 //   Zählweise ohne Personenbezug; kein Content mit URTEIL-Zeile geht an COUNSEL, PUBLISHER bekommt das
 //   Review ohne URTEIL-Zeile; Textregel §8.1 (Datierung) im Code.
-// - Abnahmelauf 10.11.2026 (content 11, abgelehnt): Beide COUNSEL-Aufträge enden mit der wörtlichen Form
+// - Abnahmelauf 10.11.2026 (abgelehnt): Beide COUNSEL-Aufträge enden mit der wörtlichen Form
 //   der URTEIL-Zeile (URTEIL_SCHLUSS); werteCounselAus bleibt streng. Datierung: Die Datierungszeile
 //   verbietet, aus dem Jahr der Ersterwähnung ein Alter oder eine Bauzeit abzuleiten; COUNSEL bekommt dieselbe
 //   Regel als Prüfpunkt im Auftrag (datierungsPruefpunkt, nicht im Regelpaket); der Code erkennt „N Jahre“
 //   mit N = aktuelles Jahr − Jahr der Ausnahme ± 1 (altersBefund).
+// - Gegenprüfung PR #10 (10.11.2026): Die verbotenen Formen nennen keine Rechenformel mehr, dazu „vor N Jahren …“
+//   und „N Jahre her/zurück“; abgeleitete Alter im Review an PUBLISHER maskiert (maskiereAlter); PUBLISHER nennt
+//   in Qualitätsprüfung und Fakten-Check kein abgeleitetes Alter und zitiert keine Regeln; Eskalationen stehen
+//   über der URTEIL-Zeile; zwischen Zahl und „Jahre“ zählen auch Gedankenstriche (U+2010 bis U+2014).
 //
 // Stufe 1 (05.11.2026) — Freigabe und Beleg-Kette:
 // - Das COUNSEL-Urteil wertet werteCounselAus() aus (lib/counsel-urteil.ts); die frühere
@@ -458,9 +462,13 @@ function ganzeZahl(wert: string | number | null): number | null {
  * COUNSEL-Prüfpunkt. Die Beispiele nennen „N“ statt der Zahl (2026: 691): Zitiert PUBLISHER die Regel in
  * seinem Fakten-Check oder COUNSEL sie im Review, das an PUBLISHER geht, träfe die Zahl sonst altersBefund,
  * und der Lauf bräche nach bezahlten Aufrufen ab, obwohl der Text die Regel einhält.
+ * Gegenprüfung PR #10: Auch keine Rechenformel („N = Jahre seit …“) — sie lädt zum Ausrechnen ein, und
+ * „keine Altersableitung (wären 691 Jahre) ✓“ im Fakten-Check bricht nach vier bezahlten Aufrufen ab. „vor N
+ * Jahren …“ und „N Jahre her/zurück“ stehen dabei, weil der Code auch sie abbricht („Vor 691 Jahren erstmals
+ * urkundlich erwähnt“).
  */
 function abgeleiteteAlter(jahr: number): string {
-  return `„N Jahre Bausubstanz“, „N Jahre Geschichte“, „N Jahre alt“ (N = Jahre seit ${jahr}), „seit ${jahr} steht …“, „Substanz/Mauern aus ${jahr}“`;
+  return `„N Jahre Bausubstanz“, „N Jahre Geschichte“, „N Jahre alt“, „vor N Jahren …“, „N Jahre her/zurück“, „seit ${jahr} steht …“, „Substanz/Mauern aus ${jahr}“`;
 }
 
 function datierungFuer(o: ObjektApi): Datierung {
@@ -491,7 +499,7 @@ function datierungFuer(o: ObjektApi): Datierung {
   return {
     // Gegenprüfung 10.11.2026: Die Zeile nennt das verbotene Wortpaar nicht (ein Verbot, das es nennt,
     // bringt es erst bei, siehe buildObjektBlock); die Code-Prüfung datierungsBefund fängt es ab.
-    // Abnahmelauf 10.11.2026 (content 11): SCRIBE schrieb trotz „nicht das Errichtungsjahr“ „Seit 1335 steht
+    // Abnahmelauf 10.11.2026: SCRIBE schrieb trotz „nicht das Errichtungsjahr“ „Seit 1335 steht
     // das RitterGut … 691 Jahre Bausubstanz“, PUBLISHER übernahm es. Die zweite Zeile verbietet deshalb
     // ausdrücklich, aus dem Jahr ein Alter oder eine Bauzeit abzuleiten, mit den Formen aus dem Lauf
     // (abgeleiteteAlter). Eine Bauzeit nennt sie nicht: Die Quelle (DATIERUNG_FUNDSTELLE,
@@ -960,19 +968,22 @@ Prüfe den Kurzlink anhand dieser aufgelösten Ziel-URL (Regelpaket §2 Ziel-Lin
 }
 
 /**
- * Schluss beider COUNSEL-Aufträge (Abnahmelauf 10.11.2026, content 11): Die Endprüfung schrieb ihre Checkliste
+ * Schluss beider COUNSEL-Aufträge (Abnahmelauf 10.11.2026): Die Endprüfung schrieb ihre Checkliste
  * mit ✓ und hängte den Haken auch an die Urteilszeile („**URTEIL: FREIGABE-EMPFEHLUNG** ✓“). werteCounselAus
  * wertet das als UNKLAR (lib/counsel-urteil.ts, Regel 5: jeder Zusatz macht die Zeile UNKLAR), der Lauf endete
  * „abgelehnt“. Der Parser bleibt streng. Stattdessen sagt der Auftrag wörtlich, wie die letzte Zeile aussieht,
  * und zwar ganz am Ende, direkt vor der Antwort (activate schickt den Auftrag unverändert als Nachricht).
+ * Gegenprüfung PR #10: Das Regelpaket (§6) verlangt bei Preis, AfA und dem ersten Post auf einem Kanal eine
+ * Eskalation; „URTEIL: FREIGABE-EMPFEHLUNG (Eskalation …)“ wäre UNKLAR. Der Schluss sagt deshalb, wohin sie gehört.
  */
 const URTEIL_SCHLUSS =
   "LETZTE ZEILE: Deine Antwort endet mit einer Zeile, die wörtlich nur 'URTEIL: FREIGABE-EMPFEHLUNG' oder 'URTEIL: ABLEHNUNG' lautet. " +
   "Sie steht allein in ihrer Zeile, ohne Anführungszeichen und ohne Formatierung; dahinter steht nichts — kein ✓, kein Emoji, " +
-  "keine Klammer, kein Kommentar. 'URTEIL:' steht nur in dieser Zeile.";
+  "keine Klammer, kein Kommentar. Eskalationen und Hinweise an den Betreiber stehen in den Befunden darüber, nie in oder " +
+  "hinter der Urteilszeile. 'URTEIL:' steht nur in dieser Zeile.";
 
 /**
- * Prüfpunkt beider COUNSEL-Aufträge bei greifender Datierungs-Ausnahme (Abnahmelauf 10.11.2026, content 11):
+ * Prüfpunkt beider COUNSEL-Aufträge bei greifender Datierungs-Ausnahme (Abnahmelauf 10.11.2026):
  * „Seit 1335 steht … 691 Jahre Bausubstanz“ kam durch beide Prüfungen („Seit 1335 ✓“), denn das Regelpaket
  * kennt die Regel nicht. Es bleibt unverändert; die Regel steht deshalb im Auftrag, wie in der Datierungszeile.
  * Leer ohne greifende Ausnahme.
@@ -986,6 +997,21 @@ function datierungsPruefpunkt(datierung: Datierung | null): string {
     `die erste urkundliche Erwähnung — kein Bau- oder Errichtungsjahr. Eine Alters- oder Bauangabe aus diesem Jahr ist ein Verstoß ` +
     `und führt zu ABLEHNUNG, etwa ${abgeleiteteAlter(jahr)}. Erlaubt sind „${beleg.bezeichnung} ${jahr}“ und ` +
     `„${jahr} urkundlich erstmals erwähnt“.`
+  );
+}
+
+/**
+ * Satz im PUBLISHER-Auftrag bei greifender Datierungs-Ausnahme (Gegenprüfung PR #10): PUBLISHERs ganze Antwort ist
+ * der Freigabetext, auch Qualitätsprüfung und Fakten-Check. Ein dort ausgerechnetes Alter („wären 691 Jahre“)
+ * bricht den Lauf nach vier bezahlten Aufrufen ab (altersBefund), ein wörtliches Regelzitat steht im Freigabetext.
+ * Leer ohne greifende Ausnahme.
+ */
+function datierungsHinweisPublisher(datierung: Datierung | null): string {
+  const beleg = datierung?.beleg;
+  if (!beleg || !beleg.ausnahme_greift) return "";
+  return (
+    ` Auch Qualitätsprüfung und Fakten-Check gehen mit zur Freigabe: Nenne darin keine Zahl von Jahren, die aus der ` +
+    `${beleg.bezeichnung} ${beleg.ausnahme_jahr} gerechnet ist, und zitiere keine Regeln wörtlich.`
   );
 }
 
@@ -1039,11 +1065,32 @@ function datierungsBefund(text: string, datierung: Datierung | null): string | n
     : null;
 }
 
-/** Zwischen Zahl und „Jahre“: nur Leerraum und Bindestriche („691 Jahre“, „691-jährig“, auch U+2010/U+2011). */
-const ALTER_TRENNER = "[\\s\\u2010\\u2011-]*";
+/**
+ * Zwischen Zahl und „Jahre“: nur Leerraum, Bindestriche und Gedankenstriche U+2010 bis U+2014 („691 Jahre“,
+ * „691-jährig“, „691–jährig“, „691—jährig“; Gegenprüfung PR #10: vorher nur U+2010/U+2011).
+ */
+const ALTER_TRENNER = "[\\s\\u2010-\\u2014-]*";
 
 /**
- * Abnahmelauf 10.11.2026 (content 11): „Seit 1335 steht das RitterGut … 691 Jahre Bausubstanz“ kam durch Code-
+ * Muster für ein Alter, das aus dem Jahr der Datierungs-Ausnahme abgeleitet ist (altersBefund, maskiereAlter):
+ * eine Zahl N direkt vor „Jahre“/„Jahren“ (auch „N-jährig…“) mit N = aktuelles Jahr − Jahr der Ausnahme ± 1.
+ * Gruppe 1 ist die Zahl. Angewandt auf den Text ohne Markdown (DATIERUNG_MARKDOWN). null ohne greifende Ausnahme.
+ */
+function altersMuster(datierung: Datierung | null): { muster: RegExp; beleg: DatierungsBeleg } | null {
+  const beleg = datierung?.beleg;
+  if (!beleg || !beleg.ausnahme_greift) return null;
+  const alter = new Date().getFullYear() - beleg.ausnahme_jahr;
+  // Eine Ziffer direkt hinter der Zahl ("6910 Jahre") scheitert ohne eigene Regel: Der Trenner nimmt keine
+  // Ziffer auf, und danach muss „Jahre“ oder „jährig“ folgen.
+  const muster = new RegExp(
+    `(?<!\\p{N}[.,]?)(${alter - 1}|${alter}|${alter + 1})${ALTER_TRENNER}(?:Jahren?(?!\\p{L})|jährig)`,
+    "giu",
+  );
+  return { muster, beleg };
+}
+
+/**
+ * Abnahmelauf 10.11.2026: „Seit 1335 steht das RitterGut … 691 Jahre Bausubstanz“ kam durch Code-
  * und beide COUNSEL-Prüfungen. Für Objekte mit greifender Datierungs-Ausnahme erkennt der Code deshalb ein Alter,
  * das aus dem Jahr abgeleitet ist. Eng, denn ein Fehlalarm bricht einen bezahlten Lauf ab: eine Zahl N direkt
  * vor „Jahre“/„Jahren“ (auch „N-jährig…“) mit N = aktuelles Jahr − Jahr der Ausnahme ± 1 (Jahreswechsel,
@@ -1053,20 +1100,44 @@ const ALTER_TRENNER = "[\\s\\u2010\\u2011-]*";
  * datierungsBefund. null, wenn nichts auffällt.
  */
 function altersBefund(text: string, datierung: Datierung | null): string | null {
-  const beleg = datierung?.beleg;
-  if (!beleg || !beleg.ausnahme_greift) return null;
-  const jahr = beleg.ausnahme_jahr;
-  const alter = new Date().getFullYear() - jahr;
-  // Eine Ziffer direkt hinter der Zahl ("6910 Jahre") scheitert ohne eigene Regel: Der Trenner nimmt keine
-  // Ziffer auf, und danach muss „Jahre“ oder „jährig“ folgen.
-  const muster = new RegExp(
-    `(?<!\\p{N}[.,]?)(?:${alter - 1}|${alter}|${alter + 1})${ALTER_TRENNER}(?:Jahren?(?!\\p{L})|jährig)`,
-    "iu",
-  );
-  const treffer = muster.exec(text.replace(DATIERUNG_MARKDOWN, ""));
+  const a = altersMuster(datierung);
+  if (!a) return null;
+  const treffer = a.muster.exec(text.replace(DATIERUNG_MARKDOWN, ""));
+  const jahr = a.beleg.ausnahme_jahr;
   // Kurz gehalten: Der Vermerk fasst Leerraum zusammen und kürzt das Detail auf 160 Zeichen (bereinigeFehler,
   // lib/status-server.ts), und neben diesem Befund kann der Baujahr-Befund stehen.
-  return treffer ? `Alter „${treffer[0]}“ aus ${jahr} abgeleitet (${jahr} ist nur die ${beleg.bezeichnung})` : null;
+  return treffer ? `Alter „${treffer[0]}“ aus ${jahr} abgeleitet (${jahr} ist nur die ${a.beleg.bezeichnung})` : null;
+}
+
+/** Ein Markdown-Zeichen wie DATIERUNG_MARKDOWN, ohne g (test() ohne lastIndex). */
+const MARKDOWN_ZEICHEN = new RegExp(DATIERUNG_MARKDOWN.source);
+
+/**
+ * Gegenprüfung PR #10: Das Review der Vorprüfung geht an PUBLISHER, und dessen ganze Antwort ist die Endfassung.
+ * Nennt COUNSEL ein abgeleitetes Alter („keine Ableitung wie 691 Jahre ✓“) und übernimmt PUBLISHER das, bricht
+ * altersBefund den Lauf nach vier bezahlten Aufrufen ab. maskiereAlter ersetzt deshalb jede Zahl, die altersBefund
+ * träfe, durch „N“ wie in der Datierungsregel. Gesucht wird wie dort im Text ohne Markdown; die Fundstellen werden
+ * auf den Originaltext zurückgerechnet (wie maskiereGeschuetzteNamen), die Formatierung bleibt. Ohne greifende
+ * Ausnahme bleibt der Text unverändert.
+ */
+function maskiereAlter(text: string, datierung: Datierung | null): string {
+  const a = altersMuster(datierung);
+  if (!a) return text;
+  const stelle: number[] = []; // Index im Originaltext je Zeichen des Textes ohne Markdown
+  let ohne = "";
+  for (let i = 0; i < text.length; i++) {
+    if (MARKDOWN_ZEICHEN.test(text[i])) continue;
+    stelle.push(i);
+    ohne += text[i];
+  }
+  let aus = "";
+  let pos = 0;
+  for (const treffer of ohne.matchAll(a.muster)) {
+    const start = treffer.index ?? 0;
+    aus += `${text.slice(pos, stelle[start])}N`;
+    pos = stelle[start + treffer[1].length - 1] + 1;
+  }
+  return aus + text.slice(pos);
 }
 
 type Dienst = ReturnType<typeof createServiceClient>;
@@ -1676,7 +1747,8 @@ ${URTEIL_SCHLUSS}`,
     // ═══ STEP 4: PUBLISHER — Formatierung & Scheduling ═══
     // Das Review der Vorprüfung geht aufbereitet an PUBLISHER: ohne Zeilen, die ein Urteil tragen
     // (lib/counsel-urteil.ts), Kampagnenseiten /l/… maskiert (Nachbesserung PR #9: sonst übernimmt
-    // PUBLISHER die aufgelöste Ziel-URL aus dem Review, lib/steinadel-kurzlink.ts), geschützter Name maskiert.
+    // PUBLISHER die aufgelöste Ziel-URL aus dem Review, lib/steinadel-kurzlink.ts), abgeleitete Alter
+    // maskiert (Gegenprüfung PR #10, maskiereAlter), geschützter Name maskiert.
     await fuehreStufeAus(
       steps[3],
       `PUBLISHING-AUFTRAG: Bereite diesen Content für die Veröffentlichung vor.
@@ -1688,7 +1760,7 @@ CONTENT (von SCRIBE, COUNSEL-geprüft):
 ${steps[1].output}
 
 COUNSEL-REVIEW:
-${maskiereGeschuetzteNamen(maskiereKampagnenseiten(ohneUrteilZeilen(counselOutput)))}
+${maskiereGeschuetzteNamen(maskiereKampagnenseiten(maskiereAlter(ohneUrteilZeilen(counselOutput), datierung)))}
 
 AUFGABEN:
 1. Qualitätsprüfung: Fakten-Check, Ton, Länge
@@ -1708,7 +1780,7 @@ Freigabe. Übernimm Pflichtzeilen (Modellrechnung-Disclaimer, KI-Kennzeichnung, 
 unverändert, ergänze keine neuen Zahlen, Handles, Siegel oder Erfolgsbehauptungen, und nenne
 Zeitpunkte nur als Empfehlung. Jeder Teil erfüllt die Pflicht-Elemente für sich, auch
 Cross-Promotion-Posts und Teaser: Wer AfA, Steuer oder Abschreibung erwähnt, trägt den
-Modellrechnung-Disclaimer wörtlich.${objektBlock ? `\n\n${objektBlock}` : ""}${cta}`,
+Modellrechnung-Disclaimer wörtlich.${datierungsHinweisPublisher(datierung)}${objektBlock ? `\n\n${objektBlock}` : ""}${cta}`,
       cookie,
       true,
       warnungen

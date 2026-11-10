@@ -12,8 +12,10 @@
 // - Beleg-Kette (components/studio) und Fassungsbezug auf /content für Läufe mit Endprüfung.
 // - Nachbesserung PR #9: URTEIL-Erkennung gemeinsam mit werteCounselAus (lib/counsel-urteil.ts),
 //   Datierungsregel §8.1, Cross-Promotion ohne Link, Kampagnenseiten im Review an PUBLISHER maskiert.
-// - Abnahmelauf 10.11.2026 (content 11): wörtliche URTEIL-Zeile am Ende beider COUNSEL-Aufträge (Parser
+// - Abnahmelauf 10.11.2026: wörtliche URTEIL-Zeile am Ende beider COUNSEL-Aufträge (Parser
 //   unverändert streng), Datierung ohne abgeleitetes Alter (Prompt, COUNSEL-Prüfpunkt, Code „N Jahre“).
+// - Gegenprüfung PR #10: Regeltext ohne Rechenformel, Alter im Review an PUBLISHER maskiert, PUBLISHER-Satz,
+//   Eskalation über der URTEIL-Zeile, Gedankenstriche, verschobene Uhr (2027).
 // Die Umgebungswerte unten sind Testwerte dieses Prozesses, keine echten Schlüssel.
 // Z_ROUTE_<NAME>=<pfad> und Z_TSX_<NAME>=<pfad> prüfen Kopien statt der Repo-Dateien (Mutationstests).
 import { test, beforeEach } from "node:test";
@@ -1385,14 +1387,65 @@ test("P-P17 /l/ im Review der Vorprüfung: im PUBLISHER-Auftrag maskiert — üb
   assert.equal(zeile(id).metadata.kurzlink.pruefung_endfassung.cta_treffer, 2, "CTA-Link aus dem Review bleibt erlaubt");
 });
 
-// ═══ Abnahmelauf 10.11.2026 (content 11, abgelehnt): Urteilszeile, Datierung ═══
+// ═══ Abnahmelauf 10.11.2026 (abgelehnt): Urteilszeile, Datierung ═══
 
-/** Alter, das sich aus 1335 ergäbe — wie alterAusJahr in der Route (2026: 691). */
+/** Alter, das sich aus 1335 ergäbe — wie altersMuster in der Route (2026: 691). */
 const ALTER = new Date().getFullYear() - 1335;
 const SCHLUSS =
   "LETZTE ZEILE: Deine Antwort endet mit einer Zeile, die wörtlich nur 'URTEIL: FREIGABE-EMPFEHLUNG' oder 'URTEIL: ABLEHNUNG' lautet. " +
   "Sie steht allein in ihrer Zeile, ohne Anführungszeichen und ohne Formatierung; dahinter steht nichts — kein ✓, kein Emoji, " +
-  "keine Klammer, kein Kommentar. 'URTEIL:' steht nur in dieser Zeile.";
+  "keine Klammer, kein Kommentar. Eskalationen und Hinweise an den Betreiber stehen in den Befunden darüber, nie in oder " +
+  "hinter der Urteilszeile. 'URTEIL:' steht nur in dieser Zeile.";
+/** Satz im PUBLISHER-Auftrag bei greifender Datierungs-Ausnahme (Gegenprüfung PR #10). */
+const PUBLISHER_SATZ =
+  "Modellrechnung-Disclaimer wörtlich. Auch Qualitätsprüfung und Fakten-Check gehen mit zur Freigabe: Nenne darin keine " +
+  "Zahl von Jahren, die aus der Ersterwähnung 1335 gerechnet ist, und zitiere keine Regeln wörtlich.\n\n";
+/** Verbotene Formen in Datierungszeile und Prüfpunkt: „N“ statt der Zahl, keine Rechenformel. */
+const FORMEN =
+  "„N Jahre Bausubstanz“, „N Jahre Geschichte“, „N Jahre alt“, „vor N Jahren …“, „N Jahre her/zurück“, „seit 1335 steht …“, " +
+  "„Substanz/Mauern aus 1335“";
+/**
+ * Sätze mit abgeleitetem Alter → Befund (Treffer ohne Markdown). Vom Abnahmelauf, aus der Gegenprüfung PR #10
+ * („Vor N Jahren erstmals urkundlich erwähnt“, Gedankenstriche U+2012 bis U+2014) und Randfälle.
+ */
+const ALTER_TREFFER = [
+  [`Seit 1335 steht das RitterGut Seifersdorf im Dresdner Wachau. ${ALTER} Jahre Bausubstanz.`, `${ALTER} Jahre`], // Wortlaut des Abnahmelaufs
+  [`Geschichte seit ${ALTER} Jahren`, `${ALTER} Jahren`],
+  [`über ${ALTER - 1} Jahre Geschichte`, `${ALTER - 1} Jahre`],
+  [`${ALTER + 1} Jahre alt`, `${ALTER + 1} Jahre`],
+  [`**${ALTER}** Jahre`, `${ALTER} Jahre`],
+  [`${ALTER} Jahre`, `${ALTER} Jahre`],
+  [`${ALTER}  Jahre`, `${ALTER} Jahre`],
+  [`${ALTER}Jahre`, `${ALTER}Jahre`],
+  [`eine ${ALTER}-jährige Geschichte`, `${ALTER}-jährig`],
+  [`die ${ALTER} - Jährige`, `${ALTER} - Jährig`],
+  [`${ALTER}‐jährig`, `${ALTER}‐jährig`],
+  [`${ALTER}‑jährig`, `${ALTER}‑jährig`],
+  [`${ALTER}‒jährig`, `${ALTER}‒jährig`],
+  [`eine ${ALTER}–jährige Geschichte`, `${ALTER}–jährig`],
+  [`${ALTER}—jährig`, `${ALTER}—jährig`],
+  [`${ALTER} – Jahre`, `${ALTER} – Jahre`],
+  [`ÜBER ${ALTER} JAHRE`, `${ALTER} JAHRE`],
+  [`(${ALTER} Jahre)`, `${ALTER} Jahre`],
+  [`${ALTER - 1}–${ALTER} Jahre`, `${ALTER} Jahre`],
+  [`Vor ${ALTER} Jahren erstmals urkundlich erwähnt.`, `${ALTER} Jahren`],
+  [`Das ist ${ALTER} Jahre her.`, `${ALTER} Jahre`],
+  // Jedes Markdown-Zeichen um die Zahl: Code-Prüfung und Maskierung entfernen dieselben Zeichen
+  ...[..."*_#`>"].map((c) => [`${c}${ALTER}${c} Jahre`, `${ALTER} Jahre`]),
+];
+/** Kein Befund: Bauwörter in der Nähe (Auftrag), andere Zahlen, „Jahre“ nicht direkt hinter der Zahl. */
+const ALTER_KEIN_TREFFER = [
+  "Ersterwähnung 1335. Das Gutshaus wurde um 1750 errichtet.",
+  "Das RitterGut ist seit 1335 urkundlich belegt.",
+  "1335 urkundlich erstmals erwähnt.",
+  `${ALTER + 2} Jahre`, `${ALTER - 2} Jahre`,
+  `1${ALTER} Jahre`, `${ALTER}0 Jahre`, `1.${ALTER} Jahre`, `2,${ALTER} Jahre`,
+  `${ALTER} Jahrestage`,
+  `${ALTER} m² Wohnfläche. Jahre später …`,
+  `Seite ${ALTER}. Jahre später …`, // zwischen Zahl und „Jahre“ nur Leerraum, Binde- und Gedankenstriche
+  `${ALTER} − Jahre`, // Minuszeichen U+2212 ist kein Trenner
+  `fast ${Math.ceil((ALTER + 2) / 100) * 100} Jahre`, // 2026: „fast 700 Jahre“ fängt nur COUNSEL
+];
 const OHNE_OBJEKT = { topic: "KI-Agenten erklärt", platform: "x", format: "thread", category: "ki_automation" };
 
 test("P-P18 Urteilszeile: beide COUNSEL-Aufträge enden mit ihrer wörtlichen Form (mit und ohne Objekt); der Parser bleibt streng — die Zeile aus dem Abnahmelauf ist UNKLAR", async () => {
@@ -1430,6 +1483,17 @@ test("P-P18 Urteilszeile: beide COUNSEL-Aufträge enden mit ihrer wörtlichen Fo
   assert.equal(r.body.status, "abgelehnt");
   assert.deepEqual([r.body.counsel.urteil, r.body.counsel_vorpruefung.urteil], ["UNKLAR", "FREIGABE"]);
   assert.equal(welt.aktivierungen.filter((a) => a.agent === "amplifier").length, 0);
+  // Gegenprüfung PR #10: Eskalation (Regelpaket §6) in der Urteilszeile → UNKLAR, in den Befunden darüber →
+  // FREIGABE. Das sagt der Auftrag (SCHLUSS); der Parser bleibt, wie er ist.
+  const eskalation = "Eskalation an den Betreiber: Preisnennung und AfA-Rechnung, erster Post auf LinkedIn.";
+  for (const [antwort, urteil] of [
+    [`Befunde: keine.\nURTEIL: FREIGABE-EMPFEHLUNG (${eskalation})`, "UNKLAR"],
+    [`Befunde: keine.\nURTEIL: FREIGABE-EMPFEHLUNG — ${eskalation}`, "UNKLAR"],
+    [`Befunde: keine.\n${eskalation}\nURTEIL: FREIGABE-EMPFEHLUNG`, "FREIGABE"],
+    ["Befunde: keine.\n**Eskalation:** Preis, AfA, erster LinkedIn-Post\nURTEIL: FREIGABE-EMPFEHLUNG", "FREIGABE"],
+  ]) {
+    assert.equal(werteCounselAus(antwort).urteil, urteil, antwort);
+  }
 });
 
 test("P-P19 Datierung im Auftrag: die Datierungszeile verbietet ein aus 1335 abgeleitetes Alter, beide COUNSEL-Aufträge tragen den Prüfpunkt; ohne greifende Ausnahme nichts davon", async () => {
@@ -1437,7 +1501,7 @@ test("P-P19 Datierung im Auftrag: die Datierungszeile verbietet ein aus 1335 abg
   agentenMitLink();
   const r = await pipePost(RITTERGUT_X);
   assert.equal(r.body.status, "complete");
-  const formen = "„N Jahre Bausubstanz“, „N Jahre Geschichte“, „N Jahre alt“ (N = Jahre seit 1335), „seit 1335 steht …“, „Substanz/Mauern aus 1335“";
+  const formen = FORMEN;
   const regel =
     "\n  Aus 1335 kein Alter und keine Bauzeit ableiten — das Jahr sagt nichts darüber, wann die heutigen Gebäude entstanden. " +
     `Nicht: ${formen}. Erlaubt: „Ersterwähnung 1335“, „1335 urkundlich erstmals erwähnt“.\nPreis: `;
@@ -1452,11 +1516,18 @@ test("P-P19 Datierung im Auftrag: die Datierungszeile verbietet ein aus 1335 abg
     assert.ok(t.includes(`im Text immer „Ersterwähnung 1335“)${regel}`), `${agent} ${nr}`);
     assert.ok(!t.includes("1750"), `${agent} ${nr}: keine Bauzeit (die Quelle datiert nur die Stallungen)`);
     assert.ok(!new RegExp(`(?<!\\d)(?:${ALTER - 1}|${ALTER}|${ALTER + 1})(?!\\d)`).test(t), `${agent} ${nr}: keine abgeleitete Zahl im Auftrag`);
+    // Gegenprüfung PR #10: keine Rechenformel (sie lädt zum Ausrechnen ein)
+    assert.ok(!t.includes("N =") && !t.includes("Jahre seit"), `${agent} ${nr}: keine Rechenformel`);
   }
   // Prüfpunkt: nur für COUNSEL, beide Male im Auftrag vor dem geprüften Text
   assert.ok(auftrag("counsel", 0).includes(`(Form: LETZTE ZEILE am Ende dieses Auftrags).${pruefpunkt}CONTENT:\n`));
   assert.ok(auftrag("counsel", 1).includes(`(Form: LETZTE ZEILE am Ende dieses Auftrags).${pruefpunkt}ENDFASSUNG (PUBLISHER):\n`));
   for (const agent of ["researcher", "scribe", "publisher", "amplifier"]) assert.ok(!auftrag(agent).includes("PRÜFPUNKT DATIERUNG"), agent);
+  // PUBLISHER-Satz (Gegenprüfung PR #10): im ENDFASSUNG-Absatz, direkt vor dem Objektblock; nur bei PUBLISHER
+  assert.ok(auftrag("publisher").includes(`${PUBLISHER_SATZ}OBJEKTDATEN`), auftrag("publisher").slice(-1600, -1000));
+  for (const [agent, nr] of [["researcher", 0], ["scribe", 0], ["counsel", 0], ["counsel", 1], ["amplifier", 0]]) {
+    assert.ok(!auftrag(agent, nr).includes("Auch Qualitätsprüfung und Fakten-Check"), `${agent} ${nr}`);
+  }
 
   // Ohne greifende Ausnahme: weder Regel noch Prüfpunkt
   const villa = structuredClone(STANDARD_OBJEKT);
@@ -1476,7 +1547,9 @@ test("P-P19 Datierung im Auftrag: die Datierungszeile verbietet ein aus 1335 abg
       const t = auftrag(agent, nr);
       assert.ok(t.length > 0, `${fall} ${agent} ${nr}`);
       assert.ok(!t.includes("kein Alter und keine Bauzeit") && !t.includes("PRÜFPUNKT DATIERUNG"), `${fall} ${agent} ${nr}`);
+      assert.ok(!t.includes("Auch Qualitätsprüfung und Fakten-Check"), `${fall} ${agent} ${nr}: kein PUBLISHER-Satz`);
     }
+    assert.ok(auftrag("publisher").includes("Modellrechnung-Disclaimer wörtlich."), `${fall}: ENDFASSUNG-Absatz unverändert`);
   }
 });
 
@@ -1489,23 +1562,7 @@ test("P-P20 Alter aus 1335 im Code: „N Jahre“ mit N = aktuelles Jahr − 133
     agentenMitLink({ scribe, publisher });
     return pipePost(RITTERGUT_X);
   };
-  for (const [satz, treffer] of [
-    [`Seit 1335 steht das RitterGut Seifersdorf im Dresdner Wachau. ${ALTER} Jahre Bausubstanz.`, `${ALTER} Jahre`], // Wortlaut des Abnahmelaufs
-    [`Geschichte seit ${ALTER} Jahren`, `${ALTER} Jahren`],
-    [`über ${ALTER - 1} Jahre Geschichte`, `${ALTER - 1} Jahre`],
-    [`${ALTER + 1} Jahre alt`, `${ALTER + 1} Jahre`],
-    [`**${ALTER}** Jahre`, `${ALTER} Jahre`],
-    [`${ALTER} Jahre`, `${ALTER} Jahre`],
-    [`${ALTER}  Jahre`, `${ALTER} Jahre`],
-    [`${ALTER}Jahre`, `${ALTER}Jahre`],
-    [`eine ${ALTER}-jährige Geschichte`, `${ALTER}-jährig`],
-    [`die ${ALTER} - Jährige`, `${ALTER} - Jährig`],
-    [`${ALTER}‐jährig`, `${ALTER}‐jährig`],
-    [`${ALTER}‑jährig`, `${ALTER}‑jährig`],
-    [`ÜBER ${ALTER} JAHRE`, `${ALTER} JAHRE`],
-    [`(${ALTER} Jahre)`, `${ALTER} Jahre`],
-    [`${ALTER - 1}–${ALTER} Jahre`, `${ALTER} Jahre`],
-  ]) {
+  for (const [satz, treffer] of ALTER_TREFFER) {
     const r = await lauf((task) => `${satz}\n${linkAusAuftrag(task)}`);
     assert.equal(r.body.status, "fehler", satz);
     assert.deepEqual(welt.aktivierungen.map((a) => a.agent), ["researcher", "scribe"], `${satz}: kein COUNSEL-Aufruf`);
@@ -1522,18 +1579,7 @@ test("P-P20 Alter aus 1335 im Code: „N Jahre“ mit N = aktuelles Jahr − 133
   assert.equal(beide.body.fehler.detail, `Jahr 1335 als Baujahr bezeichnet statt „Ersterwähnung 1335“ (Objekt-Ausnahme); ${befund(`${ALTER} Jahre`)}`);
 
   // Kein Befund: Bauwörter in der Nähe (Auftrag), andere Zahlen, „Jahre“ nicht direkt dahinter
-  const rund = Math.ceil((ALTER + 2) / 100) * 100; // 2026: 700 — „fast 700 Jahre“ fängt nur COUNSEL
-  for (const satz of [
-    "Ersterwähnung 1335. Das Gutshaus wurde um 1750 errichtet.",
-    "Das RitterGut ist seit 1335 urkundlich belegt.",
-    "1335 urkundlich erstmals erwähnt.",
-    `${ALTER + 2} Jahre`, `${ALTER - 2} Jahre`,
-    `1${ALTER} Jahre`, `${ALTER}0 Jahre`, `1.${ALTER} Jahre`, `2,${ALTER} Jahre`,
-    `${ALTER} Jahrestage`,
-    `${ALTER} m² Wohnfläche. Jahre später …`,
-    `Seite ${ALTER}. Jahre später …`, // zwischen Zahl und „Jahre“ nur Leerraum und Bindestriche
-    `fast ${rund} Jahre`,
-  ]) {
+  for (const satz of ALTER_KEIN_TREFFER) {
     const r = await lauf((task) => `${satz}\n${linkAusAuftrag(task)}`);
     assert.equal(r.body.status, "complete", `${satz}: ${JSON.stringify(r.body.fehler ?? null)}`);
   }
@@ -1575,4 +1621,84 @@ test("P-P21 Zitat der Regeln ist kein Befund: SCRIBE zitiert die Datierungsregel
   assert.ok(r.body.steps[3].output.includes("Fakten-Check: Aus 1335 kein Alter"));
   assert.ok(r.body.steps[3].output.includes("Aus dem Review: Geprüft: PRÜFPUNKT DATIERUNG"));
   assert.equal(zeile(r.body.contentId).body, r.body.steps[3].output);
+});
+
+// ═══ Gegenprüfung PR #10: Alter im Review an PUBLISHER, verschobene Uhr ═══
+
+const reviewAus = (task) => /COUNSEL-REVIEW:\n([\s\S]*?)\n\nAUFGABEN:/.exec(task)?.[1];
+
+test("P-P22 Abgeleitetes Alter im Review der Vorprüfung: im PUBLISHER-Auftrag maskiert (genau, was altersBefund träfe) — übernimmt PUBLISHER das Review, endet der Lauf nicht nach vier Aufrufen", async () => {
+  const lauf = async (review) => {
+    zuruecksetzen();
+    welt.pipelineModul = pipeline;
+    exportMit(RITTERGUT);
+    agentenMitLink({ publisher: (task) => `Final: ${linkAusAuftrag(task)}\nAus dem Review: ${reviewAus(task)}` });
+    welt.agentAntworten.counsel = (task) =>
+      agentOk("counsel", task.startsWith("ENDPRUEFUNG (R2)") ? FREIGABE_END : `${review}\nURTEIL: FREIGABE-EMPFEHLUNG`);
+    return pipePost(RITTERGUT_X);
+  };
+  // Ohne Maskierung endet dieser Lauf mit fehler bei publisher, nach vier Aufrufen (Gegenprüfung PR #10; Mutant
+  // ohne maskiereAlter im Mutationstest).
+  const review =
+    `Befunde: keine. Datierung „Ersterwähnung 1335“ korrekt, keine Altersableitung (wären ${ALTER} Jahre) ✓; ` +
+    `nicht „**${ALTER}** Jahre Bausubstanz“, nicht „Vor ${ALTER - 1} Jahren“, nicht „${ALTER + 1}–jährig“; Gutshaus um 1750, Seite ${ALTER}.`;
+  const r = await lauf(review);
+  assert.equal(r.body.status, "complete", JSON.stringify(r.body.fehler ?? null));
+  assert.equal(welt.aktivierungen.length, 6);
+  assert.equal(
+    reviewAus(auftrag("publisher")),
+    "Befunde: keine. Datierung „Ersterwähnung 1335“ korrekt, keine Altersableitung (wären N Jahre) ✓; " +
+      `nicht „**N** Jahre Bausubstanz“, nicht „Vor N Jahren“, nicht „N–jährig“; Gutshaus um 1750, Seite ${ALTER}.`,
+  );
+  // Der Beleg behält das Review ungekürzt; maskiert wird nur der Auftrag an PUBLISHER
+  assert.ok(r.body.steps[2].output.startsWith(review));
+  assert.equal(zeile(r.body.contentId).body, r.body.steps[3].output);
+
+  // Jeder Treffer-Satz aus P-P20 kommt mit „N“ statt der Zahl an, jeder andere Satz unverändert
+  for (const [satz, treffer] of ALTER_TREFFER) {
+    const t = await lauf(satz);
+    assert.equal(t.body.status, "complete", `${satz}: ${JSON.stringify(t.body.fehler ?? null)}`);
+    assert.equal(reviewAus(auftrag("publisher")), satz.replace(/\d+/.exec(treffer)[0], "N"), satz);
+  }
+  for (const satz of ALTER_KEIN_TREFFER) {
+    const t = await lauf(satz);
+    assert.equal(t.body.status, "complete", satz);
+    assert.equal(reviewAus(auftrag("publisher")), satz, satz);
+  }
+  // Ohne greifende Ausnahme bleibt das Review, wie es ist
+  zuruecksetzen();
+  welt.pipelineModul = pipeline;
+  exportMit({ ...RITTERGUT, baujahr: 1750 });
+  agentenMitLink({ counsel: `Befunde: keine. ${ALTER} Jahre.\nURTEIL: FREIGABE-EMPFEHLUNG` });
+  assert.equal((await pipePost(RITTERGUT_X)).body.status, "complete");
+  assert.equal(reviewAus(auftrag("publisher")), `Befunde: keine. ${ALTER} Jahre.`);
+});
+
+test("P-P23 Verschobene Uhr (2027): Code-Prüfung und Maskierung rechnen mit dem aktuellen Jahr — 693 Jahre ist dann ein Befund, 690 Jahre nicht", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: Date.parse("2027-03-01T09:00:00Z") });
+  assert.equal(new Date().getFullYear(), 2027);
+  const lauf = async ({ scribe, counsel }) => {
+    zuruecksetzen();
+    welt.pipelineModul = pipeline;
+    exportMit(RITTERGUT);
+    agentenMitLink({ scribe, counsel, publisher: (task) => `Final: ${linkAusAuftrag(task)}\nAus dem Review: ${reviewAus(task)}` });
+    return pipePost(RITTERGUT_X);
+  };
+  // 2027 − 1335 = 692: Befund bei 691, 692 und 693, keiner bei 690 und 694
+  for (const n of [691, 692, 693]) {
+    const r = await lauf({ scribe: (task) => `${n} Jahre Bausubstanz.\n${linkAusAuftrag(task)}` });
+    assert.equal(r.body.status, "fehler", String(n));
+    assert.equal(r.body.fehler.detail, `Alter „${n} Jahre“ aus 1335 abgeleitet (1335 ist nur die Ersterwähnung)`);
+  }
+  for (const n of [690, 694]) {
+    const r = await lauf({ scribe: (task) => `${n} Jahre Bausubstanz.\n${linkAusAuftrag(task)}` });
+    assert.equal(r.body.status, "complete", `${n}: ${JSON.stringify(r.body.fehler ?? null)}`);
+  }
+  // Maskierung mit derselben Uhr: 693 wird zu N, 690 bleibt — und der Lauf endet nicht
+  const r = await lauf({ counsel: "Befunde: keine. Nicht 693 Jahre, nicht 690 Jahre.\nURTEIL: FREIGABE-EMPFEHLUNG" });
+  assert.equal(r.body.status, "complete", JSON.stringify(r.body.fehler ?? null));
+  assert.equal(reviewAus(auftrag("publisher")), "Befunde: keine. Nicht N Jahre, nicht 690 Jahre.");
+  // Datierungszeile und Prüfpunkt nennen keine Zahl, sie sind in jedem Jahr gleich
+  assert.ok(auftrag("scribe").includes(`Nicht: ${FORMEN}.`));
+  assert.ok(auftrag("counsel", 0).includes(`etwa ${FORMEN}.`));
 });
