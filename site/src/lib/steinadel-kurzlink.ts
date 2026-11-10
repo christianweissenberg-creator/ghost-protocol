@@ -172,29 +172,41 @@ export function baueKurzlink(eingabe: { plattform: string; kampagne: string; lpU
 }
 
 // ═══ Kurzlinks im Text (Schritt 4: SCRIBE-Text und Endfassung) ═══
+//
+// Gegenprüfung 10.11.2026: großzügig finden, streng urteilen. Gefunden wird jede Adresse auf
+// steinadel.de; zulässig ist nur der CTA-Link des Laufs, Zeichen für Zeichen. Vorher fielen Links in
+// deutschen Anführungszeichen, in _…_ oder mit Emoji bzw. Gedankenstrich dahinter aus der Erkennung
+// (falscher Abbruch), und ein /l/-Link in _…_, als //l/, %6C oder \l\ rutschte durch. Varianten mit
+// anderem Kanal-Präfix gelten nicht mehr: Der Code weiß nicht, in welchem Teil des Texts (Tweet,
+// Teaser) ein Link steht, und ein li-Link in einem Tweet zählte Klicks der falschen Quelle zu.
 
 /**
- * Adressen auf steinadel.de im Text, mit oder ohne Schema und Subdomain; Pfad, Query und Anker bis zum
- * ersten Leerraum oder Trennzeichen. Nicht davor: Buchstabe, Ziffer oder ein Zeichen, das die Adresse
- * zum Teil einer anderen macht ("evilsteinadel.de", ".../steinadel.de/…", "?r=steinadel.de/…", E-Mail).
- * Eine längere Domain wie "steinadel.dev/k/…" ergibt nur die nackte Domain "steinadel.de" ohne Pfad (der
- * Pfad muss mit "/", "?", "#" oder einem Port beginnen) und zählt damit nicht als Kurzlink.
+ * Adressen auf steinadel.de: mit oder ohne Schema, mit Subdomain, mit abschließendem Punkt der Domain
+ * und Port. Der Pfad besteht aus URL-Zeichen (ASCII, auch "\", das Browser wie "/" lesen) und endet am
+ * ersten anderen Zeichen — Leerraum, Anführungszeichen, Klammer, Emoji, Gedankenstrich. Direkt davor
+ * steht kein Buchstabe, keine Ziffer und kein Bindestrich ("evilsteinadel.de" ist eine andere Domain).
  */
 const STEINADEL_ADRESSE =
-  /(?<![\p{L}\p{N}._\-/=&?#%@+~])(?:https?:\/\/)?(?:[a-z0-9-]+\.)*steinadel\.de(?::\d+)?(?:[/?#][^\s<>()[\]{}"'`|\\]*)?/giu;
+  /(?<![\p{L}\p{N}-])(?:https?:\/\/)?(?:[a-z0-9-]+\.)*steinadel\.de\.?(?::\d+)?(?:[/?#\\][A-Za-z0-9\-._~:/?#@!$&*+,;=%\\]*)?/giu;
+/** Zeichen direkt vor einer Adresse, die sie zum Teil einer anderen Adresse machen (".../steinadel.de/…", "?r=…"). */
+const EINGEBETTET_DAVOR = /[/=?&#%@+~\\]$/;
 /** Satzzeichen und Hervorhebung am Ende gehören nicht zur Adresse (wie bei der automatischen Verlinkung). */
-const ENDE_OHNE_ADRESSE = /[.,;:!?…*_~'"’”»]+$/u;
+const ENDE_OHNE_ADRESSE = /[.,;:!?*_~]+$/;
 const KURZ_MAX = 120;
 
 function kurz(text: string): string {
   return text.length > KURZ_MAX ? `${text.slice(0, KURZ_MAX)}…` : text;
 }
 
-export interface KurzlinkImText {
-  link: string;
-  ziel: KurzlinkZiel;
-  /** true: der CTA-Link des Laufs; false: ein Kurzlink desselben Laufs mit anderem Kanal-Präfix. */
-  cta: boolean;
+/** Pfad für die Erkennung von /k/ und /l/: entschlüsselt, klein, ohne doppelte Schrägstriche. */
+function erkennungsPfad(url: URL): string {
+  let pfad = url.pathname;
+  try {
+    pfad = decodeURIComponent(pfad);
+  } catch {
+    // ungültige %-Folge: bleibt kodiert
+  }
+  return pfad.toLowerCase().replace(/\/{2,}/g, "/");
 }
 
 export interface KurzlinkTextPruefung {
@@ -202,47 +214,45 @@ export interface KurzlinkTextPruefung {
   ok: boolean;
   /** Wie oft der CTA-Link unverändert im Text steht. */
   cta_treffer: number;
-  /** Jeder Kurzlink dieses Laufs im Text, einmal je Link, aufgelöst. */
-  kurzlinks: KurzlinkImText[];
-  /** Abweichungen; leer, wenn ok. */
+  /** Abweichungen; leer, wenn ok. Sie zitieren den Text (gekürzt). */
   befunde: string[];
 }
 
 /**
- * Kurzlinks im Text deterministisch prüfen (E12-Ersatzweg). Zulässig sind der CTA-Link des Laufs —
- * mit https:// oder ohne Schema, Domain in beliebiger Schreibweise — und Kurzlinks desselben Laufs
- * (gleiche Kampagne, gleicher Slug, gleiche Nummer) mit einem anderen Präfix aus der Steinadel-Liste,
- * etwa nl- für einen Newsletter-Teaser. Befund ist jeder andere /k/-Link, jeder Direktlink auf eine
- * Kampagnenseite (/l/…) und ein fehlender CTA-Link. Andere Adressen (Impressum, Startseite,
- * Objektseiten) prüft COUNSEL nach dem Regelpaket; sie zählen hier nicht.
+ * Kurzlinks im Text deterministisch prüfen (E12-Ersatzweg). Zulässig ist nur der CTA-Link des Laufs —
+ * mit https:// oder ohne Schema, Domain in beliebiger Groß- und Kleinschreibung. Befund ist jeder
+ * andere /k/-Link (auch mit anderem Kanal-Präfix), jeder Direktlink auf eine Kampagnenseite (/l/…),
+ * jeder /k/- oder /l/-Link, der in eine andere Adresse eingebettet ist, eine unlesbare Adresse mit
+ * /k/ oder /l/ und ein fehlender CTA-Link. Andere Adressen auf steinadel.de (Impressum, Startseite,
+ * Objektseiten) und Links auf andere Domains prüft COUNSEL nach dem Regelpaket; sie zählen hier nicht.
  */
-export function pruefeKurzlinksImText(
-  text: string,
-  erwartet: { link: string; kampagne: string; slug: string; id: number },
-): KurzlinkTextPruefung {
+export function pruefeKurzlinksImText(text: string, ctaLink: string): KurzlinkTextPruefung {
   const befunde: string[] = [];
-  const kurzlinks: KurzlinkImText[] = [];
   let ctaTreffer = 0;
-  const slug = erwartet.slug.trim().toLowerCase();
-  const kampagne = erwartet.kampagne.trim().toLowerCase();
   for (const treffer of text.matchAll(STEINADEL_ADRESSE)) {
     const roh = treffer[0].replace(ENDE_OHNE_ADRESSE, "");
+    const eingebettet = EINGEBETTET_DAVOR.test(text.slice(0, treffer.index ?? 0));
     const mitSchema = /^https?:\/\//i.test(roh);
     let url: URL;
     try {
       url = new URL(mitSchema ? roh : `https://${roh}`);
     } catch {
+      // Unlesbar (etwa ein ungültiger Port): Befund, wenn der Rest nach Kurzlink oder Kampagnenseite aussieht.
+      if (/[/\\]+[kl](?:[/\\]|$)/i.test(roh)) befunde.push(`unlesbare Adresse auf steinadel.de: ${kurz(roh)}`);
       continue;
     }
-    // Groß geschriebenes /K/ oder /L/ zählt mit: Es wäre ein kaputter Link und damit ein Befund.
-    const pfad = url.pathname.toLowerCase();
+    const pfad = erkennungsPfad(url);
     const istKurzlink = pfad.startsWith("/k/") || pfad === "/k";
     const istDirektlink = pfad.startsWith("/l/") || pfad === "/l";
+    if (!istKurzlink && !istDirektlink) continue;
+    if (eingebettet) {
+      befunde.push(`Kurzlink oder Kampagnenseite in eine andere Adresse eingebettet: ${kurz(roh)}`);
+      continue;
+    }
     if (istDirektlink) {
       befunde.push(`Direktlink auf eine Kampagnenseite statt Kurzlink: ${kurz(roh)}`);
       continue;
     }
-    if (!istKurzlink) continue;
     if (mitSchema && url.protocol !== "https:") {
       befunde.push(`Kurzlink ohne https: ${kurz(roh)}`);
       continue;
@@ -253,15 +263,12 @@ export function pruefeKurzlinksImText(
       befunde.push(`ungültiger Kurzlink (${pruefung.grund}): ${kurz(roh)}`);
       continue;
     }
-    const istCta = pruefung.link === erwartet.link;
-    const desselbenLaufs = pruefung.kampagne === kampagne && pruefung.content === `${pruefung.praefix}-${slug}-${erwartet.id}`;
-    if (!istCta && !desselbenLaufs) {
-      befunde.push(`Kurzlink gehört nicht zu diesem Lauf: ${kurz(roh)}`);
+    if (pruefung.link !== ctaLink) {
+      befunde.push(`anderer Kurzlink als der CTA-Link: ${kurz(roh)}`);
       continue;
     }
-    if (istCta) ctaTreffer += 1;
-    if (!kurzlinks.some((k) => k.link === pruefung.link)) kurzlinks.push({ link: pruefung.link, ziel: pruefung.ziel, cta: istCta });
+    ctaTreffer += 1;
   }
-  if (ctaTreffer === 0) befunde.unshift(`CTA-Link fehlt im Text: ${erwartet.link}`);
-  return { ok: befunde.length === 0, cta_treffer: ctaTreffer, kurzlinks, befunde };
+  if (ctaTreffer === 0) befunde.unshift(`CTA-Link fehlt im Text: ${ctaLink}`);
+  return { ok: befunde.length === 0, cta_treffer: ctaTreffer, befunde };
 }

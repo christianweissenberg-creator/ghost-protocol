@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createHash, timingSafeEqual } from "crypto";
 import { SESSION_COOKIE, getSessionSecret, signSession } from "@/lib/auth";
-import { maskiereGeschuetzteNamen } from "@/lib/freigabe-regeln";
+import { STUFE_ENDPRUEFUNG, geprueftenTextAusSchritten, maskiereGeschuetzteNamen } from "@/lib/freigabe-regeln";
 import { schreibeLaufNachweis } from "@/lib/lauf-nachweis";
 import { ausnahmeNachweis, autoProduceNachweis, bereinigeFehler, starteLaufUhr } from "@/lib/status-server";
 import { JOB_AUTO_PRODUCE, JOB_AUTO_PRODUCE_PROBE } from "@/lib/totmann";
@@ -316,14 +316,21 @@ async function produziere(dryRun: boolean): Promise<Lauf> {
           : "partial";
 
   const summary = istObjekt(result.summary) ? result.summary : {};
-  // R2: Ausgabe ist die PUBLISHER-Fassung (= body der Zeile). COUNSEL hat den SCRIBE-Text
-  // geprüft; nur wenn beide identisch sind (freigabe_hinweis.identisch), gilt sie als geprüft.
-  const publisherSchritt = Array.isArray(result.steps)
-    ? result.steps.find((s: unknown) => istObjekt(s) && s.agent === "publisher")
-    : undefined;
+  // R2: Ausgabe ist die PUBLISHER-Fassung (= body der Zeile). Als geprüft gilt sie nur, wenn sie der
+  // Text ist, dem das COUNSEL-Urteil gilt. Paket B (Gegenprüfung 10.11.2026): dieselbe Regel wie beim
+  // Freigeben und im Stapel (geprueftenTextAusSchritten). Mit Endprüfung ist deren Antwort das
+  // maßgebliche Review — auch wenn der Lauf danach abgelehnt wurde oder AMPLIFIER scheiterte; dann fehlt
+  // freigabe_hinweis, und der Hinweis sagte vorher fälschlich "nicht geprüft".
+  const schritte: unknown[] = Array.isArray(result.steps) ? result.steps : [];
+  const publisherSchritt = schritte.find((s: unknown) => istObjekt(s) && s.agent === "publisher");
   const publisherText =
     istObjekt(publisherSchritt) && typeof publisherSchritt.output === "string" ? publisherSchritt.output : null;
-  const identisch = istObjekt(result.freigabe_hinweis) && result.freigabe_hinweis.identisch === true;
+  const endpruefung = schritte.find((s: unknown) => istObjekt(s) && s.agent === STUFE_ENDPRUEFUNG);
+  const geprueft = geprueftenTextAusSchritten(
+    result.steps,
+    istObjekt(endpruefung) && typeof endpruefung.output === "string" ? endpruefung.output : null
+  );
+  const identisch = publisherText !== null && geprueft !== null && geprueft.trim() === publisherText.trim();
   // Vorschau fürs Cron-Log: geschützter Name maskiert, höchstens 2000 Zeichen.
   const vorschau = publisherText === null ? null : Array.from(maskiereGeschuetzteNamen(publisherText));
 

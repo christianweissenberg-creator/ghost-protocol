@@ -40,6 +40,11 @@ const BASE_URL = process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000";
 //   Prüfung (SCRIBE-Text) steht als metadata.counsel_vorpruefung. Freigegeben wird nur, was COUNSEL
 //   wörtlich geprüft hat (pruefeFreigabe mit geprueftenTextAusSchritten, lib/freigabe-regeln.ts). Die
 //   Kosten der Endprüfung stehen in steps[4].cost und in der Summe.
+// - Gegenprüfung (10.11.2026, drei unabhängige Prüfungen): Objektblock ohne lpUrl der Kampagnen; nur
+//   der exakte CTA-Link ist im Text erlaubt (keine Präfix-Varianten), /k/- und /l/-Adressen werden in
+//   jeder Schreibweise erkannt; COUNSEL erfährt den Umfang der Code-Prüfung (nur steinadel.de) und die
+//   Zählweise ohne Personenbezug; kein Content mit URTEIL-Zeile geht an COUNSEL, PUBLISHER bekommt das
+//   Review ohne URTEIL-Zeile; Textregel §8.1 (Datierung) im Code.
 //
 // Stufe 1 (05.11.2026) — Freigabe und Beleg-Kette:
 // - Das COUNSEL-Urteil wertet werteCounselAus() aus (lib/counsel-urteil.ts); die frühere
@@ -468,7 +473,9 @@ function datierungFuer(o: ObjektApi): Datierung {
   }
   const wert = anzeige(o.baujahr);
   return {
-    zeile: `${ausnahme.bezeichnung}: ${wert} (Exportfeld baujahr; das ist nicht das Baujahr — schreibe nie „Baujahr ${wert}“)`,
+    // Gegenprüfung 10.11.2026: Die Zeile nennt das verbotene Wortpaar nicht (ein Verbot, das es nennt,
+    // bringt es erst bei, siehe buildObjektBlock); die Code-Prüfung datierungsBefund fängt es ab.
+    zeile: `${ausnahme.bezeichnung}: ${wert} (Exportfeld baujahr; gemeint ist die erste urkundliche Erwähnung, nicht das Errichtungsjahr — im Text immer „${ausnahme.bezeichnung} ${wert}“)`,
     beleg,
     warnung: null,
   };
@@ -797,6 +804,10 @@ async function fetchObjekt(slug: string, cookie: string): Promise<ObjektAbruf> {
 // Paket B (10.11.2026): Datierungszeile aus datierungFuer (Ersterwähnung statt Baujahr), und der CTA
 // verweist auf den Kurzlink (Abschnitt CTA-LINK, ctaBlock) statt auf die Kampagnen-URL; ohne Kurzlink
 // gibt es einen allgemeinen CTA ohne Link.
+// Gegenprüfung Paket B (10.11.2026): Die Kampagnen stehen ohne ihre lpUrl im Block. Vorher lag dort
+// die Adresse jeder Kampagnenseite (/l/…); übernahm SCRIBE oder PUBLISHER sie (etwa im
+// Newsletter-Teaser), endete der Lauf an der Kurzlink-Prüfung — nach bezahlten Aufrufen. Die lpUrl
+// bleibt im Objekt-Snapshot (Beleg); COUNSEL bekommt das Ziel im Kurzlink-Block.
 function buildObjektBlock(o: ObjektApi, datierung: Datierung, mitKurzlink: boolean): string {
   // Fixrunde 06.11.2026 (R21): Felder sind geprüft (pruefeExportObjekt); fehlende optionale
   // stehen als "nicht im Export" da, nie als "undefined".
@@ -804,7 +815,10 @@ function buildObjektBlock(o: ObjektApi, datierung: Datierung, mitKurzlink: boole
     ? o.kennzahlen.map((k) => `- ${k.label}: ${k.wert}`).join("\n")
     : "- (keine Kennzahlen im Export)";
   const kampagnenText = o.kampagnen.length
-    ? o.kampagnen.map((k) => `- ${k.kampagne}${k.lpVariant ? ` (${k.lpVariant})` : ""}: ${k.lpUrl}`).join("\n")
+    ? `${o.kampagnen.map((k) => `- ${k.kampagne}${k.lpVariant ? ` (${k.lpVariant})` : ""}`).join("\n")}\n` +
+      (mitKurzlink
+        ? "(Kampagnenseiten nie direkt verlinken — verlinkt wird nur über den CTA-Link.)"
+        : "(Kampagnenseiten nicht verlinken — es gibt keinen CTA-Link.)")
     : "- (keine Kampagne hinterlegt)";
   // Stufe 1 (05.11.2026): Der interne Codename wird hier nicht mehr ausgeschrieben —
   // ein Verbot, das das Wort nennt, bringt es SCRIBE erst bei. Die Prüfung auf den
@@ -879,44 +893,77 @@ const KURZLINK_REGEL =
 
 /** Grund, mit dem ein Lauf endet, wenn ein Text die Kurzlink-Prüfung nicht besteht. */
 const KURZLINK_GRUND = "Kurzlink-Prüfung nicht bestanden (E12)";
+/** Grund, wenn ein Text eine andere Textregel des Codes verletzt (URTEIL-Zeile, Datierung). */
+const TEXTREGEL_GRUND = "Textregel nicht erfüllt";
 
-/** CTA-Regel für SCRIBE und PUBLISHER: der Kurzlink wörtlich, kein anderer steinadel.de-Link. */
+/**
+ * CTA-Regel für SCRIBE und PUBLISHER: der Kurzlink wörtlich, kein anderer steinadel.de-Link.
+ * Gegenprüfung 10.11.2026: Profil-CTAs der Plattform-Anweisungen (YouTube, TikTok, Instagram)
+ * ersetzen den Link nicht, und Cross-Promotion-Texte tragen keinen eigenen Link.
+ */
 function ctaBlock(k: Kurzlink): string {
   return `CTA-LINK (Pflicht, Zeichen für Zeichen übernehmen): ${k.link}
-- Genau dieser Link steht im CTA (bei X im letzten Tweet). Nicht kürzen, nichts anhängen, keine
-  UTM-Parameter ergänzen, kein Schrägstrich am Ende — die UTMs setzt der Steinadel-Server beim
-  Weiterleiten.
-- Keine andere steinadel.de-Adresse als Link (keine Kampagnenseite /l/…, keine Objektseite);
-  daneben erlaubt ist nur der Impressums-Verweis "Impressum: steinadel.de/impressum".`;
+- Genau dieser Link steht im CTA: bei X im letzten Tweet, bei YouTube und TikTok in der Beschreibung,
+  bei Instagram in der Caption. Ein Verweis auf ein Profil, „Link in Bio“ oder „Folgen“ ersetzt ihn nicht.
+- Nicht kürzen, nichts anhängen, keine UTM-Parameter ergänzen, kein Schrägstrich am Ende — die UTMs
+  setzt der Steinadel-Server beim Weiterleiten.
+- Sonst kein Link auf steinadel.de: keine Kampagnenseite /l/…, keine Objektseite, keine Kurzlink-Variante
+  mit anderem Kürzel. Erlaubt ist daneben nur der Impressums-Verweis "Impressum: steinadel.de/impressum".
+- Cross-Promotion-Posts und Teaser tragen keinen Link oder genau diesen CTA-Link.`;
 }
 
-/** Für COUNSEL: was der Code geprüft hat — jeder Kurzlink im Text mit aufgelöster Ziel-URL und UTMs. */
-function kurzlinkBlock(pruefung: KurzlinkTextPruefung): string {
-  const zeilen = pruefung.kurzlinks.map(
-    (k) =>
-      `- ${k.link} (${k.cta ? "CTA-Link, steht unverändert im Content" : "Kurzlink desselben Laufs mit anderem Kanal-Präfix"})\n` +
-      `  leitet weiter auf ${k.ziel.url}\n` +
-      `  Ziel: Kampagnenseite ${k.ziel.lp_pfad} auf steinadel.de; utm_source ${k.ziel.utm_source}, utm_medium ${k.ziel.utm_medium}, ` +
-      `utm_campaign ${k.ziel.utm_campaign} (= Slug der Kampagnenseite), utm_content ${k.ziel.utm_content}`
-  );
+/**
+ * Für COUNSEL: was der Code geprüft hat und was nicht — der CTA-Link mit aufgelöster Ziel-URL und UTMs.
+ * Gegenprüfung 10.11.2026: Der Umfang der Code-Prüfung steht ausdrücklich da (nur Adressen auf
+ * steinadel.de), damit COUNSEL Links auf andere Domains weiter selbst prüft (Regelpaket §2). Dazu die
+ * Zählweise der Weiterleitung ohne Personenbezug, laut Steinadel-Code (SR/apps/web/src/app/k/[kampagne]/
+ * [content]/route.ts:1-7, 42-47: kein Cookie, kein Fingerprint, Zähler ohne IP und User-Agent).
+ */
+function kurzlinkBlock(k: Kurzlink): string {
   return `KURZLINK — vom Code deterministisch geprüft (Ersatzweg nach Entscheidung des Betreibers vom 10.11.2026):
-Der CTA ist ein Kurzlink https://steinadel.de/k/<kampagne>/<präfix>-<objekt>-<id>. Er zählt Klicks; die
-UTM-Parameter setzt der Steinadel-Server beim Weiterleiten (307). Geprüft wurden Form, Auflösung und Ziel
-jedes Kurzlinks im Content. Andere Kurzlinks und Direktlinks auf /l/-Seiten enthält der Content nicht.
-${zeilen.join("\n")}
-Prüfe die Kurzlinks anhand dieser aufgelösten Ziel-URLs (Regelpaket §2 Ziel-Links, §3 UTM-Konvention).
-Alle übrigen Inhalte und Links prüfst du wie immer nach dem Regelpaket.`;
+Der CTA ist der Steinadel-Kurzlink ${k.link}
+- Er leitet weiter auf ${k.ziel.url} (Weiterleitung 307; die UTM-Parameter setzt der Steinadel-Server).
+- Ziel: Kampagnenseite ${k.ziel.lp_pfad} auf steinadel.de; utm_source ${k.ziel.utm_source}, utm_medium ${k.ziel.utm_medium}, utm_campaign ${k.ziel.utm_campaign} (= Slug der Kampagnenseite), utm_content ${k.ziel.utm_content}.
+- Den Klick zählt der Steinadel-Server ohne Cookie und ohne Speicherung von IP-Adresse oder User-Agent.
+Geprüft hat der Code nur die Adressen auf steinadel.de: Der CTA-Link steht unverändert im Content, und dort gibt es keinen anderen Kurzlink und keinen Direktlink auf eine Kampagnenseite. Links auf andere Domains — auch Kurzlink-Dienste — hat der Code nicht geprüft.
+Prüfe den Kurzlink anhand dieser aufgelösten Ziel-URL (Regelpaket §2 Ziel-Links, §3 UTM-Konvention). Alle übrigen Inhalte und Links prüfst du wie immer nach dem Regelpaket.`;
 }
 
-/** Ergebnis einer Textprüfung für metadata.kurzlink; Befunde mit maskiertem Namen (sie zitieren den Text). */
+/** Ergebnis einer Kurzlink-Prüfung für metadata.kurzlink; Befunde mit maskiertem Namen (sie zitieren den Text). */
 function textPruefungBeleg(p: KurzlinkTextPruefung) {
   return {
     ok: p.ok,
     cta_treffer: p.cta_treffer,
-    kurzlinks: p.kurzlinks.map((k) => maskiereGeschuetzteNamen(k.link)),
     befunde: p.befunde.map(maskiereGeschuetzteNamen),
     am: new Date().toISOString(),
   };
+}
+
+/**
+ * URTEIL-Zeile im Content (Gegenprüfung 10.11.2026): Stünde im Text eine Zeile "URTEIL: …" und
+ * zitierte COUNSEL sie, könnte werteCounselAus (lib/counsel-urteil.ts) sie als Urteil lesen. Ein
+ * Content mit URTEIL-Zeile geht deshalb nie an COUNSEL; PUBLISHER bekommt das Review ohne URTEIL-Zeile.
+ * Erkannt wird "URTEIL" mit Markdown- oder Leerzeichen bis zum Doppelpunkt, in jeder Schreibweise.
+ */
+const URTEIL_IM_TEXT = /URTEIL[\s*_#`>~]*:/i;
+
+function ohneUrteilZeilen(text: string): string {
+  return text
+    .split(/\r?\n/)
+    .filter((zeile) => !URTEIL_IM_TEXT.test(zeile))
+    .join("\n");
+}
+
+/**
+ * Textregel der Spezifikation §8.1 für Objekte mit greifender Datierungs-Ausnahme: Der Text nennt das
+ * Jahr nie als Baujahr (etwa "Baujahr 1335", "Baujahr: 1335", "Baujahr (1335)"). Das Regelpaket kennt
+ * die Regel nicht, deshalb prüft sie der Code (Gegenprüfung 10.11.2026). null, wenn nichts auffällt.
+ */
+function datierungsBefund(text: string, datierung: Datierung | null): string | null {
+  const beleg = datierung?.beleg;
+  if (!beleg || !beleg.ausnahme_greift) return null;
+  const muster = new RegExp(`Baujahr\\W{0,4}${beleg.ausnahme_jahr}(?!\\d)`, "i");
+  return muster.test(text) ? `Jahr ${beleg.ausnahme_jahr} als Baujahr bezeichnet statt „${beleg.bezeichnung} ${beleg.ausnahme_jahr}“ (Objekt-Ausnahme)` : null;
 }
 
 type Dienst = ReturnType<typeof createServiceClient>;
@@ -1240,15 +1287,27 @@ export async function POST(request: NextRequest) {
     const cta = kurzlink ? `\n\n${ctaBlock(kurzlink)}` : "";
 
     /**
-     * Kurzlinks eines Texts prüfen (E12-Ersatzweg) und das Ergebnis unter metadata.kurzlink[feld]
-     * belegen. null ohne Kurzlink (Lauf ohne Objekt oder ohne Kampagne).
+     * Deterministische Textprüfung vor dem nächsten bezahlten Aufruf (SCRIBE-Text vor COUNSEL,
+     * Endfassung vor der Endprüfung): Kurzlinks (E12-Ersatzweg; Ergebnis belegt unter
+     * metadata.kurzlink[feld], nur mit Kurzlink), keine URTEIL-Zeile, Datierungs-Ausnahme (§8.1).
+     * Liefert Grund und Befunde, oder null, wenn der Text besteht.
      */
-    const pruefeTextKurzlinks = (text: string, feld: "pruefung_scribe" | "pruefung_endfassung"): KurzlinkTextPruefung | null => {
-      if (!kurzlink || !objekt || contentId === null) return null;
-      const pruefung = pruefeKurzlinksImText(text, { link: kurzlink.link, kampagne: kurzlink.kampagne, slug: objekt.slug, id: contentId });
-      const bisher = istObjekt(basisMetadata.kurzlink) ? basisMetadata.kurzlink : {};
-      basisMetadata = { ...basisMetadata, kurzlink: { ...bisher, [feld]: textPruefungBeleg(pruefung) } };
-      return pruefung;
+    const pruefeText = (text: string, feld: "pruefung_scribe" | "pruefung_endfassung"): { grund: string; befunde: string[] } | null => {
+      const befunde: string[] = [];
+      let grund = TEXTREGEL_GRUND;
+      if (kurzlink) {
+        const pruefung: KurzlinkTextPruefung = pruefeKurzlinksImText(text, kurzlink.link);
+        const bisher = istObjekt(basisMetadata.kurzlink) ? basisMetadata.kurzlink : {};
+        basisMetadata = { ...basisMetadata, kurzlink: { ...bisher, [feld]: textPruefungBeleg(pruefung) } };
+        if (!pruefung.ok) {
+          grund = KURZLINK_GRUND;
+          befunde.push(...pruefung.befunde);
+        }
+      }
+      if (URTEIL_IM_TEXT.test(text)) befunde.push("URTEIL-Zeile im Content (ein COUNSEL-Urteil gehört nicht in den Text)");
+      const datierungFalsch = datierungsBefund(text, datierung);
+      if (datierungFalsch) befunde.push(datierungFalsch);
+      return befunde.length > 0 ? { grund, befunde } : null;
     };
 
     // Abbruch mit status "fehler": Vermerk speichern und einheitlich antworten. Liegt schon
@@ -1410,13 +1469,13 @@ Liefere den fertigen Content, sofort publishbar.${objektBlock ? `\n\n${objektBlo
       return brichAb(vermerk("scribe", steps[1].fehler ?? "unbekannter Fehler"));
     }
 
-    // Paket B (E12-Ersatzweg): CTA-Link im SCRIBE-Text deterministisch prüfen, vor dem bezahlten
-    // COUNSEL-Aufruf. Fehlt er oder steht ein anderer /k/- oder ein /l/-Link da, endet der Lauf.
-    const kurzlinkScribe = pruefeTextKurzlinks(steps[1].output ?? "", "pruefung_scribe");
-    if (kurzlinkScribe && !kurzlinkScribe.ok) {
+    // Paket B: SCRIBE-Text deterministisch prüfen (Kurzlink E12, URTEIL-Zeile, Datierung), vor dem
+    // bezahlten COUNSEL-Aufruf. Jeder Befund beendet den Lauf.
+    const textScribe = pruefeText(steps[1].output ?? "", "pruefung_scribe");
+    if (textScribe) {
       steps[1].status = "error";
-      steps[1].fehler = KURZLINK_GRUND;
-      return brichAb(vermerk("scribe", KURZLINK_GRUND, kurzlinkScribe.befunde.join("; ")));
+      steps[1].fehler = textScribe.grund;
+      return brichAb(vermerk("scribe", textScribe.grund, textScribe.befunde.join("; ")));
     }
 
     // ═══ STEP 3: COUNSEL — Pflicht-Review, fail-closed ═══
@@ -1427,7 +1486,7 @@ Liefere den fertigen Content, sofort publishbar.${objektBlock ? `\n\n${objektBlo
 CONTENT:
 ${steps[1].output}
 
-${objektBlock ?? "OBJEKTDATEN: keine (Freitext-Content ohne Steinadel-Objektbezug)"}${kurzlinkScribe ? `\n\n${kurzlinkBlock(kurzlinkScribe)}` : ""}`,
+${objektBlock ?? "OBJEKTDATEN: keine (Freitext-Content ohne Steinadel-Objektbezug)"}${kurzlink ? `\n\n${kurzlinkBlock(kurzlink)}` : ""}`,
       cookie,
       true,
       warnungen
@@ -1519,7 +1578,7 @@ CONTENT (von SCRIBE, COUNSEL-geprüft):
 ${steps[1].output}
 
 COUNSEL-REVIEW:
-${maskiereGeschuetzteNamen(counselOutput)}
+${maskiereGeschuetzteNamen(ohneUrteilZeilen(counselOutput))}
 
 AUFGABEN:
 1. Qualitätsprüfung: Fakten-Check, Ton, Länge
@@ -1537,7 +1596,9 @@ Liefere:
 ENDFASSUNG (R2): Deine gesamte Antwort geht wörtlich an COUNSEL und danach unverändert zur
 Freigabe. Übernimm Pflichtzeilen (Modellrechnung-Disclaimer, KI-Kennzeichnung, Impressum)
 unverändert, ergänze keine neuen Zahlen, Handles, Siegel oder Erfolgsbehauptungen, und nenne
-Zeitpunkte nur als Empfehlung.${objektBlock ? `\n\n${objektBlock}` : ""}${cta}`,
+Zeitpunkte nur als Empfehlung. Jeder Teil erfüllt die Pflicht-Elemente für sich, auch
+Cross-Promotion-Posts und Teaser: Wer AfA, Steuer oder Abschreibung erwähnt, trägt den
+Modellrechnung-Disclaimer wörtlich.${objektBlock ? `\n\n${objektBlock}` : ""}${cta}`,
       cookie,
       true,
       warnungen
@@ -1572,12 +1633,13 @@ Zeitpunkte nur als Empfehlung.${objektBlock ? `\n\n${objektBlock}` : ""}${cta}`,
       return brichAb(vermerk("publisher", NAMENSSCHUTZ_GRUND));
     }
 
-    // Paket B (E12-Ersatzweg): Kurzlinks der Endfassung prüfen, vor der bezahlten Endprüfung.
-    const kurzlinkEndfassung = pruefeTextKurzlinks(freigabeText, "pruefung_endfassung");
-    if (kurzlinkEndfassung && !kurzlinkEndfassung.ok) {
+    // Paket B: Endfassung deterministisch prüfen (Kurzlink E12, URTEIL-Zeile, Datierung), vor der
+    // bezahlten Endprüfung.
+    const textEndfassung = pruefeText(freigabeText, "pruefung_endfassung");
+    if (textEndfassung) {
       steps[3].status = "error";
-      steps[3].fehler = KURZLINK_GRUND;
-      return brichAb(vermerk("publisher", KURZLINK_GRUND, kurzlinkEndfassung.befunde.join("; ")));
+      steps[3].fehler = textEndfassung.grund;
+      return brichAb(vermerk("publisher", textEndfassung.grund, textEndfassung.befunde.join("; ")));
     }
 
     // ═══ STEP 5: COUNSEL — Endprüfung der PUBLISHER-Fassung, wörtlich (Paket B, R2/E13) ═══
@@ -1590,7 +1652,7 @@ Zeitpunkte nur als Empfehlung.${objektBlock ? `\n\n${objektBlock}` : ""}${cta}`,
 ENDFASSUNG (PUBLISHER):
 ${freigabeText}
 
-${objektBlock ?? "OBJEKTDATEN: keine (Freitext-Content ohne Steinadel-Objektbezug)"}${kurzlinkEndfassung ? `\n\n${kurzlinkBlock(kurzlinkEndfassung)}` : ""}`,
+${objektBlock ?? "OBJEKTDATEN: keine (Freitext-Content ohne Steinadel-Objektbezug)"}${kurzlink ? `\n\n${kurzlinkBlock(kurzlink)}` : ""}`,
       cookie,
       true,
       warnungen
