@@ -476,6 +476,16 @@ test("MP-8 Prüfansicht (rein): Bildschritt = 1/fps, Gesamtzahl round(dauer × f
   const z = P.bildZaehler(24);
   for (const t of [0, 0, 0.004, 1 / 24, 1 / 24 + 0.001, 2 / 24, 1 / 24]) z.sieh(t);
   assert.equal(z.anzahl, 3, "Bilder 0, 1 und 2 — Wiederholungen zählen nicht");
+  // Einzelbild-Ziel (Nachbesserung regel8-1): Mitte des Nachbarbilds; am Ende auf das letzte Bild gekappt.
+  assert.equal(P.schrittZiel(0, 1, 24, 60), 1.5 / 24);
+  assert.equal(P.schrittZiel(0.041666, 1, 24, 60), 1.5 / 24, "die abgeschnittene Grenze (Chrome) zählt zum vorigen Bild");
+  assert.equal(P.schrittZiel(1.5 / 24, 1, 24, 60), 2.5 / 24);
+  assert.equal(P.schrittZiel(1.5 / 24, -1, 24, 60), 0.5 / 24);
+  assert.equal(P.schrittZiel(0, -1, 24, 60), 0.5 / 24, "nie vor das erste Bild");
+  assert.equal(P.schrittZiel(2.5, -1, 24, 60), 58.5 / 24, "ab dem Ende (Zeit = Dauer): das vorletzte Bild");
+  assert.equal(P.schrittZiel(59.5 / 24, 1, 24, 60), 59.5 / 24, "nie hinter das letzte Bild");
+  assert.equal(P.schrittZiel(2.5, -1, 24, null), 59.5 / 24, "ohne Bildzahl ungekappt");
+  assert.equal(P.schrittZiel(1.3015, 1, 25, null), 33.5 / 25, "andere Bildrate");
   const klauseln = [{ id: "licht" }, { id: "rahmen" }];
   const e = P.leereEingaben(klauseln);
   assert.equal(e.rechte, "offen", "Rechtefeld steht anfangs auf offen");
@@ -581,4 +591,135 @@ test("MP-10 Prüfansicht (Ablauf): Auswahl → POST …/pruefung mit genau diese
   assert.equal(neu, 1, "Studio lädt nach dem Speichern neu");
   assert.equal(protokolle().length, 1);
   assert.equal(protokolle()[0].rechte_status, "offen");
+});
+
+// ═══ Prüfansicht mit Video-Attrappe (Nachbesserung regel8-1, regel8-2, mutanten-5) ═══
+
+/** Knoten im aufgelösten Baum der Hook-Laufzeit (Tiefensuche). */
+function findeKnoten(k, pred) {
+  if (Array.isArray(k)) {
+    for (const c of k) {
+      const r = findeKnoten(c, pred);
+      if (r) return r;
+    }
+  } else if (k && typeof k === "object") {
+    if (pred(k)) return k;
+    return findeKnoten(k.kinder, pred);
+  }
+  return null;
+}
+
+/**
+ * Video-Attrappe nach dem in Chrome gemessenen Verhalten (Gegenprüfung regel8-1): currentTime wird auf ganze µs
+ * abgeschnitten gespeichert (1/24 → 0,041666), Bild k liegt bei round(k/fps · 10⁶) µs (Bild 1 bei 41667 µs); gezeigt
+ * wird das letzte Bild mit Zeitstempel ≤ currentTime. requestVideoFrameCallback meldet ein dargestelltes Bild einmal
+ * je Anmeldung (zeige), mit wachsender Uhr wie im Browser.
+ */
+function videoAttrappe({ fps, bilder }) {
+  const us = (k) => Math.round((k / fps) * 1e6);
+  let t = 0;
+  let uhr = 0;
+  let naechster = 1;
+  const rueckrufe = new Map();
+  const v = {
+    duration: bilder / fps,
+    pausiert: false,
+    playbackRate: 1,
+    pause() {
+      v.pausiert = true;
+    },
+    get currentTime() {
+      return t / 1e6;
+    },
+    set currentTime(s) {
+      t = Math.max(0, Math.floor(s * 1e6));
+    },
+    requestVideoFrameCallback(cb) {
+      const h = naechster++;
+      rueckrufe.set(h, cb);
+      return h;
+    },
+    cancelVideoFrameCallback(h) {
+      rueckrufe.delete(h);
+    },
+    /** Bild unter der aktuellen Zeit: das letzte mit Zeitstempel ≤ currentTime. */
+    bild() {
+      let k = 0;
+      while (k + 1 < bilder && us(k + 1) <= t) k += 1;
+      return k;
+    },
+    /** Bild k (Standard: das unter der Zeit) darstellen — jeder angemeldete Rückruf genau einmal. */
+    zeige(k = v.bild()) {
+      const cbs = [...rueckrufe.values()];
+      rueckrufe.clear();
+      for (const cb of cbs) cb((uhr += 16.7), { mediaTime: us(k) / 1e6, presentedFrames: uhr });
+    },
+    anmeldungen: () => rueckrufe.size,
+  };
+  return v;
+}
+
+test("MP-18 Prüfansicht mit Video-Attrappe (Chrome-Verhalten): Zähler zählt distinkte Bilder; ± 1 Bild trifft vorwärts und rückwärts jedes Bild, auch ab dem Ende; der Quellwechsel zählt neu", async () => {
+  video();
+  const k = await kette();
+  const lz = hookLaufzeit();
+  const P2 = ladeStudioBausteine({ ...lz.attrappen, "@/lib/counsel-urteil": counsel, "@/lib/freigabe-regeln": regeln }).pruef;
+  lz.setzeWurzel(P2.PruefAnsicht, { slug: SLUG, kette: k, anker: HOF, dateiAdresse: (id) => `/x/${id}`, holen: async () => new Response("{}"), gespeichert: () => {} });
+  const ref = findeKnoten(lz.rendere(), (n) => n.type === "video").props.ref;
+  // Wie React: Der Ref hängt am Element, bevor die Effekte laufen — hier: setzen, dann Effekte erneut.
+  const v = videoAttrappe({ fps: 24, bilder: 60 });
+  ref.current = v;
+  lz.abbauen();
+  lz.wiederAufbauen();
+  assert.equal(v.anmeldungen(), 1, "der Effekt meldet requestVideoFrameCallback an");
+  const zaehler = () => findeKnoten(lz.rendere(), (n) => n.props?.["data-bildzaehler"] !== undefined).props["data-bildzaehler"];
+  const knopf = (attr) => findeKnoten(lz.rendere(), (n) => n.type === "button" && n.props[attr] !== undefined).props;
+  // Sieben Meldungen auf drei Bilder (Pause, Zeitlupe, Rücksprung): gezählt werden drei.
+  for (const bild of [0, 0, 1, 1, 2, 2, 1]) v.zeige(bild);
+  assert.equal(zaehler(), "3/60");
+  assert.equal(v.anmeldungen(), 1, "nach jeder Meldung neu angemeldet");
+  // Vorwärts ab 0: jeder Druck genau ein Bild weiter, jedes Bild 1 … 59 einmal; das Video steht.
+  v.currentTime = 0;
+  const vor = [];
+  for (let i = 0; i < 59; i += 1) {
+    knopf("data-bild-vor").onClick();
+    v.zeige();
+    vor.push(v.bild());
+  }
+  assert.deepEqual(vor, Array.from({ length: 59 }, (_, i) => i + 1));
+  assert.equal(v.pausiert, true);
+  assert.equal(zaehler(), "60/60");
+  knopf("data-bild-vor").onClick();
+  assert.equal(v.bild(), 59, "am letzten Bild bleibt + 1 dort");
+  // Rückwärts ab dem Ende (abgespielt: Zeit = Dauer): der erste Druck wirkt, jedes Bild 58 … 0 einmal.
+  v.currentTime = v.duration;
+  assert.equal(v.bild(), 59);
+  const zurueck = [];
+  for (let i = 0; i < 59; i += 1) {
+    knopf("data-bild-zurueck").onClick();
+    zurueck.push(v.bild());
+  }
+  assert.deepEqual(zurueck, Array.from({ length: 59 }, (_, i) => 58 - i));
+  knopf("data-bild-zurueck").onClick();
+  assert.equal(v.bild(), 0, "am ersten Bild bleibt − 1 dort");
+  // Aus einer Pause mitten im Bild: genau ein Bild in jede Richtung.
+  v.currentTime = 1.3015;
+  assert.equal(v.bild(), 31);
+  knopf("data-bild-vor").onClick();
+  assert.equal(v.bild(), 32);
+  knopf("data-bild-zurueck").onClick();
+  knopf("data-bild-zurueck").onClick();
+  assert.equal(v.bild(), 30);
+  // Quellwechsel auf das Original: alte Anmeldung aufgehoben, die neue Quelle zählt von 0.
+  const v2 = videoAttrappe({ fps: 24, bilder: 108 });
+  ref.current = v2;
+  knopf("data-quelle-wechsel").onClick();
+  lz.rendere();
+  assert.equal(v.anmeldungen(), 0, "Anmeldung am Export aufgehoben");
+  assert.equal(v2.anmeldungen(), 1, "am Original angemeldet");
+  assert.equal(zaehler(), "0/108");
+  v2.zeige(0);
+  v2.zeige(1);
+  v2.zeige(1);
+  assert.equal(zaehler(), "2/108");
 });

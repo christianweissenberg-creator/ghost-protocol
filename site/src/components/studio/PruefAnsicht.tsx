@@ -3,7 +3,8 @@
 // Prüfansicht eines Videos im Objekt-Studio (Schritt 8, 10.11.2026).
 //
 // - Video in voller Bildrate über die Datei-Route (302 auf eine signierte URL nach dem Nachhashen); abgespielt wird
-//   zuerst der Export, das Original nur auf Wunsch (es ist groß). Einzelbild-Schritt ± 1/fps, Zeitlupe.
+//   zuerst der Export, das Original nur auf Wunsch (es ist groß). Einzelbild-Schritt ± 1 Bild (auf die Mitte des
+//   Nachbarbilds, siehe schrittZiel), Zeitlupe.
 // - Bildzähler: requestVideoFrameCallback sammelt die distinkten Bildnummern round(mediaTime × fps) und zeigt
 //   „Einzelbilder gesehen: n von N“ mit N = round(dauer_s × fps) aus dem Beleg. Bietet der Browser die Funktion nicht,
 //   steht das da. Der Zähler ist eine Hilfe; die Durchsicht in voller Bildrate erklärt der Prüfer.
@@ -37,6 +38,21 @@ export function bilderGesamt(dauer: number | null, fps: number | null): number |
 /** Bildnummer eines Zeitpunkts: round(mediaTime × fps). */
 export function bildNummer(mediaTime: number, fps: number): number {
   return Math.round(mediaTime * fps);
+}
+
+/**
+ * Ziel des Einzelbild-Schritts (Nachbesserung regel8-1): die MITTE des Nachbarbilds, (n + richtung + 0,5)/fps, mit
+ * n = Bild unter der aktuellen Zeit. Chrome speichert currentTime auf ganze µs abgeschnitten (1/24 → 0,041666), die
+ * Bilder liegen aber auf gerundeten Zeitstempeln (Bild 1 bei 0,041667): Ein Sprung genau auf die Bildgrenze zeigte
+ * das vorige Bild — der erste Druck wirkte nicht, rückwärts fehlte ein Bild. Die Mitte liegt eine halbe Bilddauer
+ * von jeder Grenze entfernt. n wird auf das letzte Bild gekappt (am Ende steht die Zeit auf der Dauer, hinter dem
+ * letzten Bild); das Ziel bleibt zwischen dem ersten und dem letzten Bild.
+ */
+export function schrittZiel(aktuell: number, richtung: 1 | -1, fps: number, gesamt: number | null): number {
+  const letztes = gesamt !== null && gesamt > 0 ? gesamt - 1 : Number.POSITIVE_INFINITY;
+  const n = Math.min(Math.max(Math.floor(aktuell * fps + 1e-6), 0), letztes);
+  const ziel = Math.min(Math.max(n + richtung, 0), letztes);
+  return (ziel + 0.5) / fps;
 }
 
 /** Zähler der distinkten Einzelbilder: dasselbe Bild zählt einmal, egal wie oft es gezeigt wird. */
@@ -192,9 +208,11 @@ export function PruefAnsicht({
 
   function springe(richtung: 1 | -1) {
     const v = ref.current;
-    if (v === null || schritt === null) return;
+    if (v === null || schritt === null || fps === null) return;
     v.pause();
-    v.currentTime = Math.max(0, v.currentTime + richtung * schritt);
+    // Bildzahl aus der Dauer des geladenen Videos; ohne lesbare Dauer die aus dem Beleg.
+    const dauer = Number.isFinite(v.duration) && v.duration > 0 ? v.duration : video.dauer_s;
+    v.currentTime = schrittZiel(v.currentTime, richtung, fps, bilderGesamt(dauer, fps));
   }
 
   const setzeTempo = (t: number) => {
