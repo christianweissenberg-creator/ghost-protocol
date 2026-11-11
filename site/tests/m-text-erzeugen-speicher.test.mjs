@@ -9,6 +9,11 @@
 // - M-TS4: Was die Karte selbst in den Speicher schreibt (starten), holt sie nicht als gemerkten Lauf zurück.
 // - M-TS5: Wechseln Schlüssel oder Speicher, liest sie für den neuen einmal; eine offene Lauf-ID der Karte bleibt
 //   (jetzt ?? gemerkt), und genannt wird nur ein Lauf, dessen ID sie auch sendet.
+// Abgleich mit den geladenen Captions (seit #16; bis 11.11.2026 ebenfalls ein Effekt mit setState):
+// - M-TS6: Steht die gemerkte ID beim Einhängen an einer Caption im Endzustand, nennt die Karte die Caption, der Eintrag
+//   im Speicher ist weg, „Text erzeugen …“ gilt wieder; beim Hydrieren gleicht das erste Bild dem Server-HTML.
+// - M-TS7: Nach Neu-Lesen: nicht fertig → die ID bleibt; Endzustand bei offener Frage → erst nach Abbrechen; dann genau
+//   ein Löschen, auch wenn die Captions danach als neue Objekte kommen.
 // Ohne Netz und ohne bezahlte Aufrufe: holen und Speicher sind Attrappen, die Lauf-IDs Testwerte.
 // Z_TSX_COMPONENTS_STUDIO_TEXTERZEUGEN=<pfad> prüft eine Kopie (Gegenprobe an der Fassung mit Effekt, Mutanten).
 import { test } from "node:test";
@@ -50,21 +55,29 @@ const schluessel = (id) => `gp-text-erzeugen:${SLUG}:${id}`;
 /** Eintrag eines Laufs ohne bekannten Ausgang, wie die Karte ihn schreibt. */
 const offen = (laufId) => JSON.stringify({ laufId, art: "unbekannt", seit: SEIT });
 
-/** Speicher wie sessionStorage (getItem, setItem, removeItem), der jedes Lesen mitschreibt. */
+/** Speicher wie sessionStorage (getItem, setItem, removeItem), der jedes Lesen und Löschen mitschreibt. */
 function zaehlSpeicher(eintraege = {}) {
   const m = new Map(Object.entries(eintraege));
   const gelesen = [];
+  const geloescht = [];
   return {
     m,
     gelesen,
+    geloescht,
     getItem: (k) => {
       gelesen.push(k);
       return m.has(k) ? m.get(k) : null;
     },
     setItem: (k, v) => m.set(k, String(v)),
-    removeItem: (k) => m.delete(k),
+    removeItem: (k) => {
+      geloescht.push(k);
+      m.delete(k);
+    },
   };
 }
+
+/** Caption zu Video 3 mit Lauf-ID, wie captionsZumVideo sie liefert (Testwerte). */
+const caption = (laufId, status, contentId = 41) => ({ contentId, status, laufId });
 
 /** holen, das nur mitschreibt und nie etwas sendet: jeder Aufruf scheitert wie ohne Verbindung. */
 function holenAttrappe() {
@@ -90,18 +103,18 @@ const lauf = (id) => new RegExp(`Lauf-ID ${id.slice(0, 8)}…`);
 const dieselbe = (id) => new RegExp(`Lauf-ID ${id.slice(0, 8)}… \\(dieselbe wie beim Versuch mit unbekanntem Ausgang\\)`);
 
 /** Karte in der Hook-Laufzeit (Browser); hydrieren spielt das Hydrieren nach. el() rendert und sucht ein Element. */
-function karte({ speicher, hydrieren = false, holen = holenAttrappe().holen } = {}) {
+function karte({ speicher, hydrieren = false, holen = holenAttrappe().holen, captions } = {}) {
   const lz = hookLaufzeit({ hydrieren });
   const T = ladeTextErzeugen(lz.attrappen, { hilfen });
-  const props = { slug: SLUG, medium: VIDEO, holen, fertig: () => {}, speicher };
+  const props = { slug: SLUG, medium: VIDEO, holen, fertig: () => {}, speicher, ...(captions === undefined ? {} : { captions }) };
   lz.setzeWurzel(T.TextErzeugen, props);
   return { lz, T, props, el: (attr) => element(lz.rendere(), attr) };
 }
 
 /** Server-HTML der Karte mit echtem React (renderToStaticMarkup). */
-function serverHtml(speicher) {
+function serverHtml(speicher, extra = {}) {
   const T = ladeTextErzeugen(ECHT, { hilfen });
-  return renderToStaticMarkup(React.createElement(T.TextErzeugen, { slug: SLUG, medium: VIDEO, holen: holenAttrappe().holen, fertig: () => {}, speicher }));
+  return renderToStaticMarkup(React.createElement(T.TextErzeugen, { slug: SLUG, medium: VIDEO, holen: holenAttrappe().holen, fertig: () => {}, speicher, ...extra }));
 }
 
 test("M-TS1 Server-HTML: Die Karte liest den Tab-Speicher nicht; „Text erzeugen …“ ohne gemerkten Lauf", () => {
@@ -185,4 +198,55 @@ test("M-TS5 Schlüssel oder Speicher wechseln: Die Karte liest für den neuen ei
   assert.match(text(k.el("data-text-erzeugen-was")), dieselbe(ID_B));
   assert.deepEqual(s2.gelesen, [schluessel(4)]);
   assert.deepEqual(s1.gelesen, [schluessel(3), schluessel(4)], "den alten Speicher liest sie nicht mehr");
+});
+
+test("M-TS6 Abgleich beim Einhängen: Steht die gemerkte ID an einer Caption im Endzustand, nennt die Karte die Caption, der Eintrag ist weg (einmal gelöscht, einmal gelesen), „Text erzeugen …“ gilt wieder; beim Hydrieren gleicht das erste Bild dem Server-HTML", () => {
+  for (const hydrieren of [false, true]) {
+    const captions = [caption(ID_A, "zur_freigabe")];
+    const speicher = zaehlSpeicher({ [schluessel(VIDEO.id)]: offen(ID_A) });
+    const k = karte({ speicher, hydrieren, captions });
+    const baum = k.lz.rendere();
+    if (hydrieren) {
+      const server = serverHtml(zaehlSpeicher({ [schluessel(VIDEO.id)]: offen(ID_A) }), { captions });
+      assert.equal(alsMarkup(k.lz.bilder()[0]), server, "erstes Bild = Server-HTML");
+    }
+    const bekannt = element(baum, "data-text-erzeugen-bekannt");
+    assert.equal(bekannt?.props["data-text-erzeugen-bekannt"], 41, `hydrieren: ${hydrieren}`);
+    assert.match(text(bekannt), new RegExp(`^Caption #41 \\(Status zur_freigabe\\) zu diesem Lauf \\(Lauf-ID ${ID_A.slice(0, 8)}…\\)`));
+    assert.equal(element(baum, "data-text-erzeugen-gemerkt"), null);
+    assert.equal(text(element(baum, "data-text-erzeugen-knopf")), "Text erzeugen …");
+    assert.equal(speicher.m.has(schluessel(VIDEO.id)), false, "Eintrag weg");
+    assert.deepEqual(speicher.geloescht, [schluessel(VIDEO.id)], "einmal gelöscht");
+    assert.deepEqual(speicher.gelesen, [schluessel(VIDEO.id)], "einmal gelesen");
+  }
+});
+
+test("M-TS7 Abgleich nach Neu-Lesen: Caption noch nicht fertig → die ID bleibt; Endzustand bei offener Frage → erst nach Abbrechen; dann genau ein Löschen, auch wenn die Captions danach als neue Objekte kommen; „Text erzeugen …“ nennt eine neue ID", () => {
+  const speicher = zaehlSpeicher({ [schluessel(VIDEO.id)]: offen(ID_A) });
+  const k = karte({ speicher, captions: [] });
+  assert.equal(text(k.el("data-text-erzeugen-knopf")), "Erneut senden …");
+  // Neu-Lesen: Die Caption des Laufs steht noch auf counsel_geprueft → nicht fertig, die ID bleibt.
+  k.lz.setzeWurzel(k.T.TextErzeugen, { ...k.props, captions: [caption(ID_A, "counsel_geprueft")] });
+  assert.equal(k.el("data-text-erzeugen-laufend")?.props["data-text-erzeugen-laufend"], 41);
+  assert.equal(text(k.el("data-text-erzeugen-knopf")), "Erneut senden …");
+  assert.deepEqual(speicher.geloescht, []);
+  // Frage offen („Erneut senden …“ zeigt die Bestätigung, sendet nichts), dann kommt der Endzustand: kein Abgleich.
+  k.el("data-text-erzeugen-knopf").props.onClick();
+  k.lz.setzeWurzel(k.T.TextErzeugen, { ...k.props, captions: [caption(ID_A, "zur_freigabe")] });
+  assert.ok(k.el("data-text-erzeugen-bestaetigung"), "die Frage bleibt");
+  assert.match(text(k.el("data-text-erzeugen-was")), dieselbe(ID_A));
+  assert.deepEqual(speicher.geloescht, [], "kein Abgleich während der Frage");
+  // Abbrechen → Abgleich: Caption genannt, Eintrag weg.
+  k.el("data-text-erzeugen-zurueck").props.onClick();
+  assert.equal(k.el("data-text-erzeugen-bekannt")?.props["data-text-erzeugen-bekannt"], 41);
+  assert.equal(text(k.el("data-text-erzeugen-knopf")), "Text erzeugen …");
+  assert.equal(speicher.m.has(schluessel(VIDEO.id)), false);
+  // Weitere Lesungen mit neuen Objekten gleichen Inhalts: kein zweites Löschen, der Hinweis bleibt.
+  k.lz.setzeWurzel(k.T.TextErzeugen, { ...k.props, captions: [caption(ID_A, "zur_freigabe")] });
+  k.lz.rendere();
+  assert.equal(k.el("data-text-erzeugen-bekannt")?.props["data-text-erzeugen-bekannt"], 41);
+  assert.deepEqual(speicher.geloescht, [schluessel(VIDEO.id)], "genau ein Löschen");
+  assert.deepEqual(speicher.gelesen, [schluessel(VIDEO.id)], "einmal gelesen");
+  k.el("data-text-erzeugen-knopf").props.onClick();
+  assert.match(text(k.el("data-text-erzeugen-was")), / \(neu\)$/);
 });

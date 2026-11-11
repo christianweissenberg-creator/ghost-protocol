@@ -340,7 +340,7 @@ export function TextErzeugen({
   // Einhängen. Jetzt sagt useSyncExternalStore, ob gelesen werden darf (auf dem Server und beim Hydrieren nein), und
   // übernommen wird beim Rendern, einmal je Speicher und Schlüssel (React-Muster „State bei geänderter Eingabe anpassen“,
   // wie in der Shell). Gleich bleiben die Übernahme je Speicher und Schlüssel und „jetzt ?? gemerkt“ für die offene ID.
-  // Danach gehört der Zustand den Handlern: Was starten selbst in den Speicher schreibt, übernimmt die Karte nicht.
+  // Danach gehört der Zustand den Handlern und dem Abgleich unten: Was starten selbst schreibt, übernimmt die Karte nicht.
   // Unterschied: Beim Einhängen im Browser steht ein gemerkter Lauf schon im ersten Bild, nicht erst ein Bild später.
   const lesbar = useSyncExternalStore(keinAbo, lesbarImBrowser, lesbarAufDemServer);
   const [gelesen, setGelesen] = useState<{ ablage: Speicher | null; schluessel: string } | null>(null);
@@ -371,15 +371,22 @@ export function TextErzeugen({
   // Eine Frage ist offen (bezahlter Lauf oder Verwerfen): Hinweise und Knopfzeile bleiben stehen, gesperrt (f3-lauf-id-1).
   const frage = stand.art === "bestaetigen" || stand.art === "verwerfen";
   const nichtLaufend = stand.art !== "laeuft";
-  useEffect(() => {
-    if (zumLauf === null) return;
-    merkeOffenenLauf(ablage, schluessel, null);
+  // Abgleich mit bekanntem Ausgang (Lint-Regel set-state-in-effect, 11.11.2026): Bisher setzte ein Effekt den Zustand
+  // zurück. Jetzt geschieht das beim Rendern wie oben; es endet von selbst, weil die offene ID danach null ist. Nur das
+  // Löschen des Eintrags im Speicher bleibt ein Effekt (Seiteneffekt, ohne setState), einmal je Abgleich.
+  // Unterschied: Das Bild mit der schon abgeglichenen ID („Erneut senden …“) entfällt; die Karte nennt gleich die Caption.
+  const [eintragWeg, setEintragWeg] = useState<{ ablage: Speicher | null; schluessel: string } | null>(null);
+  if (zumLauf !== null) {
     setOffeneLaufId(null);
     setGemerkt(null);
     setLaut409(null);
     setBekannt({ caption: zumLauf, laufId: zumLauf.laufId });
     setStand({ art: "zu" });
-  }, [zumLauf, ablage, schluessel]);
+    setEintragWeg({ ablage, schluessel });
+  }
+  useEffect(() => {
+    if (eintragWeg !== null) merkeOffenenLauf(eintragWeg.ablage, eintragWeg.schluessel, null);
+  }, [eintragWeg]);
   const w = CAPTION_WAHL.find((x) => x.wert === wahl) ?? CAPTION_WAHL[0];
   const k = KATEGORIEN.find((x) => x.wert === kategorie) ?? KATEGORIEN[0];
 
