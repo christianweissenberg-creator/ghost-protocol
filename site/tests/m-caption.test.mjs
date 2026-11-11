@@ -121,6 +121,17 @@ function linkAusAuftrag(task) {
 /** PUBLISHER-Antwort ohne Pflichtzeile (der Fall, in dem die Pipeline sie ergänzt). */
 const PUBLISHER_ROH = (task) => `Finaler Content:\n1/2 Denkmal-AfA bis 100 %. Visualisierung: KI-generiert.\n2/2 Mehr: ${linkAusAuftrag(task)}\nCross-Promotion-Tweet: Neues Video zum RitterGut — mehr im Hauptpost.\n`;
 
+/**
+ * PUBLISHER-Antwort in der Gliederung, die der Auftrag verlangt (Finaler Content, Publishing-Zeitpunkt, Cross-Promotion-
+ * Posts), ohne Pflichtzeile (Prüfung f-caption-1); content(link) liefert die Zeilen des finalen Contents.
+ */
+const gegliedert = (content) => (task) =>
+  `Finaler Content:\n${content(linkAusAuftrag(task))}\n\nPublishing-Zeitpunkt: Dienstag, 18:00 (Empfehlung)\n\nCross-Promotion-Posts:\n- Tweet: Neues Video zum RitterGut — mehr im Hauptpost.\n- Newsletter-Teaser: Neues Video zum RitterGut — mehr im Hauptpost.\n`;
+const THREAD = (link) => `1/2 Denkmal-AfA bis 100 %. Visualisierung: KI-generiert.\n2/2 Mehr: ${link}`;
+/** Warnungen ohne Zeitpunkt (am), zum Vergleichen. */
+const ohneZeit = (liste) => (liste ?? []).map(({ am, ...w }) => (void am, w));
+const LAGE_PRUEFEN = "Pflichtzeile von der Pipeline ergänzt, Lage prüfen";
+
 /** Agenten-Attrappen wie in p-paket-b-pipeline: Texte übernehmen den CTA-Link; Vor- und Endprüfung antworten verschieden. */
 function agenten({ scribe, publisher = PUBLISHER_ROH, endpruefung = FREIGABE_END } = {}) {
   welt.agentAntworten.scribe = (task) =>
@@ -264,7 +275,8 @@ test("M-C3 studio_medium nicht lesbar → 502 ohne Insert und ohne bezahlten Auf
 test("M-C4 Caption-Lauf: medium_id in metadata, SCRIBE-Auftrag mit Auftragsart und Pflichtzeile als eigener Zeile; fehlt sie bei PUBLISHER, steht sie vor counsel_endfassung im PUBLISHER-Text — beim X-Thread im ersten Post, an dem das Video hängt (d3-caption-auftrag-1) — body = geprüfter Text, R2 gibt frei", async () => {
   exportMit(RITTERGUT);
   medien();
-  agenten();
+  const publisher = gegliedert(THREAD);
+  agenten({ publisher });
   const r = await pipePost({ ...LAUF, medium_id: EXPORT_ID, lauf_id: "lauf-caption-0001" });
   assert.equal(r.status, 200, JSON.stringify(r.body).slice(0, 500));
   assert.equal(r.body.status, "complete", JSON.stringify(r.body.fehler ?? null));
@@ -282,8 +294,10 @@ test("M-C4 Caption-Lauf: medium_id in metadata, SCRIBE-Auftrag mit Auftragsart u
 
   // PUBLISHER-Text mit ergänzter Pflichtzeile: steps[3], Endprüfung, body
   const z = zeile(r.body.contentId);
-  const roh = PUBLISHER_ROH(auftrag("publisher"));
+  const roh = publisher(auftrag("publisher"));
   assert.equal(pflichtzeilen(roh), 0, "PUBLISHER schrieb die Pflichtzeile nicht");
+  // Prüfung f-caption-2: PUBLISHER kennt bei X die Grenze je Post.
+  assert.ok(auftrag("publisher").includes("\n1. Qualitätsprüfung: Fakten-Check, Ton, Länge (je Post höchstens 270 Zeichen; die Pflichtzeile zählt im ersten Post mit)\n"));
   // Nachbesserung caption9-4: Auch der PUBLISHER-Auftrag nennt die Pflichtzeile wörtlich; bei X im Post mit dem Video,
   // dort als letzte Zeile, der CTA bleibt im letzten Post (d3-caption-auftrag-1). SCRIBE bekommt dieselbe Zuordnung.
   assert.ok(auftrag("publisher").includes(`- Finaler Content (mit deinen Korrekturen); diese Pflichtzeile wörtlich, als eigene Zeile, ohne Formatierung, im Post mit dem Video (bei einem Thread im ersten Post), dort als letzte Zeile; der CTA bleibt im letzten Post:\n  ${PFLICHTZEILE}\n`), auftrag("publisher").slice(0, 400));
@@ -296,7 +310,7 @@ test("M-C4 Caption-Lauf: medium_id in metadata, SCRIBE-Auftrag mit Auftragsart u
   assert.equal(r.body.steps[3].output, erwartet, "Pflichtzeile als letzte Zeile des ersten Posts, nach einer Leerzeile");
   // Thread-Vorschau auf /content (splitTweets, gleiche Marke am Zeilenanfang): Die Zeile steht im Block 1/2, nicht im letzten.
   const bloecke = erwartet.split("\n").reduce((b, z) => (/^\*{0,2}\d+\/\d*\*{0,2}/.test(z.trim()) ? [...b, [z]] : (b.at(-1).push(z), b)), [[]]);
-  assert.deepEqual(bloecke.map((b) => pflichtzeilen(b.join("\n"))), [0, 1, 0], "Kopf, 1/2 mit Pflichtzeile, 2/2 ohne");
+  assert.deepEqual(bloecke.map((b) => pflichtzeilen(b.join("\n"))), [0, 1, 0], "Kopf, 1/2 mit Pflichtzeile, 2/2 (mit Zeitpunkt und Cross-Promotion) ohne");
   assert.equal(z.metadata.steps[3].output, erwartet);
   assert.equal(z.body, erwartet, "body = PUBLISHER-Text mit Pflichtzeile");
   assert.equal(pflichtzeilen(z.body), 1, "genau eine Pflichtzeile");
@@ -327,7 +341,10 @@ test("M-C4 Caption-Lauf: medium_id in metadata, SCRIBE-Auftrag mit Auftragsart u
   assert.equal(typeof z.metadata.medium_id, "number");
   assert.deepEqual(z.metadata.pflichtzeile, { wortlaut: PFLICHTZEILE, von_pipeline_ergaenzt: true, ersetzt: null });
   assert.equal(z.metadata.lauf_id, "lauf-caption-0001");
-  assert.deepEqual(r.body.warnungen, []);
+  // Prüfung f-caption-1: Jede Ergänzung steht als Warnung im Beleg, mit der Lage.
+  const warnung = [{ stufe: "pipeline", grund: LAGE_PRUEFEN, detail: "als letzte Zeile von Post 1 eingesetzt (vor der Marke „2/…“)" }];
+  assert.deepEqual(ohneZeit(r.body.warnungen), warnung);
+  assert.deepEqual(ohneZeit(z.metadata.warnungen), warnung);
 });
 
 test("M-C5 Pflichtzeile schon da → keine Verdopplung; abweichender Wortlaut, Zeile im Satz oder mit Formatierung zählt nicht → die wörtliche Zeile wird ergänzt", async () => {
@@ -477,8 +494,9 @@ test("M-C7 Ohne medium_id: keine Abfrage auf studio_medium, keine Pflichtzeile, 
 });
 
 /**
- * ANWEISUNGEN-Block des SCRIBE-Auftrags je Kanal-Wahl, wörtlich (Schlussprüfung d3-caption-auftrag-5); <LINK> steht für den
- * CTA-Link des Laufs. Die letzten Zeilen gelten für alle Kanäle, die zur Pflichtzeile je Kanal (d3-caption-auftrag-1).
+ * ANWEISUNGEN-Block des SCRIBE-Auftrags je Kanal-Wahl, wörtlich (Schlussprüfung d3-caption-auftrag-5); <CTA> steht für den
+ * CTA: mit baubarem Kurzlink „CTA mit EXAKT diesem Link: <LINK>“ (<LINK> der Link des Laufs), sonst der CTA ohne Link
+ * (Prüfung f-caption-3). Die letzten Zeilen gelten für alle Kanäle, die zur Pflichtzeile je Kanal (d3-caption-auftrag-1).
  */
 const ANWEISUNG_ALLE = [
   "- Das Video existiert schon: ein kurzer, fertiger Clip. Du schreibst nur den Text, der mit ihm gepostet wird — kein neues Video, keine Szenenfolge.",
@@ -490,21 +508,21 @@ const ANWEISUNG_PFLICHT_X = "- Die Pflichtzeile aus der AUFTRAGSART als eigene Z
 const ANWEISUNGEN_SOLL = {
   "instagram|reel": `Schreibe die Caption zu einem fertigen Instagram-Reel:
 - Der erste Satz trägt allein (vor „… mehr“) und sagt, was das Video zeigt
-- Danach 2-4 kurze Sätze; CTA mit EXAKT diesem Link: <LINK>
+- Danach 2-4 kurze Sätze; <CTA>
 - Länge ohne Hashtags, Pflichtzeilen und CTA-Link: höchstens 600 Zeichen
 - Am Ende höchstens 5 passende Hashtags
 ${ANWEISUNG_ALLE}
 ${ANWEISUNG_PFLICHT_ENDE}`,
   "tiktok|tiktok_short": `Schreibe die Caption zu einem fertigen TikTok-Video:
 - 1-3 kurze Sätze; der erste sagt, was das Video zeigt
-- CTA mit EXAKT diesem Link: <LINK>
+- <CTA>
 - Länge ohne Hashtags, Pflichtzeilen und CTA-Link: höchstens 300 Zeichen
 - Am Ende 3-5 passende Hashtags
 ${ANWEISUNG_ALLE}
 ${ANWEISUNG_PFLICHT_ENDE}`,
   "youtube|short": `Schreibe Titel und Beschreibung zu einem fertigen YouTube-Short:
 - Titel: höchstens 70 Zeichen, sachlich
-- Beschreibung: 2-4 Sätze, was das Video zeigt; CTA mit EXAKT diesem Link: <LINK>
+- Beschreibung: 2-4 Sätze, was das Video zeigt; <CTA>
 - Am Ende der Beschreibung 2-3 passende Hashtags
 ${ANWEISUNG_ALLE}
 ${ANWEISUNG_PFLICHT_ENDE}`,
@@ -513,14 +531,14 @@ ${ANWEISUNG_PFLICHT_ENDE}`,
 - Falls AfA/Steuerzahlen erwähnt werden: Modellrechnung-Disclaimer-Satz PFLICHT
   ("Modellrechnung — individuelle steuerliche Wirkung abhängig von persönlicher
   Situation und Behördenbescheinigung; keine Steuerberatung.")
-- Letzter Post: CTA mit EXAKT diesem Link: <LINK>
+- Letzter Post: <CTA>
 - Höchstens 2 Hashtags
 ${ANWEISUNG_ALLE}
 ${ANWEISUNG_PFLICHT_X}`,
   "linkedin|linkedin_post": `Schreibe den Begleittext zu einem fertigen Video auf LinkedIn (Fachton, premium, editorial, ruhig):
 - Zeile 1-2: was das Video zeigt, mit einer belegten Zahl oder einer sachlichen These
 - 2-3 kurze Absätze mit je 1-3 Sätzen, keine Reel-Ästhetik, höchstens 1 Emoji
-- Schluss: CTA mit EXAKT diesem Link: <LINK>
+- Schluss: <CTA>
 - Höchstens 3 fachliche Hashtags am Ende
 - Länge ohne Hashtags, Pflichtzeilen und CTA-Link: 500 bis 1.200 Zeichen
 ${ANWEISUNG_ALLE}
@@ -530,6 +548,21 @@ ${ANWEISUNG_PFLICHT_ENDE}`,
 test("M-C11 Caption-Lauf (Nachtrag d2-text-erzeugen-2, Schlussprüfung d3-caption-auftrag-2 und -5): Für jede Kanal-Wahl von „Text erzeugen“ bekommt SCRIBE wörtlich die Anweisungen für eine Caption zu einem fertigen Video (Schnappschuss); RESEARCHER und PUBLISHER behandeln den Lauf als Caption — kein Video-Skript, keine Schnitt- oder Einblendmarken, keine Video-Laufzeiten, kein Thumbnail-, SEO-Title- oder Metadaten-Auftrag; die Pflichtzeile bleibt einmal als eigene Zeile", async () => {
   const wahlen = [["instagram", "reel", "Schreibe die Caption zu einem fertigen Instagram-Reel:"], ["tiktok", "tiktok_short", "Schreibe die Caption zu einem fertigen TikTok-Video:"], ["youtube", "short", "Schreibe Titel und Beschreibung zu einem fertigen YouTube-Short:"], ["x", "thread", "Schreibe den Text zu einem fertigen Video auf X im Steinadel-Ton"], ["linkedin", "linkedin_post", "Schreibe den Begleittext zu einem fertigen Video auf LinkedIn"]];
   assert.deepEqual(wahlen.map(([p, f]) => `${p}|${f}`), Object.keys(ANWEISUNGEN_SOLL));
+  // Prüfung f-caption-3: auch für ein Objekt ohne baubaren Kurzlink (keine Kampagne) — dann der CTA ohne Link.
+  for (const [platform, format, kopf] of wahlen) {
+    zuruecksetzen();
+    welt.pipelineModul = pipeline;
+    exportMit({ ...RITTERGUT, kampagnen: [] });
+    medien();
+    agenten();
+    const ohne = await pipePost({ ...LAUF, platform, format, medium_id: EXPORT_ID });
+    assert.equal(ohne.status, 200, `${platform} ohne Kampagne: ${JSON.stringify(ohne.body).slice(0, 300)}`);
+    const s0 = auftrag("scribe");
+    assert.equal(linkAusAuftrag(s0), null, `${platform}: kein CTA-Link ohne Kampagne`);
+    const v0 = s0.indexOf("ANWEISUNGEN:\n") + "ANWEISUNGEN:\n".length;
+    assert.ok(s0.includes(`ANWEISUNGEN:\n${kopf}`), platform);
+    assert.equal(s0.slice(v0, s0.indexOf("\n\nSTILREGELN:", v0)), ANWEISUNGEN_SOLL[`${platform}|${format}`].replace("<CTA>", "CTA ohne Link (kein Kampagnen-Link hinterlegt)"), `${platform} ohne Kampagne`);
+  }
   for (const [platform, format, kopf] of wahlen) {
     zuruecksetzen();
     welt.pipelineModul = pipeline;
@@ -549,12 +582,13 @@ test("M-C11 Caption-Lauf (Nachtrag d2-text-erzeugen-2, Schlussprüfung d3-captio
     assert.ok(link, `${platform}: CTA-Link im Auftrag`);
     const von = scribe.indexOf("ANWEISUNGEN:\n") + "ANWEISUNGEN:\n".length;
     const block = scribe.slice(von, scribe.indexOf("\n\nSTILREGELN:", von)).replaceAll(link, "<LINK>");
-    assert.equal(block, ANWEISUNGEN_SOLL[`${platform}|${format}`], platform);
+    assert.equal(block, ANWEISUNGEN_SOLL[`${platform}|${format}`].replace("<CTA>", "CTA mit EXAKT diesem Link: <LINK>"), platform);
     // RESEARCHER und PUBLISHER: Caption zu einem fertigen Video statt Format eines neuen Beitrags (d3-caption-auftrag-2).
     assert.ok(auftrag("researcher").includes(" im Format Caption zu einem fertigen Video, Kategorie: "), `${platform}: RESEARCHER`);
     const pub = auftrag("publisher");
     assert.ok(pub.includes(`\nPLATTFORM: ${platform}\nFORMAT: Caption zu einem fertigen Video\n`), `${platform}: PUBLISHER-Format`);
-    assert.ok(pub.includes("\n1. Qualitätsprüfung: Fakten-Check, Ton, Länge\n2. Hashtags: nur die in der Caption, keine zusätzlichen; keine Title Tags, keine SEO-Description\n3. Scheduling-Empfehlung: "), `${platform}: PUBLISHER Punkt 2`);
+    const laengeX = platform === "x" ? " (je Post höchstens 270 Zeichen; die Pflichtzeile zählt im ersten Post mit)" : "";
+    assert.ok(pub.includes(`\n1. Qualitätsprüfung: Fakten-Check, Ton, Länge${laengeX}\n2. Hashtags: nur die in der Caption, keine zusätzlichen; keine Title Tags, keine SEO-Description\n3. Scheduling-Empfehlung: `), `${platform}: PUBLISHER Punkte 1 und 2`);
     assert.ok(pub.includes("\n4. Das Video ist fertig: keine Thumbnail-, Musik-, Schnitt- oder Einblendungsvorschläge\n5. Cross-Promotion: "), `${platform}: PUBLISHER Punkt 4`);
     assert.ok(/\n- Finaler Content \(mit deinen Korrekturen\); [^\n]+:\n {2}[^\n]+\n- Publishing-Zeitpunkt /.test(pub), `${platform}: keine Metadaten-Zeile`);
     for (const a of welt.aktivierungen) {
@@ -573,39 +607,103 @@ test("M-C11 Caption-Lauf (Nachtrag d2-text-erzeugen-2, Schlussprüfung d3-captio
   assert.ok(auftrag("researcher").includes(" im Format TikTok Short (30-60 Sek), Kategorie: "));
   const pub = auftrag("publisher");
   assert.ok(pub.includes("\nPLATTFORM: tiktok\nFORMAT: tiktok_short\n"));
-  assert.ok(pub.includes("\n2. SEO-Optimierung: Title Tags, Description, Hashtags\n") && pub.includes("\n4. Thumbnail/Preview: Beschreibung für visuelles Asset\n"));
+  assert.ok(pub.includes("\n1. Qualitätsprüfung: Fakten-Check, Ton, Länge\n2. SEO-Optimierung: Title Tags, Description, Hashtags\n") && pub.includes("\n4. Thumbnail/Preview: Beschreibung für visuelles Asset\n"));
   assert.ok(pub.includes("\n- Finaler Content (mit deinen Korrekturen)\n- Metadaten (Title, Description, Tags, Hashtags)\n- Publishing-Zeitpunkt "));
 });
 
-test("M-C15 Pflichtzeile außerhalb von X am Ende (Instagram · Reel, Vorauswahl von „Text erzeugen“): PUBLISHER-Auftrag „als letzte Zeile des finalen Contents“, die Pipeline hängt die fehlende Zeile ans Ende — auch bei Postmarken; ein einzelner X-Post ohne Marken bekommt sie ebenfalls am Ende", async () => {
-  // Instagram: Ende, auch wenn der Text Marken wie „1/2“ und „2/2“ hat (nur X ordnet sie dem ersten Post zu).
-  exportMit(RITTERGUT);
-  medien();
-  agenten();
-  const r = await pipePost({ ...LAUF, platform: "instagram", format: "reel", medium_id: EXPORT_ID });
-  assert.equal(r.body.status, "complete", JSON.stringify(r.body.fehler ?? null));
+test("M-C15 Fehlende Pflichtzeile im Abschnitt „Finaler Content“ (Prüfung f-caption-1): außerhalb von X und beim X-Einzelpost an dessen Ende, vor Publishing-Zeitpunkt und Cross-Promotion; Marken wie „Post 1/3:“ und eine Längenliste vor dem Content führen nicht in die Irre; ohne folgenden Abschnitt ans Ende; jede Ergänzung als Warnung mit Lage", async () => {
+  const lauf = async (body, publisher, objekt = RITTERGUT) => {
+    zuruecksetzen();
+    welt.pipelineModul = pipeline;
+    exportMit(objekt);
+    medien();
+    agenten({ publisher });
+    const r = await pipePost({ ...LAUF, ...body, medium_id: EXPORT_ID });
+    assert.equal(r.body.status, "complete", JSON.stringify(r.body.fehler ?? null));
+    const z = zeile(r.body.contentId);
+    assert.equal(videoFreigabe(z).freigebbar, true);
+    assert.equal(pflichtzeilen(z.body), 1);
+    return { r, z, roh: publisher(auftrag("publisher")) };
+  };
+  const vorZeitpunkt = (roh) => roh.replace("\n\nPublishing-Zeitpunkt:", `\n\n${PFLICHTZEILE}\n\nPublishing-Zeitpunkt:`);
+  const warnung = (detail) => [{ stufe: "pipeline", grund: LAGE_PRUEFEN, detail }];
+  const ABSCHNITT = "am Ende des Abschnitts „Finaler Content“ eingesetzt";
+
+  // Instagram (Vorauswahl): am Ende des finalen Contents, vor Publishing-Zeitpunkt und Cross-Promotion.
+  const ig = await lauf({ platform: "instagram", format: "reel" }, gegliedert((link) => `Das Video zeigt den Hof bei Nacht. ${link}\n#Denkmal #RitterGut`));
   const pub = auftrag("publisher");
   assert.ok(pub.includes(`- Finaler Content (mit deinen Korrekturen); als letzte Zeile des finalen Contents diese Pflichtzeile wörtlich, als eigene Zeile, ohne Formatierung:\n  ${PFLICHTZEILE}\n`), pub.slice(0, 400));
-  assert.ok(!pub.includes("im Post mit dem Video"));
+  assert.ok(!pub.includes("im Post mit dem Video") && !pub.includes("je Post höchstens 270 Zeichen"));
   assert.ok(auftrag("scribe").includes(`\n${ANWEISUNG_PFLICHT_ENDE}\n`));
-  const roh = PUBLISHER_ROH(pub);
-  const z = zeile(r.body.contentId);
-  assert.equal(z.body, `${roh.trimEnd()}\n\n${PFLICHTZEILE}`, "letzte Zeile nach einer Leerzeile");
-  assert.deepEqual(z.metadata.pflichtzeile, { wortlaut: PFLICHTZEILE, von_pipeline_ergaenzt: true, ersetzt: null });
-  assert.equal(videoFreigabe(z).freigebbar, true);
+  assert.equal(ig.z.body, vorZeitpunkt(ig.roh));
+  assert.deepEqual(ohneZeit(ig.z.metadata.warnungen), warnung(ABSCHNITT));
+  assert.deepEqual(ig.z.metadata.pflichtzeile, { wortlaut: PFLICHTZEILE, von_pipeline_ergaenzt: true, ersetzt: null });
 
-  // X, ein einzelner Post ohne Marken: Der Post mit dem Video ist der ganze Text, die Zeile kommt ans Ende.
+  // Instagram mit Postmarken und einer Cross-Promotion-Zeile direkt danach: vor die Cross-Promotion, nicht in Post 1.
+  const igMarken = await lauf({ platform: "instagram", format: "reel" }, PUBLISHER_ROH);
+  assert.equal(igMarken.z.body, igMarken.roh.replace("\nCross-Promotion-Tweet:", `\n\n${PFLICHTZEILE}\nCross-Promotion-Tweet:`));
+
+  // X-Einzelpost in der Gliederung: Der Post mit dem Video ist der finale Content.
+  const einzel = await lauf({}, gegliedert((link) => `Das Video zeigt den Hof bei Nacht. ${link}\n#Denkmal`));
+  assert.equal(einzel.z.body, vorZeitpunkt(einzel.roh));
+  assert.deepEqual(ohneZeit(einzel.z.metadata.warnungen), warnung(ABSCHNITT));
+
+  // X mit „Post 1/3:“, davor eine Längenliste in der Qualitätsprüfung: Die Zeile kommt in Post 1 des finalen Contents.
+  const mitListe = (task) =>
+    `Qualitätsprüfung:\n1/3: 84 Zeichen\n2/3: 90 Zeichen\n\n${gegliedert((link) => `Post 1/3: Das Video zeigt den Hof bei Nacht.\nPost 2/3: Denkmal-AfA bis 100 %.\nPost 3/3: Mehr: ${link}`)(task)}`;
+  const liste = await lauf({}, mitListe);
+  assert.equal(liste.z.body, liste.roh.replace("\nPost 2/3:", `\n\n${PFLICHTZEILE}\nPost 2/3:`));
+  assert.deepEqual(ohneZeit(liste.z.metadata.warnungen), warnung("als letzte Zeile von Post 1 eingesetzt (vor der Marke „2/…“)"));
+
+  // Ohne folgenden Abschnitt: ans Ende des Texts, wie bisher.
+  const ohneFolge = (task) => `Finaler Content: Das Video zeigt den Hof bei Nacht. ${linkAusAuftrag(task)}\n#Denkmal`;
+  const ende = await lauf({}, ohneFolge);
+  assert.equal(ende.z.body, `${ende.roh}\n\n${PFLICHTZEILE}`);
+  assert.deepEqual(ohneZeit(ende.z.metadata.warnungen), warnung("ans Ende des Texts gehängt (kein Abschnitt „Finaler Content“ mit folgendem Abschnitt erkannt)"));
+
+  // Eine nahe Variante wird ersetzt — auch das ist eine Ergänzung mit Warnung; steht die Zeile schon da, keine Warnung.
+  const nah = await lauf({}, gegliedert((link) => `1/2 Das Video zeigt den Hof.\n${PFLICHTZEILE}.\n2/2 Mehr: ${link}`));
+  assert.deepEqual(ohneZeit(nah.z.metadata.warnungen), warnung("eine nahe Variante durch den Wortlaut ersetzt"));
+  const da = await lauf({}, gegliedert((link) => `1/2 Das Video zeigt den Hof.\n${PFLICHTZEILE}\n2/2 Mehr: ${link}`));
+  assert.deepEqual(ohneZeit(da.z.metadata.warnungen), [], "Pflichtzeile schon da: keine Warnung");
+  assert.equal(da.z.body, da.roh);
+});
+
+test("M-C22 X: Post 1 gemessen (Prüfung f-caption-2) — Der PUBLISHER-Auftrag nennt die Grenze je Post; über 280 Zeichen eine Warnung im Beleg, bis 280 keine, kein Abbruch; auch wenn die Pflichtzeile schon dasteht", async () => {
+  for (const [zeichen, warnt] of [[196, false], [197, true]]) {
+    zuruecksetzen();
+    welt.pipelineModul = pipeline;
+    exportMit(RITTERGUT);
+    medien();
+    // Erste Zeile von Post 1 mit genau `zeichen` Zeichen; nach der Ergänzung kommen Leerzeile und Pflichtzeile hinzu (+84).
+    const publisher = gegliedert((link) => `1/2 ${"x".repeat(zeichen - 4)}\n2/2 Mehr: ${link}`);
+    agenten({ publisher });
+    const r = await pipePost({ ...LAUF, medium_id: EXPORT_ID });
+    assert.equal(r.body.status, "complete", `${zeichen}: ${JSON.stringify(r.body.fehler ?? null)}`);
+    assert.equal(welt.aktivierungen.length, 6, `${zeichen}: kein Abbruch`);
+    const z = zeile(r.body.contentId);
+    assert.equal(regeln.xPostEinsLaenge(z.body), zeichen + 84);
+    const laenge = ohneZeit(z.metadata.warnungen).filter((w) => w.grund.startsWith("X: Post 1"));
+    assert.deepEqual(laenge, warnt ? [{ stufe: "pipeline", grund: "X: Post 1 länger als 280 Zeichen", detail: `${zeichen + 84} Zeichen, gezählt wie die Thread-Vorschau (URLs voll)` }] : [], String(zeichen));
+    assert.equal(z.status, "zur_freigabe");
+  }
+  // Pflichtzeile schon im ersten Post, Post 1 trotzdem zu lang: dieselbe Warnung (ohne „Lage prüfen“).
   zuruecksetzen();
   welt.pipelineModul = pipeline;
   exportMit(RITTERGUT);
   medien();
-  const einzeln = (task) => `Finaler Content: Das Video zeigt den Hof bei Nacht. ${linkAusAuftrag(task)}\n#Denkmal`;
-  agenten({ publisher: einzeln });
-  const x = await pipePost({ ...LAUF, medium_id: EXPORT_ID });
-  assert.equal(x.body.status, "complete", JSON.stringify(x.body.fehler ?? null));
-  const zx = zeile(x.body.contentId);
-  assert.equal(zx.body, `${einzeln(auftrag("publisher"))}\n\n${PFLICHTZEILE}`);
-  assert.equal(videoFreigabe(zx).freigebbar, true);
+  agenten({ publisher: gegliedert((link) => `1/2 ${"x".repeat(200)}\n${PFLICHTZEILE}\n2/2 Mehr: ${link}`) });
+  const lang = await pipePost({ ...LAUF, medium_id: EXPORT_ID });
+  assert.deepEqual(ohneZeit(lang.body.warnungen).map((w) => w.grund), ["X: Post 1 länger als 280 Zeichen"]);
+  // Außerhalb von X: keine Messung, keine Grenze im PUBLISHER-Auftrag.
+  zuruecksetzen();
+  welt.pipelineModul = pipeline;
+  exportMit(RITTERGUT);
+  medien();
+  agenten({ publisher: gegliedert((link) => `${"x".repeat(400)} ${link}`) });
+  const ig = await pipePost({ ...LAUF, platform: "instagram", format: "reel", medium_id: EXPORT_ID });
+  assert.deepEqual(ohneZeit(ig.body.warnungen).map((w) => w.grund), [LAGE_PRUEFEN]);
+  assert.ok(!auftrag("publisher").includes("je Post höchstens 270 Zeichen"));
 });
 
 test("M-C16 medium_id nur für die Kanal-Wahl von „Text erzeugen“ (Schlussprüfung d3-caption-auftrag-4): jede andere Plattform/Format-Kombination → 400 vor jeder Lesung, ohne Insert und ohne bezahlten Aufruf; angenommen werden genau die Kombinationen aus CAPTION_WAHL", async () => {

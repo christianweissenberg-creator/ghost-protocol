@@ -242,48 +242,123 @@ function nahForm(zeile: string): string {
     .toLowerCase();
 }
 
-/** Postmarke am Zeilenanfang wie in der Thread-Vorschau auf /content (splitTweets): „1/3“, „**2/3**“ … */
-const POST_EINS = /^\*{0,2}1\/\d*\*{0,2}/;
-const POST_ZWEI = /^\*{0,2}2\/\d*\*{0,2}/;
+/**
+ * Zeilenanfang ohne Markdown-, Listen- und Nummernzeichen, klein — zum Erkennen der Abschnitte einer PUBLISHER-Antwort
+ * („## Finaler Content“, „**Publishing-Zeitpunkt:**“, „5. Cross-Promotion: …“).
+ */
+function abschnittsKopf(zeile: string): string {
+  return zeile
+    .trim()
+    .replace(/^(?:[#>*_~`\-•–—]+\s*|\d+[.)]\s+)+/u, "")
+    .toLowerCase();
+}
+const KOPF_FINAL = /^finaler content\b/;
+const KOPF_DANACH = /^(?:publishing-zeitpunkt|cross-promotion|qualitätsprüfung|metadaten)/;
+
+/**
+ * Bereich des Abschnitts „Finaler Content“ in teile (gerade Indizes sind Zeilen; Prüfung f-caption-1): von seiner
+ * Überschrift bis vor die nächste Zeile „Publishing-Zeitpunkt“, „Cross-Promotion“, „Qualitätsprüfung“ oder „Metadaten“.
+ * Ohne diese Überschrift: der ganze Text (kopf false).
+ */
+function finalerAbschnitt(teile: readonly string[]): { von: number; bis: number; kopf: boolean } {
+  const von = teile.findIndex((t, i) => i % 2 === 0 && KOPF_FINAL.test(abschnittsKopf(t)));
+  if (von < 0) return { von: 0, bis: teile.length, kopf: false };
+  const bis = teile.findIndex((t, i) => i > von && i % 2 === 0 && KOPF_DANACH.test(abschnittsKopf(t)));
+  return { von, bis: bis < 0 ? teile.length : bis, kopf: true };
+}
+
+/**
+ * Nummer einer Postmarke am Zeilenanfang: „1/3“, „**2/3**“, „(1/3)“, „🧵 1/3“, „Post 1/3:“, „Tweet 2/3“ (Prüfung
+ * f-caption-1); sonst null.
+ */
+function postNummer(zeile: string): number | null {
+  const m = /^[^\p{L}\p{N}]*?(?:(?:post|tweet)\s*)?\(?\s*(\d+)\s*\/\s*\d*\s*\)?/iu.exec(zeile.trim());
+  return m ? Number(m[1]) : null;
+}
+
+/** Zeilen von Post 1 eines X-Threads im Bereich [von, bis): ab der Marke „1/…“ bis vor „2/…“; null ohne Marke „1/…“. */
+function ersterPostBereich(teile: readonly string[], von: number, bis: number): { eins: number; zwei: number } | null {
+  let eins = -1;
+  for (let i = von; i < bis; i += 2) {
+    const n = postNummer(teile[i]);
+    if (eins < 0) {
+      if (n === 1) eins = i;
+    } else if (n === 2) {
+      return { eins, zwei: i };
+    }
+  }
+  return eins < 0 ? null : { eins, zwei: bis };
+}
+
+/** Wo pflichtzeileEinsetzen die Zeile gesetzt hat (für die Warnung der Pipeline); null, wenn sie schon da war. */
+export type PflichtzeilenLage = "erster_post" | "abschnitt" | "ende" | "ersetzt";
 
 /**
  * Pflichtzeile einsetzen: vorhanden (wörtlich als eigene Zeile) → unverändert; eine nahe Variante (Schlusspunkt,
  * anderer Bindestrich, geschütztes Leerzeichen, Fettdruck, Emoji davor, Großschrift) → durch die wörtliche Zeile
- * ersetzt, statt eine zweite Hinweiszeile anzuhängen; sonst angehängt, nach einer Leerzeile: am Ende des Texts (ort
- * "ende") oder bei einem X-Thread an den ersten Post, also vor die Zeile mit der Marke „2/…“ (ort "erster_post",
- * Schlussprüfung d3-caption-auftrag-1: das Video hängt am ersten Post). Ohne Marken „1/…“ und danach „2/…“ (ein
- * einzelner Post) gilt das Ende.
+ * ersetzt, an ihrer Stelle, statt eine zweite Hinweiszeile anzuhängen. Fehlt sie, wird sie nach einer Leerzeile
+ * eingesetzt, und zwar nur im Abschnitt „Finaler Content“ (Prüfung f-caption-1): bei einem X-Thread (ort "erster_post")
+ * als letzte Zeile von Post 1 vor die Marke „2/…“, sonst ans Ende des Abschnitts, vor Publishing-Zeitpunkt,
+ * Cross-Promotion und Qualitätsprüfung. Ohne diese Überschrift (und ohne folgenden Abschnitt) wie bisher ans Ende des Texts.
  */
 export function pflichtzeileEinsetzen(
   text: string,
   pflichtzeile: string,
   ort: "ende" | "erster_post" = "ende"
-): { text: string; art: "vorhanden" | "ersetzt" | "angehaengt"; ersetzt: string | null } {
+): { text: string; art: "vorhanden" | "ersetzt" | "angehaengt"; ersetzt: string | null; lage: PflichtzeilenLage | null } {
   const soll = pflichtzeile.trim();
-  if (enthaeltPflichtzeile(text, soll)) return { text, art: "vorhanden", ersetzt: null };
+  if (enthaeltPflichtzeile(text, soll)) return { text, art: "vorhanden", ersetzt: null, lage: null };
   const teile = text.split(/(\r?\n)/);
   const ziel = nahForm(soll);
   for (let i = 0; i < teile.length; i += 2) {
     if (teile[i].trim() !== "" && nahForm(teile[i]) === ziel) {
       const alt = teile[i];
       teile[i] = soll;
-      return { text: teile.join(""), art: "ersetzt", ersetzt: alt };
+      return { text: teile.join(""), art: "ersetzt", ersetzt: alt, lage: "ersetzt" };
     }
   }
-  if (ort === "erster_post") {
-    const eins = teile.findIndex((t, i) => i % 2 === 0 && POST_EINS.test(t.trim()));
-    const zwei = eins < 0 ? -1 : teile.findIndex((t, i) => i > eins && i % 2 === 0 && POST_ZWEI.test(t.trim()));
-    if (zwei > 0) {
-      // Letzte nicht leere Zeile des ersten Posts; dahinter Leerzeile und Pflichtzeile, mit dem Zeilenumbruch des Texts.
-      let ende = zwei - 2;
-      while (ende > eins && teile[ende].trim() === "") ende -= 2;
-      const nl = teile[ende + 1];
-      teile.splice(ende + 1, 0, nl, "", nl, soll);
-      return { text: teile.join(""), art: "angehaengt", ersetzt: null };
-    }
-  }
+  const { von, bis, kopf } = finalerAbschnitt(teile);
+  const post = ort === "erster_post" ? ersterPostBereich(teile, von, bis) : null;
+  // Einsetzen hinter der letzten nicht leeren Zeile vor grenze (frühestens hinter unten), mit dem Zeilenumbruch des Texts.
+  const hinterLetzter = (unten: number, grenze: number, lage: PflichtzeilenLage) => {
+    let letzte = grenze - 2;
+    while (letzte > unten && teile[letzte].trim() === "") letzte -= 2;
+    const nl = teile[letzte + 1] ?? "\n";
+    teile.splice(letzte + 1, 0, nl, "", nl, soll);
+    return { text: teile.join(""), art: "angehaengt" as const, ersetzt: null, lage };
+  };
+  if (post !== null && post.zwei < bis) return hinterLetzter(post.eins, post.zwei, "erster_post");
+  if (kopf && bis < teile.length) return hinterLetzter(von, bis, "abschnitt");
   const rumpf = text.replace(/\s+$/u, "");
-  return { text: rumpf === "" ? soll : `${rumpf}\n\n${soll}`, art: "angehaengt", ersetzt: null };
+  return { text: rumpf === "" ? soll : `${rumpf}\n\n${soll}`, art: "angehaengt", ersetzt: null, lage: "ende" };
+}
+
+/** Höchstlänge eines Posts auf X, wie die Thread-Vorschau auf /content (TWEET_MAX). */
+export const X_POST_HOECHSTENS = 280;
+
+/**
+ * Länge von Post 1 eines X-Texts (Prüfung f-caption-2), gezählt wie die Thread-Vorschau auf /content: ohne „**“, ohne
+ * Leerraum am Rand, jedes Zeichen (UTF-16) einzeln, URLs voll. Post 1 ist im Abschnitt „Finaler Content“ der Block ab der
+ * Marke „1/…“ bis vor „2/…“; ohne Marken der ganze Abschnitt ohne seine Überschrift. null, wenn weder Überschrift noch
+ * Marke den Post abgrenzen.
+ */
+export function xPostEinsLaenge(text: string): number | null {
+  const teile = text.split(/(\r?\n)/);
+  const { von, bis, kopf } = finalerAbschnitt(teile);
+  const post = ersterPostBereich(teile, von, bis);
+  let zeilen: string[];
+  if (post !== null) {
+    zeilen = [];
+    for (let i = post.eins; i < post.zwei; i += 2) zeilen.push(teile[i]);
+  } else if (kopf) {
+    const k = teile[von];
+    const rest = k.includes(":") ? k.slice(k.indexOf(":") + 1) : "";
+    zeilen = [rest];
+    for (let i = von + 2; i < bis; i += 2) zeilen.push(teile[i]);
+  } else {
+    return null;
+  }
+  return zeilen.join("\n").replace(/\*\*/g, "").trim().length;
 }
 
 /** Text mit Pflichtzeile (pflichtzeileEinsetzen): vorhanden, ersetzt oder angehängt. */

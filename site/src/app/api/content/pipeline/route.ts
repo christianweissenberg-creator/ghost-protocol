@@ -9,7 +9,10 @@ import {
   geprueftenTextAusSchritten,
   maskiereGeschuetzteNamen,
   pflichtzeileEinsetzen,
+  xPostEinsLaenge,
+  X_POST_HOECHSTENS,
 } from "@/lib/freigabe-regeln";
+import type { PflichtzeilenLage } from "@/lib/freigabe-regeln";
 import { ABFRAGE_TIMEOUT_MS, bereinigeFehler, leseProtokollEintraege, pruefeAnfrageHerkunft } from "@/lib/status-server";
 import { STEINADEL_REGELPAKET } from "@/lib/steinadel-regelpaket";
 import { baueKurzlink, maskiereKampagnenseiten, pruefeKurzlinksImText } from "@/lib/steinadel-kurzlink";
@@ -668,6 +671,14 @@ function captionAnweisungen(kanal: CaptionKanal, objekt: boolean, ctaLink: strin
   return `${form[kanal]}
 ${allgemein.join("\n")}`;
 }
+
+/** Detail der Warnung „Pflichtzeile von der Pipeline ergänzt, Lage prüfen“ je Lage (Prüfung f-caption-1). */
+const PFLICHTZEILE_LAGE_TEXT: Record<PflichtzeilenLage, string> = {
+  erster_post: "als letzte Zeile von Post 1 eingesetzt (vor der Marke „2/…“)",
+  abschnitt: "am Ende des Abschnitts „Finaler Content“ eingesetzt",
+  ende: "ans Ende des Texts gehängt (kein Abschnitt „Finaler Content“ mit folgendem Abschnitt erkannt)",
+  ersetzt: "eine nahe Variante durch den Wortlaut ersetzt",
+};
 
 /** Ort der Pflichtzeile im PUBLISHER-Auftrag: bei X im Post mit dem Video (d3-caption-auftrag-1), sonst am Ende. */
 function publisherPflichtzeile(kanal: CaptionKanal): string {
@@ -2033,7 +2044,7 @@ COUNSEL-REVIEW:
 ${maskiereAlter(maskiereKampagnenseiten(maskiereGeschuetzteNamen(ohneUrteilZeilen(counselOutput))), datierung)}
 
 AUFGABEN:
-1. Qualitätsprüfung: Fakten-Check, Ton, Länge
+1. Qualitätsprüfung: Fakten-Check, Ton, Länge${captionKanal === "x|thread" ? " (je Post höchstens 270 Zeichen; die Pflichtzeile zählt im ersten Post mit)" : ""}
 ${captionKanal !== null ? "2. Hashtags: nur die in der Caption, keine zusätzlichen; keine Title Tags, keine SEO-Description" : "2. SEO-Optimierung: Title Tags, Description, Hashtags"}
 3. Scheduling-Empfehlung: Bester Zeitpunkt für ${platform} (DACH-Zielgruppe)
 ${captionKanal !== null ? "4. Das Video ist fertig: keine Thumbnail-, Musik-, Schnitt- oder Einblendungsvorschläge" : "4. Thumbnail/Preview: Beschreibung für visuelles Asset"}
@@ -2084,14 +2095,27 @@ Modellrechnung-Disclaimer wörtlich.${datierungsHinweisPublisher(datierung)}${ob
     // wörtliche Zeile ersetzt statt verdoppelt; ersetzt hält die ersetzte Zeile fest (der Text war PUBLISHERs).
     // Schlussprüfung d3-caption-auftrag-1: Bei X kommt eine fehlende Zeile in den ersten Post (dort hängt das Video), vor
     // die Marke „2/…“; ohne Thread-Marken ans Ende.
+    // Prüfung f-caption-1: Eingesetzt wird nur im Abschnitt „Finaler Content“ (vor Publishing-Zeitpunkt, Cross-Promotion
+    // und Qualitätsprüfung), und jede Ergänzung steht als Warnung im Beleg („Lage prüfen“) — die Pipeline kennt die
+    // Gliederung der Antwort nur aus Überschriften und Postmarken.
+    // Prüfung f-caption-2: Bei X wird danach Post 1 gemessen, wie die Thread-Vorschau zählt. Über 280 Zeichen gibt es eine
+    // Warnung, keinen Abbruch: Die Zählung ist eine Näherung (X wertet URLs mit 23 Zeichen, manche Zeichen doppelt), ein
+    // Abbruch verwürfe einen bezahlten Lauf auch bei Fehlalarm. Der Betreiber sieht die Warnung vor dem Freigeben.
     if (mediumId !== null) {
       const p = pflichtzeileEinsetzen(freigabeText, KI_PFLICHTZEILE_CAPTION, captionKanal === "x|thread" ? "erster_post" : "ende");
       const ergaenzt = p.art !== "vorhanden";
       if (ergaenzt) {
         steps[3].output = p.text;
         freigabeText = p.text;
+        warnungen.push(vermerk("pipeline", "Pflichtzeile von der Pipeline ergänzt, Lage prüfen", PFLICHTZEILE_LAGE_TEXT[p.lage ?? "ende"]));
       }
       basisMetadata = { ...basisMetadata, pflichtzeile: { wortlaut: KI_PFLICHTZEILE_CAPTION, von_pipeline_ergaenzt: ergaenzt, ersetzt: p.ersetzt } };
+      if (captionKanal === "x|thread") {
+        const laenge = xPostEinsLaenge(freigabeText);
+        if (laenge !== null && laenge > X_POST_HOECHSTENS) {
+          warnungen.push(vermerk("pipeline", `X: Post 1 länger als ${X_POST_HOECHSTENS} Zeichen`, `${laenge} Zeichen, gezählt wie die Thread-Vorschau (URLs voll)`));
+        }
+      }
     }
 
     // R24 Namensschutz: Ein Freigabetext mit geschütztem Namen geht nie auf "zur_freigabe".
