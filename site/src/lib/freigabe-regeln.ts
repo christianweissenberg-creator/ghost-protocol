@@ -243,44 +243,58 @@ function nahForm(zeile: string): string {
 }
 
 /**
- * Zeilenanfang ohne Markdown-, Listen- und Nummernzeichen, klein — zum Erkennen der Abschnitte einer PUBLISHER-Antwort
- * („## Finaler Content“, „**Publishing-Zeitpunkt:**“, „5. Cross-Promotion: …“).
+ * Zeilenanfang ohne Markdown-, Listen- und Nummernzeichen und ohne Emoji (alles vor dem ersten Buchstaben oder einer
+ * Nummer „1.“), klein — zum Erkennen der Abschnitte einer PUBLISHER-Antwort („## 📝 Finaler Content“,
+ * „**Publishing-Zeitpunkt:**“, „5. Cross-Promotion: …“; Delta-Prüfung f2-pflichtzeile-1).
  */
 function abschnittsKopf(zeile: string): string {
   return zeile
     .trim()
-    .replace(/^(?:[#>*_~`\-•–—]+\s*|\d+[.)]\s+)+/u, "")
+    .replace(/^(?:[^\p{L}\p{N}]+|\d+[.)]\s+)+/u, "")
     .toLowerCase();
 }
 const KOPF_FINAL = /^finaler content\b/;
-const KOPF_DANACH = /^(?:publishing-zeitpunkt|cross-promotion|qualitätsprüfung|metadaten)/;
+const KOPF_DANACH = /^(?:empfohlene[rs]?\s+)?(?:publishing-zeitpunkt|scheduling|cross-promotion|qualitätsprüfung|metadaten)/;
 
 /**
  * Bereich des Abschnitts „Finaler Content“ in teile (gerade Indizes sind Zeilen; Prüfung f-caption-1): von seiner
- * Überschrift bis vor die nächste Zeile „Publishing-Zeitpunkt“, „Cross-Promotion“, „Qualitätsprüfung“ oder „Metadaten“.
- * Ohne diese Überschrift: der ganze Text (kopf false).
+ * Überschrift bis vor die nächste Zeile „Publishing-Zeitpunkt“, „Scheduling“, „Cross-Promotion“, „Qualitätsprüfung“ oder
+ * „Metadaten“. Ohne diese Überschrift (kopf false) gilt der Text bis vor den ersten solchen Abschnitt als Suchbereich der
+ * Postmarken (Delta-Prüfung f2-pflichtzeile-1): Eine Längenliste in der Qualitätsprüfung ist kein Thread.
  */
 function finalerAbschnitt(teile: readonly string[]): { von: number; bis: number; kopf: boolean } {
   const von = teile.findIndex((t, i) => i % 2 === 0 && KOPF_FINAL.test(abschnittsKopf(t)));
-  if (von < 0) return { von: 0, bis: teile.length, kopf: false };
+  if (von < 0) {
+    const andere = teile.findIndex((t, i) => i % 2 === 0 && KOPF_DANACH.test(abschnittsKopf(t)));
+    return { von: 0, bis: andere < 0 ? teile.length : andere, kopf: false };
+  }
   const bis = teile.findIndex((t, i) => i > von && i % 2 === 0 && KOPF_DANACH.test(abschnittsKopf(t)));
   return { von, bis: bis < 0 ? teile.length : bis, kopf: true };
 }
 
+/** Rest der Überschriftszeile hinter dem ersten Doppelpunkt („**Finaler Content:** 1/3 …“ → „ 1/3 …“), sonst leer. */
+function kopfRest(zeile: string): string {
+  const i = zeile.indexOf(":");
+  return i < 0 ? "" : zeile.slice(i + 1).replace(/^\s*\*{1,2}/u, "");
+}
+
 /**
- * Nummer einer Postmarke am Zeilenanfang: „1/3“, „**2/3**“, „(1/3)“, „🧵 1/3“, „Post 1/3:“, „Tweet 2/3“ (Prüfung
- * f-caption-1); sonst null.
+ * Nummer einer Postmarke am Zeilenanfang: „1/3“, „**2/3**“, „(1/3)“, „🧵 1/3“, „Post 1/3:“, „Tweet 2/3“, „Thread 1/2“,
+ * „Teil 2/3“ (Prüfung f-caption-1, Delta-Prüfung f2-pflichtzeile-2); sonst null.
  */
 function postNummer(zeile: string): number | null {
-  const m = /^[^\p{L}\p{N}]*?(?:(?:post|tweet)\s*)?\(?\s*(\d+)\s*\/\s*\d*\s*\)?/iu.exec(zeile.trim());
+  const m = /^[^\p{L}\p{N}]*?(?:(?:post|tweet|thread|teil)\s*)?\(?\s*(\d+)\s*\/\s*\d*\s*\)?/iu.exec(zeile.trim());
   return m ? Number(m[1]) : null;
 }
 
-/** Zeilen von Post 1 eines X-Threads im Bereich [von, bis): ab der Marke „1/…“ bis vor „2/…“; null ohne Marke „1/…“. */
-function ersterPostBereich(teile: readonly string[], von: number, bis: number): { eins: number; zwei: number } | null {
+/**
+ * Zeilen von Post 1 eines X-Threads im Bereich [von, bis): ab der Marke „1/…“ bis vor „2/…“; null ohne Marke „1/…“. In der
+ * Überschriftszeile („**Finaler Content:** 1/3 …“) zählt der Rest hinter dem Doppelpunkt (f2-pflichtzeile-2).
+ */
+function ersterPostBereich(teile: readonly string[], von: number, bis: number, kopf: boolean): { eins: number; zwei: number } | null {
   let eins = -1;
   for (let i = von; i < bis; i += 2) {
-    const n = postNummer(teile[i]);
+    const n = postNummer(kopf && i === von ? kopfRest(teile[i]) : teile[i]);
     if (eins < 0) {
       if (n === 1) eins = i;
     } else if (n === 2) {
@@ -293,6 +307,15 @@ function ersterPostBereich(teile: readonly string[], von: number, bis: number): 
 /** Wo pflichtzeileEinsetzen die Zeile gesetzt hat (für die Warnung der Pipeline); null, wenn sie schon da war. */
 export type PflichtzeilenLage = "erster_post" | "abschnitt" | "ende" | "ersetzt";
 
+/** Ergebnis von pflichtzeileEinsetzen; hinter ist die Zeile, hinter der die Pflichtzeile eingesetzt wurde (f2-pflichtzeile-1). */
+export interface PflichtzeilenEinsatz {
+  text: string;
+  art: "vorhanden" | "ersetzt" | "angehaengt";
+  ersetzt: string | null;
+  lage: PflichtzeilenLage | null;
+  hinter: string | null;
+}
+
 /**
  * Pflichtzeile einsetzen: vorhanden (wörtlich als eigene Zeile) → unverändert; eine nahe Variante (Schlusspunkt,
  * anderer Bindestrich, geschütztes Leerzeichen, Fettdruck, Emoji davor, Großschrift) → durch die wörtliche Zeile
@@ -301,36 +324,34 @@ export type PflichtzeilenLage = "erster_post" | "abschnitt" | "ende" | "ersetzt"
  * als letzte Zeile von Post 1 vor die Marke „2/…“, sonst ans Ende des Abschnitts, vor Publishing-Zeitpunkt,
  * Cross-Promotion und Qualitätsprüfung. Ohne diese Überschrift (und ohne folgenden Abschnitt) wie bisher ans Ende des Texts.
  */
-export function pflichtzeileEinsetzen(
-  text: string,
-  pflichtzeile: string,
-  ort: "ende" | "erster_post" = "ende"
-): { text: string; art: "vorhanden" | "ersetzt" | "angehaengt"; ersetzt: string | null; lage: PflichtzeilenLage | null } {
+export function pflichtzeileEinsetzen(text: string, pflichtzeile: string, ort: "ende" | "erster_post" = "ende"): PflichtzeilenEinsatz {
   const soll = pflichtzeile.trim();
-  if (enthaeltPflichtzeile(text, soll)) return { text, art: "vorhanden", ersetzt: null, lage: null };
+  if (enthaeltPflichtzeile(text, soll)) return { text, art: "vorhanden", ersetzt: null, lage: null, hinter: null };
   const teile = text.split(/(\r?\n)/);
   const ziel = nahForm(soll);
   for (let i = 0; i < teile.length; i += 2) {
     if (teile[i].trim() !== "" && nahForm(teile[i]) === ziel) {
       const alt = teile[i];
       teile[i] = soll;
-      return { text: teile.join(""), art: "ersetzt", ersetzt: alt, lage: "ersetzt" };
+      return { text: teile.join(""), art: "ersetzt", ersetzt: alt, lage: "ersetzt", hinter: null };
     }
   }
   const { von, bis, kopf } = finalerAbschnitt(teile);
-  const post = ort === "erster_post" ? ersterPostBereich(teile, von, bis) : null;
+  const post = ort === "erster_post" ? ersterPostBereich(teile, von, bis, kopf) : null;
   // Einsetzen hinter der letzten nicht leeren Zeile vor grenze (frühestens hinter unten), mit dem Zeilenumbruch des Texts.
-  const hinterLetzter = (unten: number, grenze: number, lage: PflichtzeilenLage) => {
+  const hinterLetzter = (unten: number, grenze: number, lage: PflichtzeilenLage): PflichtzeilenEinsatz => {
     let letzte = grenze - 2;
     while (letzte > unten && teile[letzte].trim() === "") letzte -= 2;
+    const hinter = teile[letzte].trim();
     const nl = teile[letzte + 1] ?? "\n";
     teile.splice(letzte + 1, 0, nl, "", nl, soll);
-    return { text: teile.join(""), art: "angehaengt" as const, ersetzt: null, lage };
+    return { text: teile.join(""), art: "angehaengt", ersetzt: null, lage, hinter };
   };
   if (post !== null && post.zwei < bis) return hinterLetzter(post.eins, post.zwei, "erster_post");
   if (kopf && bis < teile.length) return hinterLetzter(von, bis, "abschnitt");
   const rumpf = text.replace(/\s+$/u, "");
-  return { text: rumpf === "" ? soll : `${rumpf}\n\n${soll}`, art: "angehaengt", ersetzt: null, lage: "ende" };
+  const letzteZeile = rumpf.split(/\r?\n/).at(-1)?.trim() ?? "";
+  return { text: rumpf === "" ? soll : `${rumpf}\n\n${soll}`, art: "angehaengt", ersetzt: null, lage: "ende", hinter: rumpf === "" ? null : letzteZeile };
 }
 
 /** Höchstlänge eines Posts auf X, wie die Thread-Vorschau auf /content (TWEET_MAX). */
@@ -345,16 +366,16 @@ export const X_POST_HOECHSTENS = 280;
 export function xPostEinsLaenge(text: string): number | null {
   const teile = text.split(/(\r?\n)/);
   const { von, bis, kopf } = finalerAbschnitt(teile);
-  const post = ersterPostBereich(teile, von, bis);
+  const post = ersterPostBereich(teile, von, bis, kopf);
+  // In der Überschriftszeile zählt nur der Rest hinter dem Doppelpunkt (f2-pflichtzeile-2).
+  const zeile = (i: number) => (kopf && i === von ? kopfRest(teile[i]) : teile[i]);
   let zeilen: string[];
   if (post !== null) {
     zeilen = [];
-    for (let i = post.eins; i < post.zwei; i += 2) zeilen.push(teile[i]);
+    for (let i = post.eins; i < post.zwei; i += 2) zeilen.push(zeile(i));
   } else if (kopf) {
-    const k = teile[von];
-    const rest = k.includes(":") ? k.slice(k.indexOf(":") + 1) : "";
-    zeilen = [rest];
-    for (let i = von + 2; i < bis; i += 2) zeilen.push(teile[i]);
+    zeilen = [];
+    for (let i = von; i < bis; i += 2) zeilen.push(zeile(i));
   } else {
     return null;
   }

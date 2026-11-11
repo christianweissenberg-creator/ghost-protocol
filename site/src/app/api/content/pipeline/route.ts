@@ -676,7 +676,7 @@ ${allgemein.join("\n")}`;
 const PFLICHTZEILE_LAGE_TEXT: Record<PflichtzeilenLage, string> = {
   erster_post: "als letzte Zeile von Post 1 eingesetzt (vor der Marke „2/…“)",
   abschnitt: "am Ende des Abschnitts „Finaler Content“ eingesetzt",
-  ende: "ans Ende des Texts gehängt (kein Abschnitt „Finaler Content“ mit folgendem Abschnitt erkannt)",
+  ende: "ans Ende des Texts gehängt (kein Abschnitt „Finaler Content“ mit folgendem Abschnitt und kein Thread davor erkannt)",
   ersetzt: "eine nahe Variante durch den Wortlaut ersetzt",
 };
 
@@ -2107,7 +2107,9 @@ Modellrechnung-Disclaimer wörtlich.${datierungsHinweisPublisher(datierung)}${ob
       if (ergaenzt) {
         steps[3].output = p.text;
         freigabeText = p.text;
-        warnungen.push(vermerk("pipeline", "Pflichtzeile von der Pipeline ergänzt, Lage prüfen", PFLICHTZEILE_LAGE_TEXT[p.lage ?? "ende"]));
+        // Delta-Prüfung f2-pflichtzeile-1: Das Detail nennt die tatsächliche Nachbarzeile, nicht nur die beabsichtigte Lage.
+        const hinter = p.hinter === null ? "" : `, hinter: „${p.hinter.length > 60 ? `${p.hinter.slice(0, 59)}…` : p.hinter}“`;
+        warnungen.push(vermerk("pipeline", "Pflichtzeile von der Pipeline ergänzt, Lage prüfen", `${PFLICHTZEILE_LAGE_TEXT[p.lage ?? "ende"]}${hinter}`));
       }
       basisMetadata = { ...basisMetadata, pflichtzeile: { wortlaut: KI_PFLICHTZEILE_CAPTION, von_pipeline_ergaenzt: ergaenzt, ersetzt: p.ersetzt } };
       if (captionKanal === "x|thread") {

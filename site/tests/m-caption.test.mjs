@@ -342,7 +342,7 @@ test("M-C4 Caption-Lauf: medium_id in metadata, SCRIBE-Auftrag mit Auftragsart u
   assert.deepEqual(z.metadata.pflichtzeile, { wortlaut: PFLICHTZEILE, von_pipeline_ergaenzt: true, ersetzt: null });
   assert.equal(z.metadata.lauf_id, "lauf-caption-0001");
   // Prüfung f-caption-1: Jede Ergänzung steht als Warnung im Beleg, mit der Lage.
-  const warnung = [{ stufe: "pipeline", grund: LAGE_PRUEFEN, detail: "als letzte Zeile von Post 1 eingesetzt (vor der Marke „2/…“)" }];
+  const warnung = [{ stufe: "pipeline", grund: LAGE_PRUEFEN, detail: "als letzte Zeile von Post 1 eingesetzt (vor der Marke „2/…“), hinter: „1/2 Denkmal-AfA bis 100 %. Visualisierung: KI-generiert.“" }];
   assert.deepEqual(ohneZeit(r.body.warnungen), warnung);
   assert.deepEqual(ohneZeit(z.metadata.warnungen), warnung);
 });
@@ -636,7 +636,7 @@ test("M-C15 Fehlende Pflichtzeile im Abschnitt „Finaler Content“ (Prüfung f
   assert.ok(!pub.includes("im Post mit dem Video") && !pub.includes("je Post höchstens 270 Zeichen"));
   assert.ok(auftrag("scribe").includes(`\n${ANWEISUNG_PFLICHT_ENDE}\n`));
   assert.equal(ig.z.body, vorZeitpunkt(ig.roh));
-  assert.deepEqual(ohneZeit(ig.z.metadata.warnungen), warnung(ABSCHNITT));
+  assert.deepEqual(ohneZeit(ig.z.metadata.warnungen), warnung(`${ABSCHNITT}, hinter: „#Denkmal #RitterGut“`));
   assert.deepEqual(ig.z.metadata.pflichtzeile, { wortlaut: PFLICHTZEILE, von_pipeline_ergaenzt: true, ersetzt: null });
 
   // Instagram mit Postmarken und einer Cross-Promotion-Zeile direkt danach: vor die Cross-Promotion, nicht in Post 1.
@@ -646,20 +646,22 @@ test("M-C15 Fehlende Pflichtzeile im Abschnitt „Finaler Content“ (Prüfung f
   // X-Einzelpost in der Gliederung: Der Post mit dem Video ist der finale Content.
   const einzel = await lauf({}, gegliedert((link) => `Das Video zeigt den Hof bei Nacht. ${link}\n#Denkmal`));
   assert.equal(einzel.z.body, vorZeitpunkt(einzel.roh));
-  assert.deepEqual(ohneZeit(einzel.z.metadata.warnungen), warnung(ABSCHNITT));
+  assert.deepEqual(ohneZeit(einzel.z.metadata.warnungen), warnung(`${ABSCHNITT}, hinter: „#Denkmal“`));
 
   // X mit „Post 1/3:“, davor eine Längenliste in der Qualitätsprüfung: Die Zeile kommt in Post 1 des finalen Contents.
   const mitListe = (task) =>
     `Qualitätsprüfung:\n1/3: 84 Zeichen\n2/3: 90 Zeichen\n\n${gegliedert((link) => `Post 1/3: Das Video zeigt den Hof bei Nacht.\nPost 2/3: Denkmal-AfA bis 100 %.\nPost 3/3: Mehr: ${link}`)(task)}`;
   const liste = await lauf({}, mitListe);
   assert.equal(liste.z.body, liste.roh.replace("\nPost 2/3:", `\n\n${PFLICHTZEILE}\nPost 2/3:`));
-  assert.deepEqual(ohneZeit(liste.z.metadata.warnungen), warnung("als letzte Zeile von Post 1 eingesetzt (vor der Marke „2/…“)"));
+  assert.deepEqual(ohneZeit(liste.z.metadata.warnungen), warnung("als letzte Zeile von Post 1 eingesetzt (vor der Marke „2/…“), hinter: „Post 1/3: Das Video zeigt den Hof bei Nacht.“"));
+  // Die Längenmessung nimmt Post 1 des finalen Contents, nicht den Eintrag der Längenliste (f2-pflichtzeile-3).
+  assert.equal(regeln.xPostEinsLaenge(liste.z.body), "Post 1/3: Das Video zeigt den Hof bei Nacht.".length + 2 + PFLICHTZEILE.length);
 
   // Ohne folgenden Abschnitt: ans Ende des Texts, wie bisher.
   const ohneFolge = (task) => `Finaler Content: Das Video zeigt den Hof bei Nacht. ${linkAusAuftrag(task)}\n#Denkmal`;
   const ende = await lauf({}, ohneFolge);
   assert.equal(ende.z.body, `${ende.roh}\n\n${PFLICHTZEILE}`);
-  assert.deepEqual(ohneZeit(ende.z.metadata.warnungen), warnung("ans Ende des Texts gehängt (kein Abschnitt „Finaler Content“ mit folgendem Abschnitt erkannt)"));
+  assert.deepEqual(ohneZeit(ende.z.metadata.warnungen), warnung("ans Ende des Texts gehängt (kein Abschnitt „Finaler Content“ mit folgendem Abschnitt und kein Thread davor erkannt), hinter: „#Denkmal“"));
 
   // Eine nahe Variante wird ersetzt — auch das ist eine Ergänzung mit Warnung; steht die Zeile schon da, keine Warnung.
   const nah = await lauf({}, gegliedert((link) => `1/2 Das Video zeigt den Hof.\n${PFLICHTZEILE}.\n2/2 Mehr: ${link}`));
