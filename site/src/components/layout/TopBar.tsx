@@ -1,7 +1,7 @@
 "use client";
 
-import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
+import { useAktivPfad } from "@/components/layout/aktiv-pfad";
 import { maskiereGeschuetzteNamen } from "@/lib/freigabe-regeln";
 import { kostenLuecke, kostenZeitraum, useSystemStatus, type SystemStatusLesung } from "@/lib/hooks-status";
 // Aus lib/types, nicht aus den Panels: sonst lüde die TopBar auf jeder Seite lib/hooks mit.
@@ -152,7 +152,9 @@ function kostenHeute(lesung: SystemStatusLesung): { text: string; title: string 
 }
 
 export function TopBar({ onMenu }: { onMenu?: () => void }) {
-  const pathname = usePathname();
+  // Nicht usePathname(): Unter der per Rewrite ausgelieferten Login-Seite wiche die Brotkrume
+  // im Browser vom Server-HTML ab (React #418, components/layout/aktiv-pfad.ts).
+  const pathname = useAktivPfad();
   const crumb = CRUMB[pathname] ?? "Command Center";
   const lesung = useSystemStatus();
   // Browserzeit als State: Uhr und Frische-Prüfung der LIVE-Pille, ohne Date.now() im Render.

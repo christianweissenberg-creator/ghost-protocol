@@ -88,7 +88,7 @@ function topBar() {
     "components/layout/TopBar.tsx",
     {
       ...ECHT,
-      "next/navigation": { usePathname: () => "/" },
+      "@/components/layout/aktiv-pfad": { useAktivPfad: () => "/" },
       "@/lib/freigabe-regeln": regeln,
       "@/lib/hooks-status": hooksStatus,
       "@/lib/types": types,

@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { useAktivPfad } from "@/components/layout/aktiv-pfad";
 import { STUDIO_EINSTIEG } from "@/lib/studio/objekte";
 
 // Prototyp-Vorbild: Gold-Diamant-Logo, gruppierte Nav mit Icons,
@@ -42,7 +42,9 @@ const TIER_INDICATORS = [
 ];
 
 export function Sidebar({ open = false, onClose }: { open?: boolean; onClose?: () => void }) {
-  const pathname = usePathname();
+  // Nicht usePathname(): Unter der per Rewrite ausgelieferten Login-Seite wiche die Aktivmarke
+  // im Browser vom Server-HTML ab (React #418, components/layout/aktiv-pfad.ts).
+  const pathname = useAktivPfad();
 
   return (
     <aside
