@@ -1398,9 +1398,11 @@ test("MP-31 Prüfbereich während des Speicherns (Schlussprüfung d3-rauchtest-r
       await b.ruhe();
       assert.equal(gesendet.length, 1, `${fall}: kein zweiter POST`);
     } finally {
+      // Tor öffnen und die Antwort abwarten — auch wenn eine Zusicherung oben scheitert, damit der POST nicht in den
+      // nächsten Test hinein ein Protokoll schreibt.
       auf();
+      await b.ruhe();
     }
-    await b.ruhe();
     b.ansicht();
     assert.equal(b.aufrufe.at(-1).gehalten.sendetAls, null, `${fall}: nach dem Ausgang geleert`);
     assert.equal(b.knoten("data-pruef-speichert"), null, fall);
