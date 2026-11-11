@@ -1414,6 +1414,17 @@ test("MP-31 Prüfbereich während des Speicherns (Schlussprüfung d3-rauchtest-r
       assert.equal(b.knoten("data-erneut-speichern"), null);
     }
   }
+  // Nach einem Ausgang leert die Ansicht nur ihre eigene Anfrage: Läuft inzwischen eine andere (nach einer Änderung in
+  // der neuen Ansicht gesendet), bleibt diese gemerkt.
+  const b = await pruefBereichLaufzeit(async () => new Response("{}"));
+  b.oeffne(true);
+  const gehalten = () => (b.ansicht(), b.aufrufe.at(-1).gehalten);
+  gehalten().merkeSendet("anfrage-a", true);
+  gehalten().merkeSendet("anfrage-b", true);
+  gehalten().merkeSendet("anfrage-a", false);
+  assert.equal(gehalten().sendetAls, "anfrage-b", "die laufende andere Anfrage bleibt");
+  gehalten().merkeSendet("anfrage-b", false);
+  assert.equal(gehalten().sendetAls, null);
 });
 
 test("MP-23 Prüfansicht (Nachbesserung oberflaeche-7): Felder während des Speicherns gesperrt; nach Erfolg kein zweites Protokoll ohne Änderung; jede Änderung (auch eine Klausel) gibt den Knopf frei; Enter in einem Eingabefeld sendet nicht ab", async () => {
