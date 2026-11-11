@@ -18,7 +18,21 @@
 // - Die offene Lauf-ID je Video steht in sessionStorage (Nachtrag d2-text-erzeugen-4): Nach Neuladen oder Zurück im selben
 //   Tab sendet „Erneut senden …“ dieselbe ID (der Server antwortet 409, wenn der Lauf schon läuft), und die Karte nennt
 //   den Lauf ohne bekannten Ausgang. Gelesen wird erst nach dem Einhängen (sonst wiche das erste Bild vom Server-HTML ab).
-//   Ein zweiter Tab hat einen eigenen sessionStorage; dort hilft nur der Stapel. Eine Doppelsperre am Server (409 bei einer
+//   Ein zweiter Tab hat einen eigenen sessionStorage; dort hilft nur der Stapel.
+// - Abgleich mit den geladenen Captions (Schlussprüfung d3-kosten-knopf-3, Prüfung f-knopf-pruefung-1): Trägt eine Caption
+//   dieses Videos die offene Lauf-ID und steht sie in einem Endzustand (LAUF_VORBEI), ist der Ausgang bekannt. Der Eintrag
+//   geht weg, die Karte nennt „Caption #N (Status …) zu diesem Lauf“, und „Text erzeugen …“ gilt wieder mit neuer ID. In
+//   „entwurf“ und „counsel_geprueft“ (oder einem unbekannten Status) läuft der Lauf noch oder hängt: Die ID bleibt, die
+//   Karte nennt die Caption als nicht fertig, und „Erneut senden …“ bekommt 409.
+// - Dieselbe Regel gilt für die Antwort des Servers (Delta-Prüfung f2-endzustand-1): Ein 409 mit Zeile und einem Status
+//   außerhalb LAUF_VORBEI (oder ohne Status) verbraucht die ID nicht. Die Karte behält sie und nennt die Zeile als nicht
+//   fertig; „Erneut senden …“ fragt den Stand erneut ab. Erst ein Endzustand (im 409 oder in den geladenen Captions) gibt
+//   sie frei. Hängt eine Zeile wirklich, gibt „Lauf-ID verwerfen …“ sie nach einer Bestätigung bewusst frei; läuft der
+//   Lauf doch noch, startet „Text erzeugen …“ danach einen zweiten bezahlten Lauf, und die Bestätigung sagt das.
+// - Feste Lage (Schlussprüfung f3-lauf-id-1): Öffnet „Text erzeugen …“, „Erneut senden …“ oder „Lauf-ID verwerfen …“ eine
+//   Frage, bleiben Hinweise und Knopfzeile stehen (nur gesperrt), und die Frage erscheint darunter. So rückt „Ja“ nie unter
+//   den gerade geklickten Knopf; ein Doppelklick überspringt keine Bestätigung.
+// - Eine Doppelsperre am Server (409 bei einer
 //   Zeile zu medium_id, Kanal und Format in entwurf/counsel_geprueft) gibt es bewusst nicht: Ein abgebrochener Lauf ließe
 //   seine Zeile dort stehen und hielte jede weitere Caption zu diesem Video und Kanal fest, bis jemand sie umstellt.
 // Keine Zahl ohne Quelle: Gemessene Kosten je Lauf gibt es vorab nicht; die Antwort nennt die geschätzten Kosten des Laufs.
@@ -26,6 +40,7 @@
 import { useEffect, useRef, useState } from "react";
 import { FARBE_BERNSTEIN, FARBE_GRUEN, FARBE_ROT, istObjekt, maskiert } from "@/components/studio/beleg-hilfen";
 import { berlinDatumZeit } from "@/lib/types";
+import type { StudioAsset } from "@/lib/studio/typen";
 
 export type Holen = (url: string, init?: RequestInit) => Promise<Response>;
 
@@ -62,7 +77,7 @@ export function laufKoerper(slug: string, mediumId: number, wahl: string, katego
 
 export type LaufAusgang =
   | { art: "ergebnis"; status: string; contentId: number | null; text: string }
-  | { art: "existiert"; contentId: number | null; text: string }
+  | { art: "existiert"; contentId: number | null; status: string | null; text: string }
   | { art: "abgewiesen"; text: string }
   | { art: "abgebrochen"; contentId: number | null; text: string }
   | { art: "nicht_gestartet"; text: string }
@@ -141,7 +156,12 @@ export function laufAusgang(status: number | null, daten: unknown): LaufAusgang 
   }
   const fehler = serverText(d);
   if (d && status === 409) {
-    return { art: "existiert", contentId: nummer, text: maskiert(`Lauf existiert bereits${nummer === null ? "" : ` (#${nummer})`} — kein zweiter Lauf gestartet${fehler ? ` · ${fehler}` : ""}`) };
+    return {
+      art: "existiert",
+      contentId: nummer,
+      status: typeof d.status === "string" ? d.status : null,
+      text: maskiert(`Lauf existiert bereits${nummer === null ? "" : ` (#${nummer})`} — kein zweiter Lauf gestartet${fehler ? ` · ${fehler}` : ""}`),
+    };
   }
   if (d && status >= 400 && status < 500) return { art: "abgewiesen", text: maskiert(`Lauf abgewiesen (HTTP ${status}): ${fehler ?? "ohne Fehlertext"}`) };
   if (d && fehler !== null) {
@@ -167,7 +187,12 @@ export function ausgangBeiWiederholung(ausgang: LaufAusgang, wiederholung: boole
   return { art: "unbekannt", contentId: null, text: `${AUSGANG_UNBEKANNT_FRUEHER} · Dieser Versuch: ${ausgang.text}` };
 }
 
-type Stand = { art: "zu" } | { art: "bestaetigen"; laufId: string } | { art: "laeuft"; laufId: string } | { art: "ausgang"; ausgang: LaufAusgang };
+type Stand =
+  | { art: "zu" }
+  | { art: "bestaetigen"; laufId: string }
+  | { art: "laeuft"; laufId: string }
+  | { art: "verwerfen" }
+  | { art: "ausgang"; ausgang: LaufAusgang };
 
 /** Ein Lauf über holen (fetch). Wirft nie — jeder Fehler wird zum Ausgang. */
 export async function sendeCaptionLauf(holen: Holen, koerper: ReturnType<typeof laufKoerper>): Promise<LaufAusgang> {
@@ -211,6 +236,43 @@ export function leseOffenenLauf(speicher: Speicher | null, schluessel: string): 
   }
 }
 
+/** Caption zu einem Video aus der Lesung des Studios: content-Zeile, ihr Status und die Lauf-ID aus metadata.lauf_id. */
+export type CaptionZumLauf = { contentId: number; status: string; laufId: string };
+
+const KEINE_CAPTIONS: readonly CaptionZumLauf[] = [];
+
+/**
+ * Status, mit denen ein Caption-Lauf vorbei ist — Positivliste (Prüfung f-knopf-pruefung-1): Die Pipeline endet mit
+ * zur_freigabe, abgelehnt oder fehler; danach setzt nur der Betreiber freigegeben oder gepostet. „entwurf“ (RESEARCHER bis
+ * COUNSEL-Vorprüfung) und „counsel_geprueft“ (PUBLISHER, Endprüfung, AMPLIFIER) heißen: Der Lauf kann noch laufen. Ein
+ * unbekannter Status zählt ebenso; dann bleibt die ID, und der Server antwortet 409 statt eines zweiten Laufs.
+ */
+export const LAUF_VORBEI: ReadonlySet<string> = new Set(["zur_freigabe", "abgelehnt", "fehler", "freigegeben", "gepostet"]);
+
+/**
+ * Bleibt die Lauf-ID nach diesem Ausgang offen? Ja bei unbekanntem Ausgang und bei einem 409 mit Zeile, deren Status kein
+ * Endzustand ist oder fehlt (Delta-Prüfung f2-endzustand-1): Dann läuft der Lauf mit dieser ID noch oder hängt, und ein
+ * neuer Lauf darf nicht ohne bewusste Entscheidung starten.
+ */
+export function laufNochOffen(ausgang: LaufAusgang): boolean {
+  if (ausgang.art === "unbekannt") return true;
+  return ausgang.art === "existiert" && ausgang.contentId !== null && (ausgang.status === null || !LAUF_VORBEI.has(ausgang.status));
+}
+
+/**
+ * Captions zu einem Video aus den geladenen Assets (Schlussprüfung d3-kosten-knopf-3): Zeilen mit metadata.medium_id gleich
+ * dem Video und einer Lauf-ID nach Vertrag. Ohne lesbare Assets keine; dann bleibt es beim 409 des Servers.
+ */
+export function captionsZumVideo(assets: readonly Pick<StudioAsset, "beleg">[] | null | undefined, mediumId: number): CaptionZumLauf[] {
+  const aus: CaptionZumLauf[] = [];
+  for (const a of assets ?? []) {
+    const m: unknown = a.beleg.metadata;
+    if (!istObjekt(m) || m.medium_id !== mediumId || typeof m.lauf_id !== "string" || !LAUF_ID_MUSTER.test(m.lauf_id)) continue;
+    aus.push({ contentId: a.beleg.id, status: a.beleg.status, laufId: m.lauf_id });
+  }
+  return aus;
+}
+
 /** Offenen Lauf schreiben (null: entfernen). Scheitert der Speicher, bleibt es beim Zustand der Karte. */
 function merkeOffenenLauf(speicher: Speicher | null, schluessel: string, lauf: OffenerLauf | null): void {
   try {
@@ -228,6 +290,7 @@ export function TextErzeugen({
   fertig,
   sperre = null,
   speicher,
+  captions = KEINE_CAPTIONS,
 }: {
   slug: string;
   medium: { id: number; sha256: string };
@@ -237,6 +300,8 @@ export function TextErzeugen({
   sperre?: { freigebbar: boolean; gruende: readonly string[] } | null;
   /** Speicher der offenen Lauf-ID (Standard: sessionStorage; Tests: Attrappe). */
   speicher?: Speicher | null;
+  /** Geladene Captions zu diesem Video (captionsZumVideo), für den Abgleich mit der offenen Lauf-ID. */
+  captions?: readonly CaptionZumLauf[];
 }) {
   const [wahl, setWahl] = useState<string>(CAPTION_WAHL[0].wert);
   const [kategorie, setKategorie] = useState<string>(KATEGORIEN[0].wert);
@@ -247,6 +312,10 @@ export function TextErzeugen({
   const sendet = useRef(false);
   // Offener Lauf aus dem Speicher dieses Tabs (Neuladen, Zurück): erst nach dem Einhängen gelesen.
   const [gemerkt, setGemerkt] = useState<OffenerLauf | null>(null);
+  // Caption mit bekanntem Ausgang zur zuletzt offenen Lauf-ID (Abgleich mit den geladenen Captions).
+  const [bekannt, setBekannt] = useState<{ caption: CaptionZumLauf; laufId: string } | null>(null);
+  // Zeile zur offenen Lauf-ID laut dem letzten 409 (f2-endzustand-1), bis die geladenen Captions sie zeigen.
+  const [laut409, setLaut409] = useState<{ laufId: string; contentId: number; status: string | null } | null>(null);
   const schluessel = speicherSchluessel(slug, medium.id);
   const ablage = speicher === undefined ? browserSpeicher() : speicher;
   useEffect(() => {
@@ -255,7 +324,34 @@ export function TextErzeugen({
     setGemerkt(o);
     setOffeneLaufId((jetzt) => jetzt ?? o.laufId);
   }, [ablage, schluessel]);
-  const gesperrt = stand.art === "bestaetigen" || stand.art === "laeuft";
+  const gesperrt = stand.art === "bestaetigen" || stand.art === "laeuft" || stand.art === "verwerfen";
+  // Schlussprüfung d3-kosten-knopf-3, Prüfung f-knopf-pruefung-1: Steht die offene Lauf-ID an einer geladenen Caption in einem
+  // Endzustand, ist ihr Ausgang bekannt — nur, solange kein Versuch gezeigt wird oder läuft. Eine Caption mit der ID in einem
+  // anderen Status gehört zu einem Lauf, der noch laufen kann: Die ID bleibt, die Karte nennt die Caption.
+  const zuDieserId = offeneLaufId === null || gesperrt ? null : (captions.find((c) => c.laufId === offeneLaufId) ?? null);
+  const zumLauf = zuDieserId !== null && LAUF_VORBEI.has(zuDieserId.status) ? zuDieserId : null;
+  // Noch nicht fertig: laut den geladenen Captions, sonst laut dem letzten 409 zu dieser ID.
+  const inCaptions = offeneLaufId === null ? null : (captions.find((c) => c.laufId === offeneLaufId) ?? null);
+  const laufend: { contentId: number; status: string | null } | null =
+    inCaptions !== null
+      ? LAUF_VORBEI.has(inCaptions.status)
+        ? null
+        : inCaptions
+      : laut409 !== null && laut409.laufId === offeneLaufId
+        ? laut409
+        : null;
+  // Eine Frage ist offen (bezahlter Lauf oder Verwerfen): Hinweise und Knopfzeile bleiben stehen, gesperrt (f3-lauf-id-1).
+  const frage = stand.art === "bestaetigen" || stand.art === "verwerfen";
+  const nichtLaufend = stand.art !== "laeuft";
+  useEffect(() => {
+    if (zumLauf === null) return;
+    merkeOffenenLauf(ablage, schluessel, null);
+    setOffeneLaufId(null);
+    setGemerkt(null);
+    setLaut409(null);
+    setBekannt({ caption: zumLauf, laufId: zumLauf.laufId });
+    setStand({ art: "zu" });
+  }, [zumLauf, ablage, schluessel]);
   const w = CAPTION_WAHL.find((x) => x.wert === wahl) ?? CAPTION_WAHL[0];
   const k = KATEGORIEN.find((x) => x.wert === kategorie) ?? KATEGORIEN[0];
 
@@ -276,21 +372,36 @@ export function TextErzeugen({
     // Wiederholung: Dieser Versuch sendet die offene ID eines Versuchs mit unbekanntem Ausgang (vor dem Senden bestimmt).
     const wiederholung = offeneLaufId === laufId;
     try {
+      setBekannt(null);
       setStand({ art: "laeuft", laufId });
       setOffeneLaufId(laufId);
-      const seit = new Date().toISOString();
+      // Schlussprüfung f3-lauf-id-3: Bei einer Wiederholung derselben ID bleibt der gespeicherte Startzeitpunkt.
+      const frueher = wiederholung ? leseOffenenLauf(ablage, schluessel) : null;
+      const seit = frueher !== null && frueher.laufId === laufId && frueher.seit !== "" ? frueher.seit : new Date().toISOString();
       merkeOffenenLauf(ablage, schluessel, { laufId, art: "laeuft", seit });
       const ausgang = ausgangBeiWiederholung(await sendeCaptionLauf(holen, laufKoerper(slug, medium.id, wahl, kategorie, laufId)), wiederholung);
       setStand({ art: "ausgang", ausgang });
-      // Nach einem bekannten Ausgang ist die ID verbraucht; nach einem unbekannten bleibt sie für den nächsten Versuch.
-      const offen = ausgang.art === "unbekannt";
+      // Nach einem bekannten Ausgang ist die ID verbraucht; nach einem unbekannten und nach einem 409 mit nicht fertiger
+      // Zeile bleibt sie für den nächsten Versuch (laufNochOffen, f2-endzustand-1).
+      const offen = laufNochOffen(ausgang);
       setOffeneLaufId(offen ? laufId : null);
       merkeOffenenLauf(ablage, schluessel, offen ? { laufId, art: "unbekannt", seit } : null);
+      setLaut409(offen && ausgang.art === "existiert" && ausgang.contentId !== null ? { laufId, contentId: ausgang.contentId, status: ausgang.status } : null);
       setGemerkt(null);
       if ("contentId" in ausgang && ausgang.contentId !== null) fertig();
     } finally {
       sendet.current = false;
     }
+  };
+
+  /** Bewusst verwerfen (f2-endzustand-1): Eintrag weg, die nächste Bestätigung nennt eine neue Lauf-ID. */
+  const verwerfen = () => {
+    merkeOffenenLauf(ablage, schluessel, null);
+    setOffeneLaufId(null);
+    setGemerkt(null);
+    setLaut409(null);
+    setBekannt(null);
+    setStand({ art: "zu" });
   };
 
   const farbe = (a: LaufAusgang) => (a.art === "ergebnis" && (a.status === "complete" || a.status === "partial") ? FARBE_GRUEN : a.art === "unbekannt" || a.art === "existiert" ? FARBE_BERNSTEIN : FARBE_ROT);
@@ -320,22 +431,63 @@ export function TextErzeugen({
           </select>
         </label>
       </div>
-      {gemerkt !== null && stand.art === "zu" && offeneLaufId === gemerkt.laufId && (
+      {gemerkt !== null && (stand.art === "zu" || frage) && offeneLaufId === gemerkt.laufId && (
         <p className="mt-2 break-words" style={{ color: FARBE_BERNSTEIN }} data-text-erzeugen-gemerkt={gemerkt.art}>
           Caption-Lauf zu diesem Video ohne bekannten Ausgang (in diesem Tab gestartet
           {berlinDatumZeit(gemerkt.seit) === null ? "" : ` am ${berlinDatumZeit(gemerkt.seit)} (Europe/Berlin)`}, Lauf-ID {gemerkt.laufId.slice(0, 8)}…) — er kann noch laufen.
           „Erneut senden …“ schickt dieselbe Lauf-ID; läuft er schon, antwortet der Server 409 statt einen zweiten Lauf zu starten.
         </p>
       )}
-      {stand.art !== "bestaetigen" && stand.art !== "laeuft" && (
+      {laufend !== null && nichtLaufend && (
+        <p className="mt-2 break-words" style={{ color: FARBE_BERNSTEIN }} data-text-erzeugen-laufend={laufend.contentId}>
+          Caption #{laufend.contentId} (Status {laufend.status === null ? "nicht gemeldet" : maskiert(laufend.status)}) gehört zu diesem Lauf und ist noch nicht fertig.
+        </p>
+      )}
+      {bekannt !== null && (stand.art === "zu" || frage) && offeneLaufId === null && (
+        <p className="mt-2 break-words" style={{ color: "var(--gp-ink-2)" }} data-text-erzeugen-bekannt={bekannt.caption.contentId}>
+          Caption #{bekannt.caption.contentId} (Status {maskiert(bekannt.caption.status)}) zu diesem Lauf (Lauf-ID {bekannt.laufId.slice(0, 8)}…) — der Ausgang
+          ist bekannt. „Text erzeugen …“ startet einen neuen Lauf mit neuer Lauf-ID.
+        </p>
+      )}
+      {nichtLaufend && (
         <button
           type="button"
           onClick={zeigen}
-          className="mt-2 min-h-11 px-4 py-2 rounded-lg text-xs font-medium bg-surface-elevated text-foreground hover:opacity-80 transition-opacity"
+          disabled={frage}
+          aria-disabled={frage}
+          className="mt-2 min-h-11 px-4 py-2 rounded-lg text-xs font-medium bg-surface-elevated text-foreground hover:opacity-80 transition-opacity disabled:opacity-40"
           data-text-erzeugen-knopf
         >
           {offeneLaufId === null ? "Text erzeugen …" : "Erneut senden …"}
         </button>
+      )}
+      {laufend !== null && nichtLaufend && offeneLaufId !== null && (
+        <button
+          type="button"
+          onClick={() => setStand({ art: "verwerfen" })}
+          disabled={frage}
+          aria-disabled={frage}
+          className="mt-2 ml-2 min-h-11 px-4 py-2 rounded-lg text-xs bg-surface-elevated text-foreground hover:opacity-80 transition-opacity disabled:opacity-40"
+          data-text-erzeugen-verwerfen
+        >
+          Lauf-ID verwerfen …
+        </button>
+      )}
+      {stand.art === "verwerfen" && offeneLaufId !== null && (
+        <div className="mt-2 rounded-lg p-3 break-words" style={{ border: `1px solid ${FARBE_ROT}` }} role="group" aria-label="Lauf-ID verwerfen" data-text-erzeugen-verwerfen-bestaetigung>
+          <p>
+            Lauf-ID {offeneLaufId.slice(0, 8)}… verwerfen?{laufend === null ? "" : ` Caption #${laufend.contentId} steht noch auf „${laufend.status === null ? "nicht gemeldet" : maskiert(laufend.status)}“.`} Läuft
+            der Lauf noch, startet „Text erzeugen …“ danach einen zweiten bezahlten Lauf. Nur verwerfen, wenn die Zeile hängt.
+          </p>
+          <div className="flex flex-wrap gap-2 mt-2">
+            <button type="button" onClick={verwerfen} className="min-h-11 px-4 py-2 rounded-lg text-xs font-medium bg-surface-elevated text-foreground hover:opacity-80 transition-opacity" data-text-erzeugen-verwerfen-ja>
+              Ja, Lauf-ID verwerfen
+            </button>
+            <button type="button" onClick={() => setStand({ art: "zu" })} className="min-h-11 px-4 py-2 rounded-lg text-xs bg-surface-elevated text-foreground hover:opacity-80 transition-opacity" data-text-erzeugen-verwerfen-zurueck>
+              Abbrechen
+            </button>
+          </div>
+        </div>
       )}
       {stand.art === "bestaetigen" && (
         <div className="mt-2 rounded-lg p-3 break-words" style={{ border: `1px solid ${FARBE_BERNSTEIN}` }} role="group" aria-label="Bezahlten Lauf bestätigen" data-text-erzeugen-bestaetigung>

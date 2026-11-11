@@ -179,13 +179,17 @@ type SpeicherStand = { art: "bereit" } | { art: "laeuft" } | { art: "fehler"; te
  * Eingaben außerhalb der Ansicht gehalten (PruefBereich): Schließen und Öffnen verliert sie nicht (oberflaeche-4). Dazu die
  * zuletzt gespeicherte Anfrage (Nachtrag d2-oberflaeche-2): Solange die Eingaben ihr gleichen, ist der Knopf gesperrt —
  * auch nach Schließen und Öffnen, das die Ansicht neu aufbaut. Prüfprotokolle sind unveränderlich; ein zweites gleiches
- * hätte nur die Historie verdoppelt.
+ * hätte nur die Historie verdoppelt. Ebenso die Anfrage, deren POST gerade läuft (Schlussprüfung d3-rauchtest-rest-2):
+ * Schließt und öffnet der Prüfer die Ansicht während des Speicherns, bleibt der Knopf für sie gesperrt („Wird gespeichert …“).
  */
 export interface GehalteneEingaben {
   wert: PruefEingaben;
   setze: (f: (e: PruefEingaben) => PruefEingaben) => void;
   gespeichertAls?: string | null;
   merkeGespeichert?: (anfrage: string) => void;
+  sendetAls?: string | null;
+  /** an: true vor dem POST; false nach jedem Ausgang (leert nur, wenn noch genau diese Anfrage gemerkt ist). */
+  merkeSendet?: (anfrage: string, an: boolean) => void;
 }
 
 /** Text bei einem Videofehler: Die Ursache meldet der Browser nicht (401, 404, 409, 502 und eine abgelaufene URL sehen gleich aus). */
@@ -229,10 +233,12 @@ export function PruefAnsicht({
   const [videoFehler, setVideoFehler] = useState(false);
   const [videoVersuch, setVideoVersuch] = useState(0);
   const fehlt = eingabenFehler(eingaben, klauseln);
-  const laeuft = stand.art === "laeuft";
-  // Gleicht die Anfrage der zuletzt gespeicherten (im PruefBereich gehalten), gilt sie als gespeichert.
   const anfrage = JSON.stringify(alsAnfrage(eingaben, ex.sha256, klauseln));
-  const schonGespeichert = stand.art === "fertig" || (stand.art === "bereit" && gehalten?.gespeichertAls != null && gehalten.gespeichertAls === anfrage);
+  // Läuft das Speichern genau dieser Anfrage noch aus einer früheren Ansicht (Schließen und Öffnen während des POST), gilt
+  // es als laufend (d3-rauchtest-rest-2).
+  const laeuft = stand.art === "laeuft" || (gehalten?.sendetAls != null && gehalten.sendetAls === anfrage);
+  // Gleicht die Anfrage der zuletzt gespeicherten (im PruefBereich gehalten), gilt sie als gespeichert.
+  const schonGespeichert = stand.art === "fertig" || (stand.art === "bereit" && !laeuft && gehalten?.gespeichertAls != null && gehalten.gespeichertAls === anfrage);
   // Neu laden: neue Anfrage an die Datei-Route (frische signierte URL); der Zusatz umgeht einen gemerkten Abruf.
   const quelleSchluessel = dateiAdresse(video.id);
   const quelleAdresse = videoVersuch === 0 ? quelleSchluessel : `${quelleSchluessel}?neu=${videoVersuch}`;
@@ -281,32 +287,37 @@ export function PruefAnsicht({
   };
 
   async function speichern() {
-    if (eingabenFehler(eingaben, klauseln).length > 0 || stand.art === "laeuft" || schonGespeichert) return;
+    if (eingabenFehler(eingaben, klauseln).length > 0 || laeuft || schonGespeichert) return;
     setStand({ art: "laeuft" });
-    let status: number | null = null;
-    let daten: unknown = null;
+    gehalten?.merkeSendet?.(anfrage, true);
     try {
-      const res = await holen(`/api/studio/${encodeURIComponent(slug)}/medien/${ex.id}/pruefung`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: anfrage,
-        cache: "no-store",
-      });
-      status = res.status;
-      daten = await res.json().catch(() => null);
-    } catch (e) {
-      setStand({ art: "fehler", text: `Netzfehler: ${maskiert(e instanceof Error ? e.message : "unbekannt")}` });
-      return;
+      let status: number | null = null;
+      let daten: unknown = null;
+      try {
+        const res = await holen(`/api/studio/${encodeURIComponent(slug)}/medien/${ex.id}/pruefung`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: anfrage,
+          cache: "no-store",
+        });
+        status = res.status;
+        daten = await res.json().catch(() => null);
+      } catch (e) {
+        setStand({ art: "fehler", text: `Netzfehler: ${maskiert(e instanceof Error ? e.message : "unbekannt")}` });
+        return;
+      }
+      const obj = istObjekt(daten) ? daten : null;
+      if (status === 200 && obj && typeof obj.urteil === "string" && Array.isArray(obj.gruende)) {
+        setStand({ art: "fertig", urteil: obj.urteil, gruende: obj.gruende.filter((g): g is string => typeof g === "string"), id: typeof obj.pruefung_id === "number" ? obj.pruefung_id : null });
+        gehalten?.merkeGespeichert?.(anfrage);
+        gespeichert();
+        return;
+      }
+      const text = obj && typeof obj.fehler === "string" ? obj.fehler : "ohne Fehlertext";
+      setStand({ art: "fehler", text: maskiert(`${text} (HTTP ${status})`) });
+    } finally {
+      gehalten?.merkeSendet?.(anfrage, false);
     }
-    const obj = istObjekt(daten) ? daten : null;
-    if (status === 200 && obj && typeof obj.urteil === "string" && Array.isArray(obj.gruende)) {
-      setStand({ art: "fertig", urteil: obj.urteil, gruende: obj.gruende.filter((g): g is string => typeof g === "string"), id: typeof obj.pruefung_id === "number" ? obj.pruefung_id : null });
-      gehalten?.merkeGespeichert?.(anfrage);
-      gespeichert();
-      return;
-    }
-    const text = obj && typeof obj.fehler === "string" ? obj.fehler : "ohne Fehlertext";
-    setStand({ art: "fehler", text: maskiert(`${text} (HTTP ${status})`) });
   }
 
   const sb = kette.startbild;
@@ -407,7 +418,7 @@ export function PruefAnsicht({
         className="mt-4 space-y-3 min-w-0"
         onSubmit={(e) => {
           e.preventDefault();
-          if (fehlt.length === 0 && stand.art !== "laeuft" && !schonGespeichert) void speichern();
+          if (fehlt.length === 0 && !laeuft && !schonGespeichert) void speichern();
         }}
         onKeyDown={(e) => {
           // Enter in einem Eingabefeld sendet nicht ab (oberflaeche-7); gespeichert wird nur über den Knopf.
@@ -483,7 +494,7 @@ export function PruefAnsicht({
         )}
         <button
           type="submit"
-          aria-disabled={fehlt.length > 0 || stand.art === "laeuft" || schonGespeichert}
+          aria-disabled={fehlt.length > 0 || laeuft || schonGespeichert}
           className="min-h-11 px-4 py-2 rounded-lg text-xs font-medium bg-surface-elevated text-foreground hover:opacity-80 transition-opacity aria-disabled:opacity-40 aria-disabled:cursor-not-allowed"
           data-protokoll-speichern
         >
@@ -495,7 +506,11 @@ export function PruefAnsicht({
           </p>
         )}
         <div aria-live="polite">
-          {stand.art === "laeuft" && <p className="text-[11px]" style={{ color: "var(--gp-ink-3)" }}>Speichert … (Server hasht die Datei nach)</p>}
+          {laeuft && (
+            <p className="text-[11px]" style={{ color: "var(--gp-ink-3)" }} data-pruef-speichert>
+              Wird gespeichert … (Server hasht die Datei nach)
+            </p>
+          )}
         </div>
         <div>
           {stand.art === "fehler" && (

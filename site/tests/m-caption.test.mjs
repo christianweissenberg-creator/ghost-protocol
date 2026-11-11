@@ -50,11 +50,12 @@ fake.installiere();
 
 const lib = (name) => import(pathToFileURL(process.env[`Z_LIB_${name.replace(/[^A-Za-z0-9]+/g, "_").toUpperCase()}`] ?? path.join(SITE, "src", `${name}.ts`)).href);
 const route = (name, rel) => import(pathToFileURL(process.env[`Z_ROUTE_${name}`] ?? path.join(SITE, "src/app/api", rel)).href);
-const [regeln, counselModul, kiHinweis, pipeline, { NextRequest }] = await Promise.all([
+const [regeln, counselModul, kiHinweis, pipeline, studioRoute, { NextRequest }] = await Promise.all([
   lib("lib/freigabe-regeln"),
   lib("lib/counsel-urteil"),
   lib("lib/studio/ki-hinweis"),
   route("PIPELINE", "content/pipeline/route.ts"),
+  route("STUDIO", "studio/[objekt]/route.ts"),
   import("next/server"),
 ]);
 
@@ -119,6 +120,17 @@ function linkAusAuftrag(task) {
 
 /** PUBLISHER-Antwort ohne Pflichtzeile (der Fall, in dem die Pipeline sie ergänzt). */
 const PUBLISHER_ROH = (task) => `Finaler Content:\n1/2 Denkmal-AfA bis 100 %. Visualisierung: KI-generiert.\n2/2 Mehr: ${linkAusAuftrag(task)}\nCross-Promotion-Tweet: Neues Video zum RitterGut — mehr im Hauptpost.\n`;
+
+/**
+ * PUBLISHER-Antwort in der Gliederung, die der Auftrag verlangt (Finaler Content, Publishing-Zeitpunkt, Cross-Promotion-
+ * Posts), ohne Pflichtzeile (Prüfung f-caption-1); content(link) liefert die Zeilen des finalen Contents.
+ */
+const gegliedert = (content) => (task) =>
+  `Finaler Content:\n${content(linkAusAuftrag(task))}\n\nPublishing-Zeitpunkt: Dienstag, 18:00 (Empfehlung)\n\nCross-Promotion-Posts:\n- Tweet: Neues Video zum RitterGut — mehr im Hauptpost.\n- Newsletter-Teaser: Neues Video zum RitterGut — mehr im Hauptpost.\n`;
+const THREAD = (link) => `1/2 Denkmal-AfA bis 100 %. Visualisierung: KI-generiert.\n2/2 Mehr: ${link}`;
+/** Warnungen ohne Zeitpunkt (am), zum Vergleichen. */
+const ohneZeit = (liste) => (liste ?? []).map(({ am, ...w }) => (void am, w));
+const LAGE_PRUEFEN = "Pflichtzeile von der Pipeline ergänzt, Lage prüfen";
 
 /** Agenten-Attrappen wie in p-paket-b-pipeline: Texte übernehmen den CTA-Link; Vor- und Endprüfung antworten verschieden. */
 function agenten({ scribe, publisher = PUBLISHER_ROH, endpruefung = FREIGABE_END } = {}) {
@@ -260,10 +272,11 @@ test("M-C3 studio_medium nicht lesbar → 502 ohne Insert und ohne bezahlten Auf
 
 // ═══ Caption-Lauf ═══
 
-test("M-C4 Caption-Lauf: medium_id in metadata, SCRIBE-Auftrag mit Auftragsart und Pflichtzeile als eigener Zeile; fehlt sie bei PUBLISHER, steht sie vor counsel_endfassung im PUBLISHER-Text — body = geprüfter Text, R2 gibt frei", async () => {
+test("M-C4 Caption-Lauf: medium_id in metadata, SCRIBE-Auftrag mit Auftragsart und Pflichtzeile als eigener Zeile; fehlt sie bei PUBLISHER, steht sie vor counsel_endfassung im PUBLISHER-Text — beim X-Thread im ersten Post, an dem das Video hängt (d3-caption-auftrag-1) — body = geprüfter Text, R2 gibt frei", async () => {
   exportMit(RITTERGUT);
   medien();
-  agenten();
+  const publisher = gegliedert(THREAD);
+  agenten({ publisher });
   const r = await pipePost({ ...LAUF, medium_id: EXPORT_ID, lauf_id: "lauf-caption-0001" });
   assert.equal(r.status, 200, JSON.stringify(r.body).slice(0, 500));
   assert.equal(r.body.status, "complete", JSON.stringify(r.body.fehler ?? null));
@@ -281,12 +294,23 @@ test("M-C4 Caption-Lauf: medium_id in metadata, SCRIBE-Auftrag mit Auftragsart u
 
   // PUBLISHER-Text mit ergänzter Pflichtzeile: steps[3], Endprüfung, body
   const z = zeile(r.body.contentId);
-  const roh = PUBLISHER_ROH(auftrag("publisher"));
+  const roh = publisher(auftrag("publisher"));
   assert.equal(pflichtzeilen(roh), 0, "PUBLISHER schrieb die Pflichtzeile nicht");
-  // Nachbesserung caption9-4: Auch der PUBLISHER-Auftrag nennt die Pflichtzeile wörtlich, als letzte Zeile des finalen Contents.
-  assert.ok(auftrag("publisher").includes(`- Finaler Content (mit deinen Korrekturen); als letzte Zeile des finalen Contents diese Pflichtzeile wörtlich, als eigene Zeile, ohne Formatierung:\n  ${PFLICHTZEILE}\n`), auftrag("publisher").slice(0, 400));
-  const erwartet = `${roh.trimEnd()}\n\n${PFLICHTZEILE}`;
-  assert.equal(r.body.steps[3].output, erwartet, "Pflichtzeile als letzte Zeile nach einer Leerzeile");
+  // Prüfung f-caption-2: PUBLISHER kennt bei X die Grenze je Post.
+  assert.ok(auftrag("publisher").includes("\n1. Qualitätsprüfung: Fakten-Check, Ton, Länge (je Post höchstens 270 Zeichen; die Pflichtzeile zählt im ersten Post mit)\n"));
+  // Nachbesserung caption9-4: Auch der PUBLISHER-Auftrag nennt die Pflichtzeile wörtlich; bei X im Post mit dem Video,
+  // dort als letzte Zeile, der CTA bleibt im letzten Post (d3-caption-auftrag-1). SCRIBE bekommt dieselbe Zuordnung.
+  assert.ok(auftrag("publisher").includes(`- Finaler Content (mit deinen Korrekturen); diese Pflichtzeile wörtlich, als eigene Zeile, ohne Formatierung, im Post mit dem Video (bei einem Thread im ersten Post), dort als letzte Zeile; der CTA bleibt im letzten Post:\n  ${PFLICHTZEILE}\n`), auftrag("publisher").slice(0, 400));
+  assert.ok(!auftrag("publisher").includes("als letzte Zeile des finalen Contents"));
+  assert.ok(scribe.includes("\n- Die Pflichtzeile aus der AUFTRAGSART als eigene Zeile im Post mit dem Video (bei einem Thread im ersten Post), dort als letzte Zeile; der CTA bleibt im letzten Post.\n"));
+  assert.ok(!scribe.includes("als eigene, letzte Zeile (nach den Hashtags)"));
+  // Die Pipeline ergänzt die fehlende Zeile im ersten Post (vor „2/2“), nach einer Leerzeile; der Rest bleibt, wie er ist.
+  const erwartet = roh.replace("\n2/2 ", `\n\n${PFLICHTZEILE}\n2/2 `);
+  assert.notEqual(erwartet, roh);
+  assert.equal(r.body.steps[3].output, erwartet, "Pflichtzeile als letzte Zeile des ersten Posts, nach einer Leerzeile");
+  // Thread-Vorschau auf /content (splitTweets, gleiche Marke am Zeilenanfang): Die Zeile steht im Block 1/2, nicht im letzten.
+  const bloecke = erwartet.split("\n").reduce((b, z) => (/^\*{0,2}\d+\/\d*\*{0,2}/.test(z.trim()) ? [...b, [z]] : (b.at(-1).push(z), b)), [[]]);
+  assert.deepEqual(bloecke.map((b) => pflichtzeilen(b.join("\n"))), [0, 1, 0], "Kopf, 1/2 mit Pflichtzeile, 2/2 (mit Zeitpunkt und Cross-Promotion) ohne");
   assert.equal(z.metadata.steps[3].output, erwartet);
   assert.equal(z.body, erwartet, "body = PUBLISHER-Text mit Pflichtzeile");
   assert.equal(pflichtzeilen(z.body), 1, "genau eine Pflichtzeile");
@@ -317,7 +341,11 @@ test("M-C4 Caption-Lauf: medium_id in metadata, SCRIBE-Auftrag mit Auftragsart u
   assert.equal(typeof z.metadata.medium_id, "number");
   assert.deepEqual(z.metadata.pflichtzeile, { wortlaut: PFLICHTZEILE, von_pipeline_ergaenzt: true, ersetzt: null });
   assert.equal(z.metadata.lauf_id, "lauf-caption-0001");
-  assert.deepEqual(r.body.warnungen, []);
+  // Prüfung f-caption-1: Jede Ergänzung steht als Warnung im Beleg, mit der Lage.
+  // Die Nachbarzeile steht gekürzt auf 40 Zeichen (Schlussprüfung f3-pflichtzeile-1).
+  const warnung = [{ stufe: "pipeline", grund: LAGE_PRUEFEN, detail: "als letzte Zeile von Post 1 eingesetzt (vor der Marke „2/…“), hinter: „1/2 Denkmal-AfA bis 100 %. Visualisieru…“" }];
+  assert.deepEqual(ohneZeit(r.body.warnungen), warnung);
+  assert.deepEqual(ohneZeit(z.metadata.warnungen), warnung);
 });
 
 test("M-C5 Pflichtzeile schon da → keine Verdopplung; abweichender Wortlaut, Zeile im Satz oder mit Formatierung zählt nicht → die wörtliche Zeile wird ergänzt", async () => {
@@ -466,8 +494,76 @@ test("M-C7 Ohne medium_id: keine Abfrage auf studio_medium, keine Pflichtzeile, 
   }
 });
 
-test("M-C11 Caption-Lauf (Nachtrag d2-text-erzeugen-2): Für jede Kanal-Wahl von „Text erzeugen“ bekommt SCRIBE die Anweisungen für eine Caption zu einem fertigen Video — kein Video-Skript, keine Schnitt- oder Einblendmarken (kein „-Skript“, „[B-ROLL]“, „[TEXTOVERLAY]“) in irgendeinem Auftrag; die Pflichtzeile bleibt einmal als eigene Zeile", async () => {
+/**
+ * ANWEISUNGEN-Block des SCRIBE-Auftrags je Kanal-Wahl, wörtlich (Schlussprüfung d3-caption-auftrag-5); <CTA> steht für den
+ * CTA: mit baubarem Kurzlink „CTA mit EXAKT diesem Link: <LINK>“ (<LINK> der Link des Laufs), sonst der CTA ohne Link
+ * (Prüfung f-caption-3). Die letzten Zeilen gelten für alle Kanäle, die zur Pflichtzeile je Kanal (d3-caption-auftrag-1).
+ */
+const ANWEISUNG_ALLE = [
+  "- Das Video existiert schon: ein kurzer, fertiger Clip. Du schreibst nur den Text, der mit ihm gepostet wird — kein neues Video, keine Szenenfolge.",
+  "- Keine Marken für Schnitt, Szene, Einblendung oder Ton (nichts in eckigen Klammern), keine Vorschläge für Musik, Thumbnail oder Texteinblendungen.",
+  "- Zahlen NUR aus den Objektdaten (siehe REGEL); nichts erfinden.",
+].join("\n");
+const ANWEISUNG_PFLICHT_ENDE = "- Die Pflichtzeile aus der AUFTRAGSART als eigene, letzte Zeile (nach den Hashtags).";
+const ANWEISUNG_PFLICHT_X = "- Die Pflichtzeile aus der AUFTRAGSART als eigene Zeile im Post mit dem Video (bei einem Thread im ersten Post), dort als letzte Zeile; der CTA bleibt im letzten Post.";
+const ANWEISUNGEN_SOLL = {
+  "instagram|reel": `Schreibe die Caption zu einem fertigen Instagram-Reel:
+- Der erste Satz trägt allein (vor „… mehr“) und sagt, was das Video zeigt
+- Danach 2-4 kurze Sätze; <CTA>
+- Länge ohne Hashtags, Pflichtzeilen und CTA-Link: höchstens 600 Zeichen
+- Am Ende höchstens 5 passende Hashtags
+${ANWEISUNG_ALLE}
+${ANWEISUNG_PFLICHT_ENDE}`,
+  "tiktok|tiktok_short": `Schreibe die Caption zu einem fertigen TikTok-Video:
+- 1-3 kurze Sätze; der erste sagt, was das Video zeigt
+- <CTA>
+- Länge ohne Hashtags, Pflichtzeilen und CTA-Link: höchstens 300 Zeichen
+- Am Ende 3-5 passende Hashtags
+${ANWEISUNG_ALLE}
+${ANWEISUNG_PFLICHT_ENDE}`,
+  "youtube|short": `Schreibe Titel und Beschreibung zu einem fertigen YouTube-Short:
+- Titel: höchstens 70 Zeichen, sachlich
+- Beschreibung: 2-4 Sätze, was das Video zeigt; <CTA>
+- Am Ende der Beschreibung 2-3 passende Hashtags
+${ANWEISUNG_ALLE}
+${ANWEISUNG_PFLICHT_ENDE}`,
+  "x|thread": `Schreibe den Text zu einem fertigen Video auf X im Steinadel-Ton (premium, editorial, ruhig, max 1 Emoji):
+- Ein Post oder ein Thread aus 2-3 Posts im Stil "1/3", "2/3", ...; je Post höchstens 270 Zeichen; das Video hängt am ersten Post
+- Falls AfA/Steuerzahlen erwähnt werden: Modellrechnung-Disclaimer-Satz PFLICHT
+  ("Modellrechnung — individuelle steuerliche Wirkung abhängig von persönlicher
+  Situation und Behördenbescheinigung; keine Steuerberatung.")
+- Letzter Post: <CTA>
+- Höchstens 2 Hashtags
+${ANWEISUNG_ALLE}
+${ANWEISUNG_PFLICHT_X}`,
+  "linkedin|linkedin_post": `Schreibe den Begleittext zu einem fertigen Video auf LinkedIn (Fachton, premium, editorial, ruhig):
+- Zeile 1-2: was das Video zeigt, mit einer belegten Zahl oder einer sachlichen These
+- 2-3 kurze Absätze mit je 1-3 Sätzen, keine Reel-Ästhetik, höchstens 1 Emoji
+- Schluss: <CTA>
+- Höchstens 3 fachliche Hashtags am Ende
+- Länge ohne Hashtags, Pflichtzeilen und CTA-Link: 500 bis 1.200 Zeichen
+${ANWEISUNG_ALLE}
+${ANWEISUNG_PFLICHT_ENDE}`,
+};
+
+test("M-C11 Caption-Lauf (Nachtrag d2-text-erzeugen-2, Schlussprüfung d3-caption-auftrag-2 und -5): Für jede Kanal-Wahl von „Text erzeugen“ bekommt SCRIBE wörtlich die Anweisungen für eine Caption zu einem fertigen Video (Schnappschuss); RESEARCHER und PUBLISHER behandeln den Lauf als Caption — kein Video-Skript, keine Schnitt- oder Einblendmarken, keine Video-Laufzeiten, kein Thumbnail-, SEO-Title- oder Metadaten-Auftrag; die Pflichtzeile bleibt einmal als eigene Zeile", async () => {
   const wahlen = [["instagram", "reel", "Schreibe die Caption zu einem fertigen Instagram-Reel:"], ["tiktok", "tiktok_short", "Schreibe die Caption zu einem fertigen TikTok-Video:"], ["youtube", "short", "Schreibe Titel und Beschreibung zu einem fertigen YouTube-Short:"], ["x", "thread", "Schreibe den Text zu einem fertigen Video auf X im Steinadel-Ton"], ["linkedin", "linkedin_post", "Schreibe den Begleittext zu einem fertigen Video auf LinkedIn"]];
+  assert.deepEqual(wahlen.map(([p, f]) => `${p}|${f}`), Object.keys(ANWEISUNGEN_SOLL));
+  // Prüfung f-caption-3: auch für ein Objekt ohne baubaren Kurzlink (keine Kampagne) — dann der CTA ohne Link.
+  for (const [platform, format, kopf] of wahlen) {
+    zuruecksetzen();
+    welt.pipelineModul = pipeline;
+    exportMit({ ...RITTERGUT, kampagnen: [] });
+    medien();
+    agenten();
+    const ohne = await pipePost({ ...LAUF, platform, format, medium_id: EXPORT_ID });
+    assert.equal(ohne.status, 200, `${platform} ohne Kampagne: ${JSON.stringify(ohne.body).slice(0, 300)}`);
+    const s0 = auftrag("scribe");
+    assert.equal(linkAusAuftrag(s0), null, `${platform}: kein CTA-Link ohne Kampagne`);
+    const v0 = s0.indexOf("ANWEISUNGEN:\n") + "ANWEISUNGEN:\n".length;
+    assert.ok(s0.includes(`ANWEISUNGEN:\n${kopf}`), platform);
+    assert.equal(s0.slice(v0, s0.indexOf("\n\nSTILREGELN:", v0)), ANWEISUNGEN_SOLL[`${platform}|${format}`].replace("<CTA>", "CTA ohne Link (kein Kampagnen-Link hinterlegt)"), `${platform} ohne Kampagne`);
+  }
   for (const [platform, format, kopf] of wahlen) {
     zuruecksetzen();
     welt.pipelineModul = pipeline;
@@ -481,17 +577,183 @@ test("M-C11 Caption-Lauf (Nachtrag d2-text-erzeugen-2): Für jede Kanal-Wahl von
     assert.ok(scribe.includes("- Das Video existiert schon: ein kurzer, fertiger Clip."), platform);
     assert.equal(pflichtzeilen(scribe), 1, `${platform}: Pflichtzeile einmal als eigene Zeile`);
     if (platform === "x" || platform === "linkedin") assert.ok(scribe.includes(`CTA mit EXAKT diesem Link: ${linkAusAuftrag(scribe)}`), `${platform}: CTA-Link wie in den Plattform-Anweisungen`);
+    // Schnappschuss: der ganze ANWEISUNGEN-Block, Zeile für Zeile (CTA-Link für alle fünf, Verbotszeile, Zahlenregel,
+    // Pflichtzeile, Hashtags, Längen ohne Pflicht-Elemente).
+    const link = linkAusAuftrag(scribe);
+    assert.ok(link, `${platform}: CTA-Link im Auftrag`);
+    const von = scribe.indexOf("ANWEISUNGEN:\n") + "ANWEISUNGEN:\n".length;
+    const block = scribe.slice(von, scribe.indexOf("\n\nSTILREGELN:", von)).replaceAll(link, "<LINK>");
+    assert.equal(block, ANWEISUNGEN_SOLL[`${platform}|${format}`].replace("<CTA>", "CTA mit EXAKT diesem Link: <LINK>"), platform);
+    // RESEARCHER und PUBLISHER: Caption zu einem fertigen Video statt Format eines neuen Beitrags (d3-caption-auftrag-2).
+    assert.ok(auftrag("researcher").includes(" im Format Caption zu einem fertigen Video, Kategorie: "), `${platform}: RESEARCHER`);
+    const pub = auftrag("publisher");
+    assert.ok(pub.includes(`\nPLATTFORM: ${platform}\nFORMAT: Caption zu einem fertigen Video\n`), `${platform}: PUBLISHER-Format`);
+    const laengeX = platform === "x" ? " (je Post höchstens 270 Zeichen; die Pflichtzeile zählt im ersten Post mit)" : "";
+    assert.ok(pub.includes(`\n1. Qualitätsprüfung: Fakten-Check, Ton, Länge${laengeX}\n2. Hashtags: nur die in der Caption, keine zusätzlichen; keine Title Tags, keine SEO-Description\n3. Scheduling-Empfehlung: `), `${platform}: PUBLISHER Punkte 1 und 2`);
+    assert.ok(pub.includes("\n4. Das Video ist fertig: keine Thumbnail-, Musik-, Schnitt- oder Einblendungsvorschläge\n5. Cross-Promotion: "), `${platform}: PUBLISHER Punkt 4`);
+    assert.ok(/\n- Finaler Content \(mit deinen Korrekturen\); [^\n]+:\n {2}[^\n]+\n- Publishing-Zeitpunkt /.test(pub), `${platform}: keine Metadaten-Zeile`);
     for (const a of welt.aktivierungen) {
-      for (const marke of ["-Skript", "[B-ROLL]", "[TEXTOVERLAY]", "[TRANSITION]", "Trending"]) assert.ok(!a.task.includes(marke), `${platform}: ${a.agent} ohne „${marke}“`);
+      for (const marke of ["-Skript", "[B-ROLL]", "[TEXTOVERLAY]", "[TRANSITION]", "Trending", "Thumbnail/Preview", "Sek)", "SEO-Optimierung", "Metadaten (Title", "Thread (5-8 Posts)", "Fachbeitrag, 1.200-2.000 Zeichen"]) {
+        assert.ok(!a.task.includes(marke), `${platform}: ${a.agent} ohne „${marke}“`);
+      }
     }
   }
-  // Gegenprobe ohne medium_id: die Anweisungen eines neuen Beitrags wie bisher (der Zeichenvergleich aller Aufträge steht im PR).
+  // Gegenprobe ohne medium_id: die Aufträge eines neuen Beitrags wie bisher (der Zeichenvergleich aller Aufträge steht im PR).
   zuruecksetzen();
   welt.pipelineModul = pipeline;
   exportMit(RITTERGUT);
   agenten();
   await pipePost({ ...LAUF, platform: "tiktok", format: "tiktok_short" });
   assert.ok(auftrag("scribe").includes("Schreibe ein TikTok-Skript (TikTok Short (30-60 Sek)):"));
+  assert.ok(auftrag("researcher").includes(" im Format TikTok Short (30-60 Sek), Kategorie: "));
+  const pub = auftrag("publisher");
+  assert.ok(pub.includes("\nPLATTFORM: tiktok\nFORMAT: tiktok_short\n"));
+  assert.ok(pub.includes("\n1. Qualitätsprüfung: Fakten-Check, Ton, Länge\n2. SEO-Optimierung: Title Tags, Description, Hashtags\n") && pub.includes("\n4. Thumbnail/Preview: Beschreibung für visuelles Asset\n"));
+  assert.ok(pub.includes("\n- Finaler Content (mit deinen Korrekturen)\n- Metadaten (Title, Description, Tags, Hashtags)\n- Publishing-Zeitpunkt "));
+});
+
+test("M-C15 Fehlende Pflichtzeile im Abschnitt „Finaler Content“ (Prüfung f-caption-1): außerhalb von X und beim X-Einzelpost an dessen Ende, vor Publishing-Zeitpunkt und Cross-Promotion; Marken wie „Post 1/3:“ und eine Längenliste vor dem Content führen nicht in die Irre; ohne folgenden Abschnitt ans Ende; jede Ergänzung als Warnung mit Lage", async () => {
+  const lauf = async (body, publisher, objekt = RITTERGUT) => {
+    zuruecksetzen();
+    welt.pipelineModul = pipeline;
+    exportMit(objekt);
+    medien();
+    agenten({ publisher });
+    const r = await pipePost({ ...LAUF, ...body, medium_id: EXPORT_ID });
+    assert.equal(r.body.status, "complete", JSON.stringify(r.body.fehler ?? null));
+    const z = zeile(r.body.contentId);
+    assert.equal(videoFreigabe(z).freigebbar, true);
+    assert.equal(pflichtzeilen(z.body), 1);
+    return { r, z, roh: publisher(auftrag("publisher")) };
+  };
+  const vorZeitpunkt = (roh) => roh.replace("\n\nPublishing-Zeitpunkt:", `\n\n${PFLICHTZEILE}\n\nPublishing-Zeitpunkt:`);
+  const warnung = (detail) => [{ stufe: "pipeline", grund: LAGE_PRUEFEN, detail }];
+  const ABSCHNITT = "am Ende des Abschnitts „Finaler Content“ eingesetzt";
+
+  // Instagram (Vorauswahl): am Ende des finalen Contents, vor Publishing-Zeitpunkt und Cross-Promotion.
+  const ig = await lauf({ platform: "instagram", format: "reel" }, gegliedert((link) => `Das Video zeigt den Hof bei Nacht. ${link}\n#Denkmal #RitterGut`));
+  const pub = auftrag("publisher");
+  assert.ok(pub.includes(`- Finaler Content (mit deinen Korrekturen); als letzte Zeile des finalen Contents diese Pflichtzeile wörtlich, als eigene Zeile, ohne Formatierung:\n  ${PFLICHTZEILE}\n`), pub.slice(0, 400));
+  assert.ok(!pub.includes("im Post mit dem Video") && !pub.includes("je Post höchstens 270 Zeichen"));
+  assert.ok(auftrag("scribe").includes(`\n${ANWEISUNG_PFLICHT_ENDE}\n`));
+  assert.equal(ig.z.body, vorZeitpunkt(ig.roh));
+  assert.deepEqual(ohneZeit(ig.z.metadata.warnungen), warnung(`${ABSCHNITT}, hinter: „#Denkmal #RitterGut“`));
+  assert.deepEqual(ig.z.metadata.pflichtzeile, { wortlaut: PFLICHTZEILE, von_pipeline_ergaenzt: true, ersetzt: null });
+
+  // Instagram mit Postmarken und einer Cross-Promotion-Zeile direkt danach: vor die Cross-Promotion, nicht in Post 1.
+  const igMarken = await lauf({ platform: "instagram", format: "reel" }, PUBLISHER_ROH);
+  assert.equal(igMarken.z.body, igMarken.roh.replace("\nCross-Promotion-Tweet:", `\n\n${PFLICHTZEILE}\nCross-Promotion-Tweet:`));
+
+  // X-Einzelpost in der Gliederung: Der Post mit dem Video ist der finale Content.
+  const einzel = await lauf({}, gegliedert((link) => `Das Video zeigt den Hof bei Nacht. ${link}\n#Denkmal`));
+  assert.equal(einzel.z.body, vorZeitpunkt(einzel.roh));
+  assert.deepEqual(ohneZeit(einzel.z.metadata.warnungen), warnung(`${ABSCHNITT}, hinter: „#Denkmal“`));
+
+  // X mit „Post 1/3:“, davor eine Längenliste in der Qualitätsprüfung: Die Zeile kommt in Post 1 des finalen Contents.
+  const mitListe = (task) =>
+    `Qualitätsprüfung:\n1/3: 84 Zeichen\n2/3: 90 Zeichen\n\n${gegliedert((link) => `Post 1/3: Das Video zeigt den Hof bei Nacht.\nPost 2/3: Denkmal-AfA bis 100 %.\nPost 3/3: Mehr: ${link}`)(task)}`;
+  const liste = await lauf({}, mitListe);
+  assert.equal(liste.z.body, liste.roh.replace("\nPost 2/3:", `\n\n${PFLICHTZEILE}\nPost 2/3:`));
+  assert.deepEqual(ohneZeit(liste.z.metadata.warnungen), warnung("als letzte Zeile von Post 1 eingesetzt (vor der Marke „2/…“), hinter: „Post 1/3: Das Video zeigt den Hof bei N…“"));
+  // Die Längenmessung nimmt Post 1 des finalen Contents, nicht den Eintrag der Längenliste (f2-pflichtzeile-3).
+  assert.equal(regeln.xPostEinsLaenge(liste.z.body), "Post 1/3: Das Video zeigt den Hof bei Nacht.".length + 2 + PFLICHTZEILE.length);
+
+  // Abschnitt ohne folgenden Abschnitt: am Ende des Texts, der zugleich das Ende des Abschnitts ist (sicher erkannt).
+  const ohneFolge = (task) => `Finaler Content: Das Video zeigt den Hof bei Nacht. ${linkAusAuftrag(task)}\n#Denkmal`;
+  const ende = await lauf({}, ohneFolge);
+  assert.equal(ende.z.body, `${ende.roh}\n\n${PFLICHTZEILE}`);
+  assert.deepEqual(ohneZeit(ende.z.metadata.warnungen), warnung(`${ABSCHNITT}, hinter: „#Denkmal“`));
+
+  // Eine nahe Variante wird ersetzt — auch das ist eine Ergänzung mit Warnung; steht die Zeile schon da, keine Warnung.
+  const nah = await lauf({}, gegliedert((link) => `1/2 Das Video zeigt den Hof.\n${PFLICHTZEILE}.\n2/2 Mehr: ${link}`));
+  assert.deepEqual(ohneZeit(nah.z.metadata.warnungen), warnung("eine nahe Variante durch den Wortlaut ersetzt"));
+  const da = await lauf({}, gegliedert((link) => `1/2 Das Video zeigt den Hof.\n${PFLICHTZEILE}\n2/2 Mehr: ${link}`));
+  assert.deepEqual(ohneZeit(da.z.metadata.warnungen), [], "Pflichtzeile schon da: keine Warnung");
+  assert.equal(da.z.body, da.roh);
+});
+
+test("M-C22 X: Post 1 gemessen (Prüfung f-caption-2) — Der PUBLISHER-Auftrag nennt die Grenze je Post; über 280 Zeichen eine Warnung im Beleg, bis 280 keine, kein Abbruch; auch wenn die Pflichtzeile schon dasteht", async () => {
+  for (const [zeichen, warnt] of [[196, false], [197, true]]) {
+    zuruecksetzen();
+    welt.pipelineModul = pipeline;
+    exportMit(RITTERGUT);
+    medien();
+    // Erste Zeile von Post 1 mit genau `zeichen` Zeichen; nach der Ergänzung kommen Leerzeile und Pflichtzeile hinzu (+84).
+    const publisher = gegliedert((link) => `1/2 ${"x".repeat(zeichen - 4)}\n2/2 Mehr: ${link}`);
+    agenten({ publisher });
+    const r = await pipePost({ ...LAUF, medium_id: EXPORT_ID });
+    assert.equal(r.body.status, "complete", `${zeichen}: ${JSON.stringify(r.body.fehler ?? null)}`);
+    assert.equal(welt.aktivierungen.length, 6, `${zeichen}: kein Abbruch`);
+    const z = zeile(r.body.contentId);
+    assert.equal(regeln.xPostEinsLaenge(z.body), zeichen + 84);
+    const laenge = ohneZeit(z.metadata.warnungen).filter((w) => w.grund.startsWith("X: Post 1"));
+    assert.deepEqual(laenge, warnt ? [{ stufe: "pipeline", grund: "X: Post 1 länger als 280 Zeichen", detail: `${zeichen + 84} Zeichen, gezählt wie die Thread-Vorschau (URLs voll)` }] : [], String(zeichen));
+    assert.equal(z.status, "zur_freigabe");
+  }
+  // Pflichtzeile schon im ersten Post, Post 1 trotzdem zu lang: dieselbe Warnung (ohne „Lage prüfen“).
+  zuruecksetzen();
+  welt.pipelineModul = pipeline;
+  exportMit(RITTERGUT);
+  medien();
+  agenten({ publisher: gegliedert((link) => `1/2 ${"x".repeat(200)}\n${PFLICHTZEILE}\n2/2 Mehr: ${link}`) });
+  const lang = await pipePost({ ...LAUF, medium_id: EXPORT_ID });
+  assert.deepEqual(ohneZeit(lang.body.warnungen).map((w) => w.grund), ["X: Post 1 länger als 280 Zeichen"]);
+  // Außerhalb von X: keine Messung, keine Grenze im PUBLISHER-Auftrag.
+  zuruecksetzen();
+  welt.pipelineModul = pipeline;
+  exportMit(RITTERGUT);
+  medien();
+  agenten({ publisher: gegliedert((link) => `${"x".repeat(400)} ${link}`) });
+  const ig = await pipePost({ ...LAUF, platform: "instagram", format: "reel", medium_id: EXPORT_ID });
+  assert.deepEqual(ohneZeit(ig.body.warnungen).map((w) => w.grund), [LAGE_PRUEFEN]);
+  assert.ok(!auftrag("publisher").includes("je Post höchstens 270 Zeichen"));
+});
+
+test("M-C16 medium_id nur für die Kanal-Wahl von „Text erzeugen“ (Schlussprüfung d3-caption-auftrag-4): jede andere Plattform/Format-Kombination → 400 vor jeder Lesung, ohne Insert und ohne bezahlten Aufruf; angenommen werden genau die Kombinationen aus CAPTION_WAHL", async () => {
+  const { hookLaufzeit, ladeTextErzeugen, ladeStudioBausteine } = await import("./harness/studio.mjs");
+  const lz = hookLaufzeit();
+  const B = ladeStudioBausteine({ ...lz.attrappen, "@/lib/counsel-urteil": counselModul, "@/lib/freigabe-regeln": regeln });
+  const T = ladeTextErzeugen(lz.attrappen, { hilfen: B.hilfen });
+  const wahl = T.CAPTION_WAHL.map((w) => `${w.plattform}|${w.format}`);
+  assert.equal(wahl.length, 5);
+  // Alle Plattformen und Formate der Pipeline (FORMATE_JE_PLATTFORM), hier wörtlich.
+  const FORMATE = { youtube: ["longform", "short", "deep_dive"], twitter: ["thread"], x: ["thread"], linkedin: ["linkedin_post"], newsletter: ["newsletter_issue"], tiktok: ["tiktok_short"], instagram: ["carousel", "reel", "story"] };
+  const angenommen = [];
+  let abgewiesen = 0;
+  for (const [platform, formate] of Object.entries(FORMATE)) {
+    for (const format of formate) {
+      zuruecksetzen();
+      welt.pipelineModul = pipeline;
+      exportMit(RITTERGUT);
+      medien();
+      agenten();
+      const r = await pipePost({ ...LAUF, platform, format, medium_id: EXPORT_ID, lauf_id: "lauf-kanal-0001" });
+      const fall = `${platform}/${format}`;
+      if (r.status === 200) {
+        angenommen.push(`${platform}|${format}`);
+        assert.equal(r.body.status, "complete", fall);
+        assert.equal(welt.aktivierungen.length, 6, fall);
+        continue;
+      }
+      abgewiesen += 1;
+      assert.equal(r.status, 400, `${fall}: ${JSON.stringify(r.body)}`);
+      assert.equal(r.body.fehler, `medium_id nur für instagram/reel, tiktok/tiktok_short, youtube/short, x/thread, linkedin/linkedin_post (Kanäle von „Text erzeugen“), nicht für ${fall} — Lauf nicht gestartet`);
+      assert.equal(welt.aktivierungen.length, 0, `${fall}: kein bezahlter Aufruf`);
+      assert.equal(welt.content.length, 0, `${fall}: keine content-Zeile`);
+      assert.equal(welt.log.filter((l) => l.tabelle === "content").length, 0, `${fall}: weder Lauf-ID-Prüfung noch Insert`);
+      assert.equal(mediumLesungen().length, 0, `${fall}: keine Abfrage auf studio_medium`);
+      assert.equal(welt.objektAbrufe, 0, `${fall}: kein Export-Abruf`);
+      // Ohne medium_id läuft dieselbe Kombination wie bisher.
+      zuruecksetzen();
+      welt.pipelineModul = pipeline;
+      exportMit(RITTERGUT);
+      agenten();
+      const ohne = await pipePost({ ...LAUF, platform, format });
+      assert.deepEqual([ohne.status, ohne.body.status], [200, "complete"], `${fall} ohne medium_id`);
+    }
+  }
+  assert.equal(abgewiesen, 6);
+  assert.deepEqual([...angenommen].sort(), [...wahl].sort(), "angenommen werden genau die Kanäle von „Text erzeugen“");
 });
 
 // ═══ „Text erzeugen“ im Studio (Nachbesserung Paket C, Auftrag C) ═══
@@ -764,7 +1026,16 @@ test("M-C9 laufAusgang: Antworten der Pipeline eingeordnet wie auf /content (Erg
   const a = T.laufAusgang;
   assert.equal(a(200, { status: "complete", steps: [], contentId: 12, summary: { total_cost_usd: 0.1656 } }).text, "Lauf beendet: Caption #12 — zur Freigabe im Stapel · geschätzt $0.1656");
   assert.equal(a(200, { status: "abgelehnt", steps: [], contentId: 13 }).text, "Lauf beendet: Caption #13 — COUNSEL lehnt ab — nicht im Stapel · Kosten nicht gemeldet");
-  assert.deepEqual(a(409, { fehler: "Lauf-ID schon vergeben", content_id: 12 }), { art: "existiert", contentId: 12, text: "Lauf existiert bereits (#12) — kein zweiter Lauf gestartet · Lauf-ID schon vergeben" });
+  assert.deepEqual(a(409, { fehler: "Lauf-ID schon vergeben", content_id: 12 }), { art: "existiert", contentId: 12, status: null, text: "Lauf existiert bereits (#12) — kein zweiter Lauf gestartet · Lauf-ID schon vergeben" });
+  assert.equal(a(409, { fehler: "x", content_id: 12, status: "counsel_geprueft" }).status, "counsel_geprueft");
+  // Delta-Prüfung f2-endzustand-1: Die ID bleibt bei unbekanntem Ausgang und bei 409 mit Zeile, die nicht in einem Endzustand ist.
+  const offen = (status, daten) => T.laufNochOffen(a(status, daten));
+  assert.equal(offen(null, null), true, "Netz");
+  for (const st of ["entwurf", "counsel_geprueft", "archiviert"]) assert.equal(offen(409, { fehler: "x", content_id: 12, status: st }), true, st);
+  assert.equal(offen(409, { fehler: "x", content_id: 12 }), true, "409 ohne Status");
+  for (const st of ["zur_freigabe", "abgelehnt", "fehler", "freigegeben", "gepostet"]) assert.equal(offen(409, { fehler: "x", content_id: 12, status: st }), false, st);
+  assert.equal(offen(409, { fehler: "x" }), false, "409 ohne Zeile");
+  for (const [st, d] of [[200, { status: "complete", steps: [], contentId: 12 }], [400, { fehler: "x" }], [500, { fehler: "x", content_id: 14, status: "fehler" }]]) assert.equal(offen(st, d), false, String(st));
   assert.equal(a(400, { fehler: "medium_id ungültig" }).art, "abgewiesen");
   assert.equal(a(500, { fehler: "Agent nicht erreichbar", content_id: 14, status: "fehler" }).art, "abgebrochen");
   assert.equal(a(500, { fehler: "Lauf-ID nicht prüfbar" }).art, "nicht_gestartet");
@@ -784,4 +1055,711 @@ test("M-C9 laufAusgang: Antworten der Pipeline eingeordnet wie auf /content (Erg
   assert.equal(T.neueLaufId({ randomUUID: () => "kurz" }), null, "Lauf-ID nach Vertrag, sonst kein Lauf");
   assert.match(T.neueLaufId(), /^[0-9a-f-]{36}$/);
   assert.deepEqual(T.laufKoerper(SLUG, 3, "tiktok|tiktok_short", "business_automation", "id-0000001"), { platform: "tiktok", format: "tiktok_short", category: "business_automation", objekt_slug: SLUG, medium_id: 3, lauf_id: "id-0000001" });
+});
+
+// ═══ Schlussprüfung d3-kosten-knopf: Tab-Speicher im Betrieb, erster Versuch, Abgleich mit den geladenen Captions ═══
+
+/** Studio wie GET /api/studio/[objekt] es liefert (aus der Attrappe): Medien, Credits und Assets der Seite. */
+async function holeStudio() {
+  const res = await studioRoute.GET(new NextRequest(`http://harness.local/api/studio/${SLUG}`, { headers: { cookie: "gp-auth=test" } }), { params: Promise.resolve({ objekt: SLUG }) });
+  assert.equal(res.status, 200);
+  return res.json();
+}
+
+/**
+ * Medien-Panel als Wurzel, eingebunden wie in StudioAnsicht (ohne speicher-Prop: „Text erzeugen“ nimmt sessionStorage),
+ * mit den Daten von GET /api/studio. „Text erzeugen“ zum Export läuft gegen die echte Pipeline-Route (Agenten-Attrappe,
+ * nichts Bezahltes). neuGelesen() liest das Studio neu und gibt dem Panel die neuen Daten (Neu laden im selben Tab).
+ */
+async function medienPanelLaufzeit(s = { gesendet: [], verloren: false }) {
+  const { hookLaufzeit, ladeStudioBausteine } = await import("./harness/studio.mjs");
+  const lz = hookLaufzeit();
+  const B = ladeStudioBausteine({ ...lz.attrappen, "@/lib/counsel-urteil": counselModul, "@/lib/freigabe-regeln": regeln });
+  const holen = async (url, init) => {
+    assert.equal(url, "/api/content/pipeline");
+    s.gesendet.push(JSON.parse(init.body));
+    const req = new NextRequest(`http://harness.local${url}`, { method: "POST", headers: { ...init.headers, cookie: "gp-auth=test" }, body: init.body });
+    const res = await pipeline.POST(req);
+    // Server fertig, Antwort noch unterwegs (Tor im Client), wenn der Test es so stellt.
+    if (s.nachServer) await s.nachServer();
+    if (s.verloren) throw new TypeError("Verbindung nach dem Senden abgebrochen");
+    return res;
+  };
+  const wurzel = (studio) => lz.setzeWurzel(B.medien.MedienPanel, { slug: SLUG, medien: studio.medien, credits: studio.kosten_credits, assets: studio.assets.wert, neuLaden: () => {}, holen });
+  const studio = await holeStudio();
+  assert.equal(studio.medien.wert.ketten.length, 1, "eine Kette (Export 3)");
+  wurzel(studio);
+  const alle = (k, pred, aus = []) => {
+    if (Array.isArray(k)) for (const c of k) alle(c, pred, aus);
+    else if (k && typeof k === "object") {
+      if (pred(k)) aus.push(k);
+      alle(k.kinder, pred, aus);
+    }
+    return aus;
+  };
+  const text = (k) => (Array.isArray(k) ? k.map(text).join("") : k && typeof k === "object" ? text(k.kinder) : k === null || k === undefined || typeof k === "boolean" ? "" : String(k));
+  const element = (attr) => alle(lz.rendere(), (n) => n.props?.[attr] !== undefined)[0] ?? null;
+  const lauf = async () => {
+    element("data-text-erzeugen-knopf").props.onClick();
+    element("data-text-erzeugen-start").props.onClick();
+    await lz.ruhe(40);
+  };
+  return { lz, s, element, text, lauf, ausgang: () => element("data-text-erzeugen-ausgang"), neuGelesen: async () => wurzel(await holeStudio()) };
+}
+
+/** globalThis.sessionStorage für einen Test stellen (Node 25 hat eines, Node 22 nicht) und danach zurücksetzen. */
+function stelleSessionStorage(t) {
+  const alt = Object.getOwnPropertyDescriptor(globalThis, "sessionStorage");
+  const speicher = speicherAttrappe();
+  Object.defineProperty(globalThis, "sessionStorage", { value: speicher, configurable: true, writable: true, enumerable: true });
+  t.after(() => {
+    if (alt) Object.defineProperty(globalThis, "sessionStorage", alt);
+    else delete globalThis.sessionStorage;
+  });
+  return speicher;
+}
+
+test("M-C17 „Text erzeugen“ im Betrieb (Schlussprüfung d3-kosten-knopf-1, Delta-Prüfung f2-endzustand-1): Medien-Panel ohne speicher-Prop mit gestelltem sessionStorage — Antwort verloren → Eintrag „unbekannt“; Neuladen, die Caption steht noch im Entwurf → Hinweis und „Erneut senden …“ mit derselben ID → 409, die ID bleibt; nach dem Ende des Laufs gibt das nächste „Erneut senden …“ (409, zur_freigabe) sie frei; kein zweiter bezahlter Lauf", async (t) => {
+  const speicher = stelleSessionStorage(t);
+  const schluessel = `gp-text-erzeugen:${SLUG}:${EXPORT_ID}`;
+  exportMit(RITTERGUT);
+  medien();
+  agenten();
+  const eins = await medienPanelLaufzeit();
+  assert.equal(eins.text(eins.element("data-text-erzeugen-knopf")), "Text erzeugen …");
+  eins.s.verloren = true;
+  await eins.lauf();
+  eins.s.verloren = false;
+  assert.equal(eins.ausgang().props["data-text-erzeugen-ausgang"], "unbekannt");
+  const id = eins.s.gesendet[0].lauf_id;
+  assert.deepEqual({ ...JSON.parse(speicher.m.get(schluessel)), seit: "…" }, { laufId: id, art: "unbekannt", seit: "…" }, "der Eintrag steht im sessionStorage des Browsers");
+  assert.equal(welt.aktivierungen.length, 6);
+  // Der Lauf läuft aus Sicht des Studios noch: Seine Zeile steht im Entwurf.
+  const zeileDesLaufs = welt.content.find((z) => z.metadata?.lauf_id === id);
+  zeileDesLaufs.status = "entwurf";
+  // Neuladen: neue Laufzeit, neue Studio-Lesung, derselbe sessionStorage.
+  const zwei = await medienPanelLaufzeit();
+  assert.equal(zwei.element("data-text-erzeugen-gemerkt").props["data-text-erzeugen-gemerkt"], "unbekannt");
+  assert.match(zwei.text(zwei.element("data-text-erzeugen-gemerkt")), new RegExp(`Lauf-ID ${id.slice(0, 8)}…\\) — er kann noch laufen\\.`));
+  assert.equal(zwei.element("data-text-erzeugen-bekannt"), null, "eine Zeile im Entwurf ist kein bekannter Ausgang");
+  assert.equal(zwei.text(zwei.element("data-text-erzeugen-knopf")), "Erneut senden …");
+  zwei.element("data-text-erzeugen-knopf").props.onClick();
+  assert.match(zwei.text(zwei.element("data-text-erzeugen-bestaetigung")), /\(dieselbe wie beim Versuch mit unbekanntem Ausgang\)/);
+  zwei.element("data-text-erzeugen-start").props.onClick();
+  await zwei.lz.ruhe(40);
+  assert.equal(zwei.s.gesendet[0].lauf_id, id, "dieselbe Lauf-ID nach dem Neuladen");
+  assert.equal(zwei.ausgang().props["data-text-erzeugen-ausgang"], "existiert");
+  assert.match(zwei.text(zwei.ausgang()), new RegExp(`^Lauf existiert bereits \\(#${zeileDesLaufs.id}\\)`));
+  assert.equal(welt.aktivierungen.length, 6, "kein zweiter bezahlter Lauf");
+  // Die Zeile steht im Entwurf: Die ID bleibt (f2-endzustand-1), die Karte nennt die Zeile als nicht fertig.
+  assert.equal(JSON.parse(speicher.m.get(schluessel)).laufId, id, "nach 409 mit Zeile im Entwurf bleibt der Eintrag");
+  assert.equal(zwei.text(zwei.element("data-text-erzeugen-laufend")), `Caption #${zeileDesLaufs.id} (Status entwurf) gehört zu diesem Lauf und ist noch nicht fertig.`);
+  assert.equal(zwei.text(zwei.element("data-text-erzeugen-knopf")), "Erneut senden …");
+  // Der Lauf ist fertig: Das nächste „Erneut senden …“ bekommt 409 mit zur_freigabe und gibt die ID frei.
+  zeileDesLaufs.status = "zur_freigabe";
+  zwei.element("data-text-erzeugen-knopf").props.onClick();
+  zwei.element("data-text-erzeugen-start").props.onClick();
+  await zwei.lz.ruhe(40);
+  assert.equal(zwei.s.gesendet[1].lauf_id, id);
+  assert.equal(zwei.ausgang().props["data-text-erzeugen-ausgang"], "existiert");
+  assert.equal(welt.aktivierungen.length, 6, "kein zweiter bezahlter Lauf");
+  assert.equal(speicher.m.has(schluessel), false, "nach 409 mit Endzustand ist der Eintrag weg");
+  assert.equal(zwei.element("data-text-erzeugen-laufend"), null);
+  assert.equal(zwei.text(zwei.element("data-text-erzeugen-knopf")), "Text erzeugen …");
+});
+
+test("M-C18 „Text erzeugen“, erster Versuch scheitert bekannt (Schlussprüfung d3-kosten-knopf-2): 400 (Video eines anderen Objekts) → „abgewiesen“, 502 ohne Zeile (Medien nicht lesbar) → „nicht gestartet“ — kein „Ausgang unbekannt“, kein Eintrag im Speicher, der nächste Versuch mit neuer Lauf-ID", async () => {
+  for (const [fall, medium, stoerung, art, meldung] of [
+    ["400", { id: FREMDER_EXPORT_ID, sha256: "5".repeat(64) }, null, "abgewiesen", /^Lauf abgewiesen \(HTTP 400\): Medium 5 gehört nicht zum Objekt dieses Laufs — Lauf nicht gestartet$/],
+    ["502", undefined, (a) => (a.art === "supabase" && a.tabelle === "studio_medium" ? { status: 500, body: { message: "Lesen fehlgeschlagen (Test)" } } : null), "nicht_gestartet", /^Lauf nicht gestartet \(HTTP 502\): Medium 3 nicht lesbar: .* — Lauf nicht gestartet$/],
+  ]) {
+    zuruecksetzen();
+    welt.pipelineModul = pipeline;
+    exportMit(RITTERGUT);
+    medien();
+    agenten();
+    const speicher = speicherAttrappe();
+    const r = await textErzeugenLaufzeit({ speicher, ...(medium ? { medium } : {}) });
+    welt.stoerung = stoerung;
+    try {
+      await r.lauf();
+    } finally {
+      welt.stoerung = null;
+    }
+    assert.equal(r.s.gesendet.length, 1, fall);
+    assert.equal(r.ausgang().props["data-text-erzeugen-ausgang"], art, fall);
+    assert.match(r.text(r.ausgang()), meldung, fall);
+    assert.ok(!r.text(r.ausgang()).includes("Ausgang unbekannt"), `${fall}: kein unbekannter Ausgang`);
+    assert.equal(r.text(r.element("data-text-erzeugen-knopf")), "Text erzeugen …", `${fall}: die Lauf-ID ist verbraucht`);
+    assert.equal(speicher.m.size, 0, `${fall}: kein Eintrag im Speicher`);
+    assert.deepEqual([welt.aktivierungen.length, welt.content.length], [0, 0], `${fall}: kein Lauf, keine Zeile`);
+    r.element("data-text-erzeugen-knopf").props.onClick();
+    assert.match(r.text(r.element("data-text-erzeugen-bestaetigung")), / · Lauf-ID [0-9a-f]{8}… \(neu\)Ja, bezahlten Lauf starten/, `${fall}: neue Lauf-ID`);
+  }
+});
+
+test("M-C19 „Text erzeugen“, Abgleich mit den geladenen Captions (Schlussprüfung d3-kosten-knopf-3, Delta-Prüfung f2-endzustand-3): Steht die gemerkte Lauf-ID an einer Caption des Videos in einem Endzustand (LAUF_VORBEI: zur_freigabe, abgelehnt, fehler, freigegeben, gepostet), verschwindet der Eintrag; die Karte nennt „Caption #N (Status …) zu diesem Lauf“, und „Text erzeugen …“ startet ohne vergebliches 409 mit neuer ID — nach Neuladen und beim Neu-Lesen im selben Tab", async (t) => {
+  const speicher = stelleSessionStorage(t);
+  const schluessel = `gp-text-erzeugen:${SLUG}:${EXPORT_ID}`;
+  exportMit(RITTERGUT);
+  medien();
+  agenten();
+  // Antwort verloren, der Lauf läuft durch; der Inhaber lehnt die Caption im Stapel ab.
+  const eins = await medienPanelLaufzeit();
+  eins.s.verloren = true;
+  await eins.lauf();
+  eins.s.verloren = false;
+  const id = eins.s.gesendet[0].lauf_id;
+  assert.equal(JSON.parse(speicher.m.get(schluessel)).art, "unbekannt");
+  const zeileDesLaufs = welt.content.find((z) => z.metadata?.lauf_id === id);
+  zeileDesLaufs.status = "abgelehnt";
+  // Neuladen: Die Karte gleicht ab und nennt die Caption statt „kann noch laufen“.
+  const zwei = await medienPanelLaufzeit();
+  assert.equal(zwei.element("data-text-erzeugen-gemerkt"), null, "kein „kann noch laufen“");
+  const bekannt = zwei.element("data-text-erzeugen-bekannt");
+  assert.equal(bekannt.props["data-text-erzeugen-bekannt"], zeileDesLaufs.id);
+  assert.equal(zwei.text(bekannt), `Caption #${zeileDesLaufs.id} (Status abgelehnt) zu diesem Lauf (Lauf-ID ${id.slice(0, 8)}…) — der Ausgang ist bekannt. „Text erzeugen …“ startet einen neuen Lauf mit neuer Lauf-ID.`);
+  assert.equal(speicher.m.has(schluessel), false, "Eintrag entfernt");
+  assert.equal(zwei.text(zwei.element("data-text-erzeugen-knopf")), "Text erzeugen …");
+  zwei.element("data-text-erzeugen-knopf").props.onClick();
+  assert.match(zwei.text(zwei.element("data-text-erzeugen-bestaetigung")), / · Lauf-ID [0-9a-f]{8}… \(neu\)Ja, bezahlten Lauf starten/);
+  zwei.element("data-text-erzeugen-start").props.onClick();
+  await zwei.lz.ruhe(40);
+  assert.notEqual(zwei.s.gesendet[0].lauf_id, id, "neue Lauf-ID");
+  assert.equal(zwei.ausgang().props["data-text-erzeugen-ausgang"], "ergebnis", "ein neuer Lauf, kein 409");
+  assert.equal(welt.aktivierungen.length, 12);
+  assert.equal(zwei.element("data-text-erzeugen-bekannt"), null, "der Hinweis gehört zum alten Lauf");
+
+  // Im selben Tab: Ausgang unbekannt, dann liest das Studio neu und die Caption ist fertig → derselbe Abgleich.
+  const drei = await medienPanelLaufzeit();
+  drei.s.verloren = true;
+  await drei.lauf();
+  drei.s.verloren = false;
+  const id3 = drei.s.gesendet[0].lauf_id;
+  assert.equal(drei.ausgang().props["data-text-erzeugen-ausgang"], "unbekannt");
+  assert.equal(drei.text(drei.element("data-text-erzeugen-knopf")), "Erneut senden …");
+  const zeile3 = welt.content.find((z) => z.metadata?.lauf_id === id3);
+  assert.equal(zeile3.status, "zur_freigabe");
+  await drei.neuGelesen();
+  assert.equal(drei.ausgang(), null, "„Ausgang unbekannt“ ist ersetzt");
+  assert.equal(drei.text(drei.element("data-text-erzeugen-bekannt")).startsWith(`Caption #${zeile3.id} (Status zur_freigabe) zu diesem Lauf (Lauf-ID ${id3.slice(0, 8)}…)`), true);
+  assert.equal(speicher.m.has(schluessel), false);
+  assert.equal(drei.text(drei.element("data-text-erzeugen-knopf")), "Text erzeugen …");
+  // captionsZumVideo: nur Zeilen dieses Videos mit Lauf-ID nach Vertrag.
+  const { ladeTextErzeugen, ladeStudioBausteine, hookLaufzeit } = await import("./harness/studio.mjs");
+  const lz = hookLaufzeit();
+  const T = ladeTextErzeugen(lz.attrappen, { hilfen: ladeStudioBausteine({ ...lz.attrappen, "@/lib/counsel-urteil": counselModul, "@/lib/freigabe-regeln": regeln }).hilfen });
+  const asset = (id, status, metadata) => ({ beleg: { id, status, body: null, review_notes: null, metadata } });
+  assert.deepEqual(
+    T.captionsZumVideo([asset(1, "zur_freigabe", { medium_id: 3, lauf_id: "lauf-0000001" }), asset(2, "abgelehnt", { medium_id: 5, lauf_id: "lauf-0000002" }), asset(3, "fehler", { medium_id: "3", lauf_id: "lauf-0000003" }), asset(4, "fehler", { medium_id: 3, lauf_id: "kurz" }), asset(5, "fehler", { medium_id: 3 }), asset(6, "fehler", null)], 3),
+    [{ contentId: 1, status: "zur_freigabe", laufId: "lauf-0000001" }],
+  );
+  assert.deepEqual(T.captionsZumVideo(null, 3), []);
+});
+
+/** Wartet höchstens ms auf ein Versprechen (ein Tor, das nie erreicht wird, hält die Suite sonst an). */
+function binnen(versprechen, ms, was) {
+  let griff;
+  const frist = new Promise((_, nein) => {
+    griff = setTimeout(() => nein(new Error(`${was}: nicht binnen ${ms} ms`)), ms);
+  });
+  return Promise.race([versprechen, frist]).finally(() => clearTimeout(griff));
+}
+
+test("M-C20 „Text erzeugen“, Neuladen während PUBLISHER oder AMPLIFIER (Prüfung f-knopf-pruefung-1): Die Caption steht dann auf counsel_geprueft — kein bekannter Ausgang. Die Lauf-ID bleibt, die Karte nennt die Caption als nicht fertig, „Erneut senden …“ bekommt 409; es bleibt bei einem bezahlten Lauf und einer Caption", async (t) => {
+  const speicher = stelleSessionStorage(t);
+  const schluessel = `gp-text-erzeugen:${SLUG}:${EXPORT_ID}`;
+  for (const halt of ["publisher", "amplifier"]) {
+    zuruecksetzen();
+    welt.pipelineModul = pipeline;
+    exportMit(RITTERGUT);
+    medien();
+    agenten();
+    speicher.m.clear();
+    let auf;
+    let angekommen;
+    const tor = new Promise((r) => (auf = r));
+    const da = new Promise((r) => (angekommen = r));
+    welt.vorAntwort = async (a) => {
+      if (a.art === "activate" && a.body?.agent_id === halt) {
+        angekommen();
+        await tor;
+      }
+    };
+    const eins = await medienPanelLaufzeit();
+    try {
+      eins.element("data-text-erzeugen-knopf").props.onClick();
+      eins.element("data-text-erzeugen-start").props.onClick();
+      await binnen(da, 5_000, `Tor vor ${halt}`);
+      const id = eins.s.gesendet[0].lauf_id;
+      const zeileDesLaufs = welt.content.find((z) => z.metadata?.lauf_id === id);
+      assert.equal(zeileDesLaufs.status, "counsel_geprueft", `${halt}: Status während der Stufe`);
+      assert.equal(JSON.parse(speicher.m.get(schluessel)).art, "laeuft");
+      // Neuladen während der Stufe: neue Karte, neue Studio-Lesung, derselbe sessionStorage.
+      const zwei = await medienPanelLaufzeit();
+      assert.equal(zwei.element("data-text-erzeugen-bekannt"), null, `${halt}: kein bekannter Ausgang`);
+      assert.equal(zwei.element("data-text-erzeugen-laufend").props["data-text-erzeugen-laufend"], zeileDesLaufs.id);
+      assert.equal(zwei.text(zwei.element("data-text-erzeugen-laufend")), `Caption #${zeileDesLaufs.id} (Status counsel_geprueft) gehört zu diesem Lauf und ist noch nicht fertig.`);
+      assert.equal(zwei.element("data-text-erzeugen-gemerkt").props["data-text-erzeugen-gemerkt"], "laeuft");
+      assert.equal(JSON.parse(speicher.m.get(schluessel)).laufId, id, `${halt}: der Eintrag bleibt`);
+      assert.equal(zwei.text(zwei.element("data-text-erzeugen-knopf")), "Erneut senden …");
+      zwei.element("data-text-erzeugen-knopf").props.onClick();
+      assert.match(zwei.text(zwei.element("data-text-erzeugen-bestaetigung")), /\(dieselbe wie beim Versuch mit unbekanntem Ausgang\)/);
+      zwei.element("data-text-erzeugen-start").props.onClick();
+      await zwei.lz.ruhe(40);
+      assert.equal(zwei.s.gesendet[0].lauf_id, id, `${halt}: dieselbe Lauf-ID`);
+      assert.equal(zwei.ausgang().props["data-text-erzeugen-ausgang"], "existiert");
+      assert.match(zwei.text(zwei.ausgang()), /Status counsel_geprueft/);
+    } finally {
+      welt.vorAntwort = null;
+      auf();
+      await eins.lz.ruhe(40);
+    }
+    assert.equal(welt.aktivierungen.length, 6, `${halt}: ein bezahlter Lauf`);
+    assert.equal(welt.content.filter((z) => z.metadata?.medium_id === EXPORT_ID).length, 1, `${halt}: eine Caption zum Video`);
+  }
+  // Positivliste: nur Endzustände sind ein bekannter Ausgang.
+  const { ladeTextErzeugen, ladeStudioBausteine, hookLaufzeit } = await import("./harness/studio.mjs");
+  const lz = hookLaufzeit();
+  const T = ladeTextErzeugen(lz.attrappen, { hilfen: ladeStudioBausteine({ ...lz.attrappen, "@/lib/counsel-urteil": counselModul, "@/lib/freigabe-regeln": regeln }).hilfen });
+  assert.deepEqual([...T.LAUF_VORBEI].sort(), ["abgelehnt", "fehler", "freigegeben", "gepostet", "zur_freigabe"]);
+});
+
+test("M-C21 „Text erzeugen“, Neu-Lesen im selben Tab während des Laufs (Prüfung f-knopf-pruefung-1): Solange die Karte auf die Antwort wartet, gleicht sie nicht ab, auch wenn die Caption schon fertig ist; nach verlorener Antwort nennt sie die Caption der letzten Lesung (counsel_geprueft) als nicht fertig; das nächste Neu-Lesen im Endzustand ergibt den bekannten Ausgang", async (t) => {
+  const speicher = stelleSessionStorage(t);
+  const schluessel = `gp-text-erzeugen:${SLUG}:${EXPORT_ID}`;
+  exportMit(RITTERGUT);
+  medien();
+  agenten();
+  // (a) Der Server ist fertig (zur_freigabe), die Antwort aber noch unterwegs: Neu-Lesen ändert die laufende Karte nicht.
+  let auf;
+  let serverFertig;
+  const tor = new Promise((r) => (auf = r));
+  const fertigDa = new Promise((r) => (serverFertig = r));
+  const s = { gesendet: [], verloren: false, nachServer: async () => { serverFertig(); await tor; } };
+  const k = await medienPanelLaufzeit(s);
+  try {
+    k.element("data-text-erzeugen-knopf").props.onClick();
+    k.element("data-text-erzeugen-start").props.onClick();
+    await binnen(fertigDa, 5_000, "Server fertig");
+    const z = welt.content.find((x) => x.metadata?.lauf_id === s.gesendet[0].lauf_id);
+    assert.equal(z.status, "zur_freigabe");
+    await k.neuGelesen();
+    assert.ok(k.element("data-text-erzeugen-laeuft"), "„Pipeline läuft …“ bleibt");
+    assert.equal(k.element("data-text-erzeugen-bekannt"), null);
+    assert.equal(k.element("data-text-erzeugen-laufend"), null);
+    assert.equal(JSON.parse(speicher.m.get(schluessel)).art, "laeuft", "der Eintrag bleibt, bis die Antwort da ist");
+  } finally {
+    s.nachServer = null;
+    auf();
+    await k.lz.ruhe(40);
+  }
+  assert.equal(k.ausgang().props["data-text-erzeugen-ausgang"], "ergebnis");
+  assert.equal(speicher.m.has(schluessel), false);
+  assert.equal(welt.aktivierungen.length, 6);
+
+  // (b) Tor vor PUBLISHER; Neu-Lesen während des Laufs (counsel_geprueft), dann bricht die Verbindung ab, der Server läuft weiter.
+  let auf2;
+  let angekommen;
+  const tor2 = new Promise((r) => (auf2 = r));
+  const da = new Promise((r) => (angekommen = r));
+  welt.vorAntwort = async (a) => {
+    if (a.art === "activate" && a.body?.agent_id === "publisher") {
+      angekommen();
+      await tor2;
+    }
+  };
+  const s2 = { gesendet: [], verloren: false };
+  const k2 = await medienPanelLaufzeit(s2);
+  try {
+    k2.element("data-text-erzeugen-knopf").props.onClick();
+    k2.element("data-text-erzeugen-start").props.onClick();
+    await binnen(da, 5_000, "Tor vor publisher");
+    await k2.neuGelesen();
+    assert.ok(k2.element("data-text-erzeugen-laeuft"));
+    s2.verloren = true;
+  } finally {
+    welt.vorAntwort = null;
+    auf2();
+    await k2.lz.ruhe(40);
+  }
+  const id2 = s2.gesendet[0].lauf_id;
+  const z2 = welt.content.find((x) => x.metadata?.lauf_id === id2);
+  assert.equal(z2.status, "zur_freigabe", "der Server lief weiter");
+  assert.equal(k2.ausgang().props["data-text-erzeugen-ausgang"], "unbekannt");
+  assert.equal(k2.text(k2.element("data-text-erzeugen-laufend")), `Caption #${z2.id} (Status counsel_geprueft) gehört zu diesem Lauf und ist noch nicht fertig.`, "Stand der letzten Lesung");
+  assert.equal(k2.element("data-text-erzeugen-bekannt"), null);
+  assert.equal(JSON.parse(speicher.m.get(schluessel)).art, "unbekannt");
+  assert.equal(k2.text(k2.element("data-text-erzeugen-knopf")), "Erneut senden …");
+  // Nächstes Neu-Lesen: Die Caption steht im Endzustand → bekannter Ausgang, neue ID beim nächsten Lauf.
+  await k2.neuGelesen();
+  assert.equal(k2.ausgang(), null);
+  assert.equal(k2.element("data-text-erzeugen-laufend"), null);
+  assert.ok(k2.text(k2.element("data-text-erzeugen-bekannt")).startsWith(`Caption #${z2.id} (Status zur_freigabe) zu diesem Lauf`));
+  assert.equal(speicher.m.has(schluessel), false);
+  assert.equal(k2.text(k2.element("data-text-erzeugen-knopf")), "Text erzeugen …");
+  assert.equal(welt.aktivierungen.length, 12, "zwei Läufe, je 6 Stufen — keiner doppelt");
+});
+
+/** Lauf mit verlorener Antwort über das Medien-Panel; liefert Karte, Lauf-ID und Zeile (der Server lief durch). */
+async function verlorenerLauf() {
+  const k = await medienPanelLaufzeit();
+  k.s.verloren = true;
+  await k.lauf();
+  k.s.verloren = false;
+  assert.equal(k.ausgang().props["data-text-erzeugen-ausgang"], "unbekannt");
+  const id = k.s.gesendet[0].lauf_id;
+  return { k, id, zeile: welt.content.find((z) => z.metadata?.lauf_id === id) };
+}
+
+test("M-C23 „Text erzeugen“ nach 409 mit laufender Zeile (Delta-Prüfung f2-endzustand-1, PROBE-K3): Neuladen während PUBLISHER, „Erneut senden …“ → 409 mit counsel_geprueft → die Lauf-ID bleibt, auch nach Neu-Lesen; „Lauf-ID verwerfen …“ gibt sie erst nach Bestätigung frei; Abbrechen lässt sie stehen; ohne Verwerfen bleibt es bei einem bezahlten Lauf", async (t) => {
+  const speicher = stelleSessionStorage(t);
+  const schluessel = `gp-text-erzeugen:${SLUG}:${EXPORT_ID}`;
+  exportMit(RITTERGUT);
+  medien();
+  agenten();
+  let auf;
+  let angekommen;
+  const tor = new Promise((r) => (auf = r));
+  const da = new Promise((r) => (angekommen = r));
+  welt.vorAntwort = async (a) => {
+    if (a.art === "activate" && a.body?.agent_id === "publisher") {
+      angekommen();
+      await tor;
+    }
+  };
+  const eins = await medienPanelLaufzeit();
+  try {
+    eins.element("data-text-erzeugen-knopf").props.onClick();
+    eins.element("data-text-erzeugen-start").props.onClick();
+    await binnen(da, 5_000, "Tor vor publisher");
+    const id = eins.s.gesendet[0].lauf_id;
+    const zeileDesLaufs = welt.content.find((z) => z.metadata?.lauf_id === id);
+    // 1. Neuladen während PUBLISHER: nicht fertig, „Erneut senden …“.
+    const zwei = await medienPanelLaufzeit();
+    assert.equal(zwei.text(zwei.element("data-text-erzeugen-knopf")), "Erneut senden …");
+    // 2. Erneut senden → 409 mit counsel_geprueft.
+    zwei.element("data-text-erzeugen-knopf").props.onClick();
+    zwei.element("data-text-erzeugen-start").props.onClick();
+    await zwei.lz.ruhe(40);
+    assert.equal(zwei.ausgang().props["data-text-erzeugen-ausgang"], "existiert");
+    assert.match(zwei.text(zwei.ausgang()), /Status counsel_geprueft/);
+    // 3. Die ID bleibt: Eintrag, Hinweis „noch nicht fertig“, „Erneut senden …“ — auch nach fertig() und Neu-Lesen.
+    for (const schritt of ["nach dem 409", "nach dem Neu-Lesen"]) {
+      if (schritt === "nach dem Neu-Lesen") await zwei.neuGelesen();
+      assert.equal(JSON.parse(speicher.m.get(schluessel)).laufId, id, `${schritt}: Eintrag bleibt`);
+      assert.equal(zwei.text(zwei.element("data-text-erzeugen-laufend")), `Caption #${zeileDesLaufs.id} (Status counsel_geprueft) gehört zu diesem Lauf und ist noch nicht fertig.`, schritt);
+      assert.equal(zwei.text(zwei.element("data-text-erzeugen-knopf")), "Erneut senden …", schritt);
+      assert.equal(zwei.text(zwei.element("data-text-erzeugen-verwerfen")), "Lauf-ID verwerfen …", schritt);
+    }
+    // 4. Verwerfen erst nach Bestätigung; Abbrechen lässt alles stehen.
+    zwei.element("data-text-erzeugen-verwerfen").props.onClick();
+    const frage = zwei.text(zwei.element("data-text-erzeugen-verwerfen-bestaetigung"));
+    assert.ok(frage.startsWith(`Lauf-ID ${id.slice(0, 8)}… verwerfen? Caption #${zeileDesLaufs.id} steht noch auf „counsel_geprueft“. Läuft`), frage);
+    assert.ok(frage.includes("startet „Text erzeugen …“ danach einen zweiten bezahlten Lauf"), frage);
+    // Feste Lage (f3-lauf-id-1): Knopfzeile bleibt während der Frage stehen, gesperrt.
+    assert.equal(zwei.element("data-text-erzeugen-knopf").props.disabled, true, "während der Frage kein Start");
+    assert.equal(zwei.element("data-text-erzeugen-verwerfen").props.disabled, true);
+    zwei.element("data-text-erzeugen-verwerfen-zurueck").props.onClick();
+    assert.equal(JSON.parse(speicher.m.get(schluessel)).laufId, id, "Abbrechen: Eintrag bleibt");
+    assert.equal(zwei.text(zwei.element("data-text-erzeugen-knopf")), "Erneut senden …");
+    zwei.element("data-text-erzeugen-verwerfen").props.onClick();
+    zwei.element("data-text-erzeugen-verwerfen-ja").props.onClick();
+    assert.equal(speicher.m.has(schluessel), false, "verworfen: Eintrag weg");
+    assert.equal(zwei.element("data-text-erzeugen-laufend"), null);
+    assert.equal(zwei.element("data-text-erzeugen-verwerfen"), null);
+    assert.equal(zwei.text(zwei.element("data-text-erzeugen-knopf")), "Text erzeugen …");
+    zwei.element("data-text-erzeugen-knopf").props.onClick();
+    assert.match(zwei.text(zwei.element("data-text-erzeugen-bestaetigung")), / · Lauf-ID [0-9a-f]{8}… \(neu\)Ja, bezahlten Lauf starten/);
+    assert.equal(zwei.s.gesendet.length, 1, "die Bestätigung sendet nichts");
+  } finally {
+    welt.vorAntwort = null;
+    auf();
+    await eins.lz.ruhe(40);
+  }
+  assert.equal(welt.aktivierungen.length, 6, "ein bezahlter Lauf");
+  assert.equal(welt.content.filter((z) => z.metadata?.medium_id === EXPORT_ID).length, 1);
+});
+
+test("M-C24 „Text erzeugen“, Positivliste im Verhalten (Delta-Prüfung f2-endzustand-2): Ein unbekannter Status lässt den Eintrag stehen (nicht fertig, „Erneut senden …“ → 409, ID bleibt); fehler (echter Abbruch in AMPLIFIER), freigegeben und gepostet geben ihn frei — ein Klick, neue Lauf-ID, ein POST, kein 409", async (t) => {
+  const speicher = stelleSessionStorage(t);
+  const schluessel = `gp-text-erzeugen:${SLUG}:${EXPORT_ID}`;
+  // (a) Unbekannter Status, direkt gesetzt.
+  exportMit(RITTERGUT);
+  medien();
+  agenten();
+  const a = await verlorenerLauf();
+  a.zeile.status = "archiviert";
+  const a2 = await medienPanelLaufzeit();
+  assert.equal(a2.element("data-text-erzeugen-bekannt"), null);
+  assert.equal(a2.text(a2.element("data-text-erzeugen-laufend")), `Caption #${a.zeile.id} (Status archiviert) gehört zu diesem Lauf und ist noch nicht fertig.`);
+  assert.equal(JSON.parse(speicher.m.get(schluessel)).laufId, a.id);
+  assert.equal(a2.text(a2.element("data-text-erzeugen-knopf")), "Erneut senden …");
+  a2.element("data-text-erzeugen-knopf").props.onClick();
+  a2.element("data-text-erzeugen-start").props.onClick();
+  await a2.lz.ruhe(40);
+  assert.equal(a2.s.gesendet[0].lauf_id, a.id);
+  assert.equal(a2.ausgang().props["data-text-erzeugen-ausgang"], "existiert");
+  assert.equal(JSON.parse(speicher.m.get(schluessel)).laufId, a.id, "409 mit unbekanntem Status: ID bleibt");
+  assert.equal(welt.aktivierungen.length, 6);
+
+  // (b) Endzustände: fehler (AMPLIFIER scheitert, der Lauf bricht ab), freigegeben, gepostet.
+  for (const fall of ["fehler", "freigegeben", "gepostet"]) {
+    zuruecksetzen();
+    welt.pipelineModul = pipeline;
+    exportMit(RITTERGUT);
+    medien();
+    agenten();
+    speicher.m.clear();
+    if (fall === "fehler") welt.agentAntworten.amplifier = [{ status: 502, body: { fehler: "Claude-API-Fehler: HTTP 529" } }];
+    const b = await verlorenerLauf();
+    if (fall === "fehler") assert.equal(b.zeile.status, "fehler", "echter Abbruch");
+    else b.zeile.status = fall;
+    assert.equal(JSON.parse(speicher.m.get(schluessel)).laufId, b.id);
+    const vorher = welt.aktivierungen.length;
+    const b2 = await medienPanelLaufzeit();
+    assert.equal(b2.element("data-text-erzeugen-laufend"), null, fall);
+    assert.ok(b2.text(b2.element("data-text-erzeugen-bekannt")).startsWith(`Caption #${b.zeile.id} (Status ${fall}) zu diesem Lauf`), fall);
+    assert.equal(speicher.m.has(schluessel), false, `${fall}: Eintrag weg`);
+    assert.equal(b2.text(b2.element("data-text-erzeugen-knopf")), "Text erzeugen …", fall);
+    // Ein Klick: Bestätigung mit neuer ID, ein POST, Ergebnis statt 409.
+    b2.element("data-text-erzeugen-knopf").props.onClick();
+    assert.match(b2.text(b2.element("data-text-erzeugen-bestaetigung")), / · Lauf-ID [0-9a-f]{8}… \(neu\)Ja, bezahlten Lauf starten/, fall);
+    b2.element("data-text-erzeugen-start").props.onClick();
+    await b2.lz.ruhe(40);
+    assert.equal(b2.s.gesendet.length, 1, `${fall}: ein POST`);
+    assert.notEqual(b2.s.gesendet[0].lauf_id, b.id, `${fall}: neue Lauf-ID`);
+    assert.equal(b2.ausgang().props["data-text-erzeugen-ausgang"], "ergebnis", `${fall}: kein 409`);
+    assert.equal(welt.aktivierungen.length, vorher + 6, `${fall}: genau ein neuer Lauf`);
+  }
+});
+
+test("M-C25 „Text erzeugen“ nach 409, ohne geladene Caption (Delta-Prüfung f2-endzustand-1): Ist die Asset-Lesung des Studios gestört, nennt die Karte die Zeile laut 409 als nicht fertig, behält die Lauf-ID und bietet „Lauf-ID verwerfen …“", async (t) => {
+  const speicher = stelleSessionStorage(t);
+  const schluessel = `gp-text-erzeugen:${SLUG}:${EXPORT_ID}`;
+  exportMit(RITTERGUT);
+  medien();
+  agenten();
+  const { id, zeile: zeileDesLaufs } = await verlorenerLauf();
+  zeileDesLaufs.status = "counsel_geprueft";
+  // Neuladen mit gestörter Asset-Lesung (nur die Abfrage nach dem Objekt, nicht die Lauf-ID-Prüfung der Pipeline).
+  welt.stoerung = (a) => (a.art === "supabase" && a.tabelle === "content" && a.methode === "GET" && a.params.has("metadata->>objekt_slug") ? { status: 500, body: { message: "Lesen fehlgeschlagen (Test)" } } : null);
+  let zwei;
+  try {
+    zwei = await medienPanelLaufzeit();
+  } finally {
+    welt.stoerung = null;
+  }
+  assert.equal(zwei.element("data-text-erzeugen-laufend"), null, "ohne Assets keine Zeile aus der Lesung");
+  assert.equal(zwei.text(zwei.element("data-text-erzeugen-knopf")), "Erneut senden …");
+  zwei.element("data-text-erzeugen-knopf").props.onClick();
+  zwei.element("data-text-erzeugen-start").props.onClick();
+  await zwei.lz.ruhe(40);
+  assert.equal(zwei.ausgang().props["data-text-erzeugen-ausgang"], "existiert");
+  assert.equal(zwei.text(zwei.element("data-text-erzeugen-laufend")), `Caption #${zeileDesLaufs.id} (Status counsel_geprueft) gehört zu diesem Lauf und ist noch nicht fertig.`, "Zeile laut 409");
+  assert.equal(JSON.parse(speicher.m.get(schluessel)).laufId, id);
+  assert.equal(zwei.text(zwei.element("data-text-erzeugen-knopf")), "Erneut senden …");
+  assert.equal(zwei.text(zwei.element("data-text-erzeugen-verwerfen")), "Lauf-ID verwerfen …");
+  assert.equal(welt.aktivierungen.length, 6);
+});
+
+/** Strenge wie Postgres JSONB in der Attrappe: jeder Text im Körper wohlgeformt und ohne U+0000, sonst 400/22P02. */
+const speicherbar = (w) =>
+  typeof w === "string" ? w.isWellFormed() && !w.includes("\u0000") : Array.isArray(w) ? w.every(speicherbar) : w !== null && typeof w === "object" ? Object.entries(w).every(([k, v]) => speicherbar(k) && speicherbar(v)) : true;
+const strengesJsonb = (a) =>
+  a.art === "supabase" && a.tabelle === "content" && (a.methode === "PATCH" || a.methode === "POST") && !speicherbar(a.body)
+    ? { status: 400, body: { code: "22P02", message: "invalid input syntax for type json" } }
+    : null;
+
+test("M-C26 Warnungsdetail und metadata speicherbar (Schlussprüfung f3-pflichtzeile-1): Die Nachbarzeile wird erst maskiert, dann nach Zeichen gekürzt — ein Emoji an der Schnittstelle bleibt ganz, vom geschützten Namen bleibt kein Bruchstück, ein Abbruchwort bleibt Text; ein einzelnes Ersatzzeichen in metadata wird vor dem Speichern zu U+FFFD; mit strengem JSONB läuft der Caption-Lauf durch", async () => {
+  welt.stoerung = strengesJsonb;
+  try {
+    // Fall a: Emoji (zwei UTF-16-Einheiten) als 39. Zeichen der Nachbarzeile — genau an der Schnittstelle; dazu „aborted“.
+    exportMit(RITTERGUT);
+    medien();
+    const nachbar = `aborted ${"x".repeat(30)}🏰${"y".repeat(30)}`;
+    assert.equal(Array.from(nachbar).indexOf("🏰"), 38);
+    agenten({ publisher: gegliedert((link) => `1/2 Das Video zeigt den Hof.\n${nachbar}\n2/2 Mehr: ${link}`) });
+    const r = await pipePost({ ...LAUF, medium_id: EXPORT_ID });
+    assert.equal(r.body.status, "complete", JSON.stringify(r.body.speicherfehler ?? r.body.fehler ?? null));
+    const z = zeile(r.body.contentId);
+    assert.equal(z.status, "zur_freigabe");
+    const w = z.metadata.warnungen.find((x) => x.grund === LAGE_PRUEFEN);
+    assert.equal(w.detail, `als letzte Zeile von Post 1 eingesetzt (vor der Marke „2/…“), hinter: „aborted ${"x".repeat(30)}🏰…“`);
+    assert.ok(w.detail.isWellFormed(), "kein halbes Ersatzzeichen");
+    assert.ok(w.detail.length <= 160);
+
+    // Fall b: Geschützter Name über der Schnittstelle: erst maskiert, dann gekürzt — kein Bruchstück (der Lauf endet am Namensschutz).
+    zuruecksetzen();
+    welt.pipelineModul = pipeline;
+    welt.stoerung = strengesJsonb;
+    exportMit(RITTERGUT);
+    medien();
+    const NAME = ["Immo", "Nexus"].join("");
+    agenten({ publisher: gegliedert((link) => `1/2 Das Video zeigt den Hof.\n${"z".repeat(35)} ${NAME} und mehr Text danach\n2/2 Mehr: ${link}`) });
+    const n = await pipePost({ ...LAUF, medium_id: EXPORT_ID });
+    const zn = zeile(n.body.contentId);
+    const wn = zn.metadata.warnungen.find((x) => x.grund === LAGE_PRUEFEN);
+    assert.ok(wn, JSON.stringify(zn.metadata.warnungen));
+    assert.ok(!wn.detail.includes(NAME.slice(0, 3)), wn.detail);
+
+    // Fall c: Ein einzelnes Ersatzzeichen in einer Agentenantwort (AMPLIFIER) geht als U+FFFD in metadata, der Lauf wird gespeichert.
+    zuruecksetzen();
+    welt.pipelineModul = pipeline;
+    welt.stoerung = strengesJsonb;
+    exportMit(RITTERGUT);
+    medien();
+    agenten();
+    welt.agentAntworten.amplifier = () => agentOk("amplifier", "Distribution: Teaser \ud83c am Dienstag.");
+    const a = await pipePost({ ...LAUF, medium_id: EXPORT_ID });
+    assert.equal(a.body.status, "complete", JSON.stringify(a.body.speicherfehler ?? a.body.fehler ?? null));
+    const za = zeile(a.body.contentId);
+    assert.equal(za.status, "zur_freigabe");
+    assert.equal(za.metadata.amplifier_empfehlung, "Distribution: Teaser \uFFFD am Dienstag.");
+    assert.ok(speicherbar(za.metadata), "alles in metadata speicherbar");
+
+    // Fall d: Schon beim ersten Schreiben (Insert): ein einzelnes Ersatzzeichen aus dem Export im Objekt-Snapshot.
+    zuruecksetzen();
+    welt.pipelineModul = pipeline;
+    welt.stoerung = strengesJsonb;
+    exportMit({ ...RITTERGUT, kurzbeschreibung: "Testbeschreibung \ud83c mit Rest." });
+    medien();
+    agenten();
+    const e = await pipePost({ ...LAUF, medium_id: EXPORT_ID });
+    assert.equal(e.status, 200, JSON.stringify(e.body).slice(0, 300));
+    assert.equal(e.body.status, "complete", JSON.stringify(e.body.speicherfehler ?? e.body.fehler ?? null));
+    const ze = zeile(e.body.contentId);
+    assert.equal(ze.metadata.objekt_snapshot.objekt.kurzbeschreibung, "Testbeschreibung \uFFFD mit Rest.");
+  } finally {
+    welt.stoerung = null;
+  }
+});
+
+test("M-C27 Lage nicht sicher bestimmt (Schlussprüfung f3-pflichtzeile-2 bis -4): Ohne erkannte Überschrift „Finaler Content“ oder ohne sicher erkannten Post 1 setzt die Pipeline nichts an geratener Stelle ein — Ende des Abschnitts bzw. des Texts mit der Warnung „Lage der Pflichtzeile nicht sicher bestimmt, prüfen“; bei X meldet die Längenprüfung dann „nicht prüfbar“, nie stillschweigend", async () => {
+  const lauf = async (body, publisher) => {
+    zuruecksetzen();
+    welt.pipelineModul = pipeline;
+    exportMit(RITTERGUT);
+    medien();
+    agenten({ publisher });
+    const r = await pipePost({ ...LAUF, ...body, medium_id: EXPORT_ID });
+    assert.equal(r.body.status, "complete", JSON.stringify(r.body.fehler ?? null));
+    const z = zeile(r.body.contentId);
+    assert.equal(pflichtzeilen(z.body), 1);
+    return { z, roh: publisher(auftrag("publisher")), w: ohneZeit(z.metadata.warnungen) };
+  };
+  const UNSICHER = "Lage der Pflichtzeile nicht sicher bestimmt, prüfen";
+  const NICHT_PRUEFBAR = { stufe: "pipeline", grund: "X: Länge von Post 1 nicht prüfbar", detail: "Post 1 nicht sicher abgegrenzt (Abschnitt „Finaler Content“ oder Postmarken nicht erkannt)" };
+  // X mit Keycap-Gliederung: keine erkannte Überschrift → Textende, unsicher, Länge nicht prüfbar.
+  const keycap = (task) => `1️⃣ Qualitätsprüfung\n- 1/2: 41 Zeichen ✓\n\n2️⃣ Finaler Content\n1/2 Das Video zeigt den Hof.\n2/2 Mehr: ${linkAusAuftrag(task)}\n\n3️⃣ Publishing-Zeitpunkt\nDienstag`;
+  const k = await lauf({}, keycap);
+  assert.equal(k.z.body, `${k.roh}\n\n${PFLICHTZEILE}`);
+  assert.deepEqual(k.w, [{ stufe: "pipeline", grund: UNSICHER, detail: "ans Ende des Texts gehängt (Abschnitt „Finaler Content“ nicht erkannt), hinter: „Dienstag“" }, NICHT_PRUEFBAR]);
+  // X mit „1/3“ in der Überschriftszeile ohne Doppelpunkt: Post 1 unklar → Ende des Abschnitts, Länge nicht prüfbar (kein Fehlalarm).
+  const ohneDoppelpunkt = gegliedert((link) => `**Finaler Content** 1/3 Das Video zeigt den Hof.\n2/3 ${"x".repeat(300)}\n3/3 Mehr: ${link}`);
+  const o = await lauf({}, (task) => ohneDoppelpunkt(task).replace("Finaler Content:\n", ""));
+  assert.deepEqual(o.w.map((x) => x.grund), [UNSICHER, NICHT_PRUEFBAR.grund]);
+  assert.ok(o.w[0].detail.startsWith("am Ende des Abschnitts „Finaler Content“ eingesetzt (Post 1 nicht sicher erkannt), hinter: „3/3 Mehr: "), o.w[0].detail);
+  // Instagram ohne Überschrift: Textende, unsicher — keine Längenprüfung außerhalb von X.
+  const ig = await lauf({ platform: "instagram", format: "reel" }, (task) => `Das Video zeigt den Hof bei Nacht. ${linkAusAuftrag(task)}\n#Denkmal`);
+  assert.deepEqual(ig.w.map((x) => x.grund), [UNSICHER]);
+  // X, Pflichtzeile schon da, aber Gliederung nicht erkannt: keine Lage-Warnung, aber „nicht prüfbar“.
+  const da = await lauf({}, (task) => `1/2 Das Video zeigt den Hof.\n${PFLICHTZEILE}\n2/2 Mehr: ${linkAusAuftrag(task)}`);
+  assert.deepEqual(da.w, [NICHT_PRUEFBAR]);
+});
+
+/** data-text-erzeugen-*-Attribute der Karte in der Reihenfolge des Baums (Lage der Elemente zueinander). */
+function reihenfolge(k) {
+  const aus = [];
+  (function lauf(n) {
+    if (Array.isArray(n)) n.forEach(lauf);
+    else if (n && typeof n === "object") {
+      for (const a of Object.keys(n.props ?? {})) if (a.startsWith("data-text-erzeugen")) aus.push(a.slice("data-text-erzeugen".length) || "karte");
+      lauf(n.kinder);
+    }
+  })(k.lz.rendere());
+  return aus;
+}
+
+test("M-C28 „Erneut senden …“ behält den Startzeitpunkt (Schlussprüfung f3-lauf-id-3): Nach einem 409 mit laufender Zeile steht im Eintrag weiter der Zeitpunkt des ersten Versuchs; nach Neuladen nennt die Karte ihn", async (t) => {
+  const speicher = stelleSessionStorage(t);
+  const schluessel = `gp-text-erzeugen:${SLUG}:${EXPORT_ID}`;
+  t.mock.timers.enable({ apis: ["Date"], now: Date.parse("2026-11-11T09:00:00.000Z") });
+  exportMit(RITTERGUT);
+  medien();
+  agenten();
+  const { k, id, zeile: zeileDesLaufs } = await verlorenerLauf();
+  assert.equal(JSON.parse(speicher.m.get(schluessel)).seit, "2026-11-11T09:00:00.000Z");
+  zeileDesLaufs.status = "counsel_geprueft";
+  t.mock.timers.tick(2.5 * 3_600_000);
+  // Wiederholung um 11:30 → 409 (läuft): Eintrag mit derselben ID und dem ersten Zeitpunkt.
+  k.element("data-text-erzeugen-knopf").props.onClick();
+  k.element("data-text-erzeugen-start").props.onClick();
+  await k.lz.ruhe(40);
+  assert.equal(k.s.gesendet[1].lauf_id, id);
+  assert.equal(k.ausgang().props["data-text-erzeugen-ausgang"], "existiert");
+  assert.deepEqual(JSON.parse(speicher.m.get(schluessel)), { laufId: id, art: "unbekannt", seit: "2026-11-11T09:00:00.000Z" });
+  // Neuladen: „in diesem Tab gestartet am 11.11.2026 10:00:00 (Europe/Berlin)“ — nicht 12:30.
+  const zwei = await medienPanelLaufzeit();
+  assert.match(zwei.text(zwei.element("data-text-erzeugen-gemerkt")), /in diesem Tab gestartet am 11\.11\.2026 10:00:00 \(Europe\/Berlin\)/);
+  // Ein neuer Lauf (neue ID) bekommt einen neuen Zeitpunkt.
+  zeileDesLaufs.status = "zur_freigabe";
+  await zwei.neuGelesen();
+  t.mock.timers.tick(60_000);
+  zwei.s.verloren = true;
+  zwei.element("data-text-erzeugen-knopf").props.onClick();
+  zwei.element("data-text-erzeugen-start").props.onClick();
+  await zwei.lz.ruhe(40);
+  zwei.s.verloren = false;
+  assert.notEqual(zwei.s.gesendet[0].lauf_id, id);
+  assert.equal(JSON.parse(speicher.m.get(schluessel)).seit, "2026-11-11T11:31:00.000Z");
+});
+
+test("M-C29 Feste Lage der Fragen und Sichtbarkeit von „Lauf-ID verwerfen …“ (Schlussprüfung f3-lauf-id-1 und -2): Öffnet „Erneut senden …“ oder „Lauf-ID verwerfen …“ die Frage, bleibt alles davor stehen und die Frage kommt danach — „Ja“ liegt nie an der Stelle des geklickten Knopfs; „Lauf-ID verwerfen …“ fehlt ohne bekannte Zeile und während „Pipeline läuft …“", async (t) => {
+  stelleSessionStorage(t);
+  exportMit(RITTERGUT);
+  medien();
+  agenten();
+  // Ohne bekannte Zeile (Antwort verloren, Captions vor dem Lauf gelesen): kein Verwerfen-Knopf (gegen V7).
+  const { k, zeile: zeileDesLaufs } = await verlorenerLauf();
+  assert.equal(k.element("data-text-erzeugen-verwerfen"), null, "ohne bekannte Zeile kein Verwerfen");
+  zeileDesLaufs.status = "counsel_geprueft";
+  // Neuladen: Hinweise und beide Knöpfe.
+  const zwei = await medienPanelLaufzeit();
+  const vorher = reihenfolge(zwei);
+  assert.deepEqual(vorher.slice(-4), ["-gemerkt", "-laufend", "-knopf", "-verwerfen"]);
+  // „Erneut senden …“: alles davor bleibt, die Bestätigung mit „Ja“ kommt danach.
+  zwei.element("data-text-erzeugen-knopf").props.onClick();
+  const mitFrage = reihenfolge(zwei);
+  assert.deepEqual(mitFrage.slice(0, vorher.length), vorher, "nichts vor der Frage verschwindet");
+  assert.ok(mitFrage.indexOf("-start") > mitFrage.indexOf("-knopf"), "„Ja“ steht hinter dem Knopf");
+  assert.equal(zwei.element("data-text-erzeugen-knopf").props.disabled, true);
+  assert.equal(zwei.element("data-text-erzeugen-verwerfen").props.disabled, true);
+  zwei.element("data-text-erzeugen-zurueck").props.onClick();
+  assert.deepEqual(reihenfolge(zwei), vorher);
+  // „Lauf-ID verwerfen …“: ebenso.
+  zwei.element("data-text-erzeugen-verwerfen").props.onClick();
+  const mitVerwerfen = reihenfolge(zwei);
+  assert.deepEqual(mitVerwerfen.slice(0, vorher.length), vorher, "nichts vor der Frage verschwindet");
+  assert.ok(mitVerwerfen.indexOf("-verwerfen-ja") > mitVerwerfen.indexOf("-verwerfen"), "„Ja“ steht hinter dem Verwerfen-Knopf");
+  zwei.element("data-text-erzeugen-verwerfen-zurueck").props.onClick();
+  // Während „Pipeline läuft …“ (Antwort am Tor): weder Start- noch Verwerfen-Knopf (gegen V8).
+  let auf;
+  const tor = new Promise((r) => (auf = r));
+  zwei.s.nachServer = async () => {
+    await tor;
+  };
+  try {
+    zwei.element("data-text-erzeugen-knopf").props.onClick();
+    zwei.element("data-text-erzeugen-start").props.onClick();
+    await zwei.lz.ruhe(5);
+    assert.ok(zwei.element("data-text-erzeugen-laeuft"), "Pipeline läuft …");
+    assert.equal(zwei.element("data-text-erzeugen-verwerfen"), null, "während des Laufs kein Verwerfen");
+    assert.equal(zwei.element("data-text-erzeugen-knopf"), null, "während des Laufs kein Start");
+  } finally {
+    zwei.s.nachServer = null;
+    auf();
+    await zwei.lz.ruhe(40);
+  }
+  assert.equal(zwei.ausgang().props["data-text-erzeugen-ausgang"], "existiert");
 });

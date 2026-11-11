@@ -20,8 +20,7 @@
 // S. 18 = hof-nacht, S. 4 = terrasse-pergola, S. 45 = lofts-balkone, S. 37 = fassade-abend. Für die übrigen
 // ist keine Seite belegt.
 // Personen: Bestandsaufnahme vom 06.11.2026, nicht erneut gesichtet; „nicht geprüft“ heißt: niemand hat
-// nachgesehen. Vor der Wahl als Vorlage wird ein Anker angesehen (Personen waren der Hauptmangel der Probe
-// vom 05.11.2026).
+// nachgesehen. Vor der Wahl als Vorlage wird ein Anker angesehen (Personen im Bild sind ein häufiger Mangel).
 // Nicht im Manifest: Standort- und Lagebild sowie die OG-Karte (ohne Objektbezug bzw. mit eingebranntem
 // Text und Preis) und die übrigen Bilder des Objektordners, die die Bestandsaufnahme nicht als Anker führt.
 
@@ -97,7 +96,7 @@ export const ANKER_MANIFESTE: Readonly<Record<StudioObjekt, AnkerManifest>> = Ob
         personen: { stand: "ja", text: "ca. 8" },
         als_anker: true,
         hinweis:
-          "Vorlage der Probe vom 05.11.2026 (dieselbe Datei, SHA-256 gleich). Soll: urls.cover im Steinadel-Export zeigt auf diese Datei; den Ist-Stand zeigt die Cover-Zeile.",
+          "Soll-Cover des Objekts: urls.cover im Steinadel-Export zeigt auf diese Datei; den Ist-Stand zeigt die Cover-Zeile.",
       }),
       eintrag({
         id: "terrasse-pergola",

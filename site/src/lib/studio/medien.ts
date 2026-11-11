@@ -212,6 +212,22 @@ export function speicherbarerText(s: string): boolean {
 
 export const NICHT_SPEICHERBAR = "enthält U+0000 oder ein einzelnes Ersatzzeichen (in Postgres nicht speicherbar)";
 
+const EINZELNE_ERSATZZEICHEN = new RegExp(EINZELNES_ERSATZZEICHEN.source, "g");
+
+/**
+ * Dieselbe Regel wie speicherbarerText, reparierend (Schlussprüfung f3-pflichtzeile-1): U+0000 fällt weg, ein einzelnes
+ * Ersatzzeichen wird zu U+FFFD — in jedem Text eines Werts, auch in Schlüsseln, Objekte und Listen rekursiv. Ein
+ * speicherbarer Text bleibt zeichengleich. Für alles, was die Pipeline in content.metadata (JSONB) schreibt.
+ */
+export function machSpeicherbar(wert: unknown): unknown {
+  if (typeof wert === "string") return speicherbarerText(wert) ? wert : wert.replace(/\u0000/g, "").replace(EINZELNE_ERSATZZEICHEN, "\uFFFD");
+  if (Array.isArray(wert)) return wert.map(machSpeicherbar);
+  if (wert !== null && typeof wert === "object") {
+    return Object.fromEntries(Object.entries(wert).map(([k, v]) => [machSpeicherbar(k) as string, machSpeicherbar(v)]));
+  }
+  return wert;
+}
+
 function text(roh: unknown, feld: string, max: number): Pruefung<string> {
   if (typeof roh !== "string" || roh.trim() === "") return { ok: false, grund: `${feld}: Text fehlt` };
   if (!speicherbarerText(roh)) return { ok: false, grund: `${feld}: ${NICHT_SPEICHERBAR}` };

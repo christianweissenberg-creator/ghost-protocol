@@ -1697,3 +1697,28 @@ test("S-P5 (Nachbesserung oberflaeche-3, caption9-3; Nachtrag d2-oberflaeche-1) 
   assert.match(sichtbar(ohne), /keines \(Text-Asset\)/);
   assert.doesNotMatch(ohne, /data-pruefregel="caption-teil"|data-karten-medium/);
 });
+
+test("S-P6 (Schlussprüfung d3-kosten-knopf-3) Seite: StudioAnsicht gibt dem Medien-Panel die geladenen Assets — daraus gleicht „Text erzeugen“ die offene Lauf-ID mit den Captions des Videos ab", async () => {
+  standardWelt();
+  videoZeilen();
+  legeAn({ id: 52, title: "Caption", status: "abgelehnt", body: "Caption zum Video, lang genug für die Regel.", review_notes: null, metadata: { objekt_slug: SLUG, medium_id: 3, lauf_id: "lauf-test-0001" } });
+  const antwort = (await hole()).body;
+  const studio = ladeStudioBausteine({ ...ECHT, "@/lib/counsel-urteil": counsel, "@/lib/freigabe-regeln": regeln });
+  const panel = studio.module["@/components/studio/MedienPanel"];
+  const aufrufe = [];
+  const V = ladeTsx("components/studio/StudioAnsicht.tsx", {
+    ...ECHT,
+    ...studio.module,
+    "@/components/studio/MedienPanel": { ...panel, MedienPanel: (props) => (aufrufe.push(props), panel.MedienPanel(props)) },
+    "next/link": { __esModule: true, default: Link },
+    "@/lib/hooks-status": hooksStatus,
+    "@/lib/types": types,
+    "@/lib/studio/objekte": await objekteModul(),
+    "@/lib/studio/regeln": await regelnStudio(),
+  });
+  const html = renderToStaticMarkup(React.createElement(V.StudioAnsicht, { slug: SLUG, lesung: { art: "daten", antwort }, kopiere: () => {}, kopierStatus: () => "Kopieren" }));
+  assert.match(html, /data-text-erzeugen="3"/);
+  assert.equal(aufrufe.length, 1);
+  assert.deepEqual(aufrufe[0].assets, antwort.assets.wert, "die Assets der Antwort");
+  assert.ok(aufrufe[0].assets.some((a) => a.beleg.metadata?.lauf_id === "lauf-test-0001" && a.beleg.metadata?.medium_id === 3), "mit Lauf-ID und Video der Caption");
+});

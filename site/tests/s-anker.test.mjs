@@ -1093,7 +1093,7 @@ test("AN-P1 Abnahme: je Bild Art, Maße, Exposé-Seite, Personen, Herkunft und H
     "Als Anker ja",
     "Herkunft Visualisierung aus dem Objekt-Exposé",
     `Hash-Status unverändert · 4ea1631f9799b83c… · gemessen ${gemessen}`,
-    "Vorlage der Probe vom 05.11.2026 (dieselbe Datei, SHA-256 gleich). Soll: urls.cover im Steinadel-Export zeigt auf diese Datei; den Ist-Stand zeigt die Cover-Zeile.",
+    "Soll-Cover des Objekts: urls.cover im Steinadel-Export zeigt auf diese Datei; den Ist-Stand zeigt die Cover-Zeile.",
   ]) {
     assert.ok(hof.includes(teil), `${teil}\n${hof}`);
   }
