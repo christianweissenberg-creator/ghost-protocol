@@ -29,6 +29,9 @@
 //   fertig; „Erneut senden …“ fragt den Stand erneut ab. Erst ein Endzustand (im 409 oder in den geladenen Captions) gibt
 //   sie frei. Hängt eine Zeile wirklich, gibt „Lauf-ID verwerfen …“ sie nach einer Bestätigung bewusst frei; läuft der
 //   Lauf doch noch, startet „Text erzeugen …“ danach einen zweiten bezahlten Lauf, und die Bestätigung sagt das.
+// - Feste Lage (Schlussprüfung f3-lauf-id-1): Öffnet „Text erzeugen …“, „Erneut senden …“ oder „Lauf-ID verwerfen …“ eine
+//   Frage, bleiben Hinweise und Knopfzeile stehen (nur gesperrt), und die Frage erscheint darunter. So rückt „Ja“ nie unter
+//   den gerade geklickten Knopf; ein Doppelklick überspringt keine Bestätigung.
 // - Eine Doppelsperre am Server (409 bei einer
 //   Zeile zu medium_id, Kanal und Format in entwurf/counsel_geprueft) gibt es bewusst nicht: Ein abgebrochener Lauf ließe
 //   seine Zeile dort stehen und hielte jede weitere Caption zu diesem Video und Kanal fest, bis jemand sie umstellt.
@@ -337,7 +340,9 @@ export function TextErzeugen({
       : laut409 !== null && laut409.laufId === offeneLaufId
         ? laut409
         : null;
-  const ruhig = stand.art === "zu" || stand.art === "ausgang";
+  // Eine Frage ist offen (bezahlter Lauf oder Verwerfen): Hinweise und Knopfzeile bleiben stehen, gesperrt (f3-lauf-id-1).
+  const frage = stand.art === "bestaetigen" || stand.art === "verwerfen";
+  const nichtLaufend = stand.art !== "laeuft";
   useEffect(() => {
     if (zumLauf === null) return;
     merkeOffenenLauf(ablage, schluessel, null);
@@ -370,7 +375,9 @@ export function TextErzeugen({
       setBekannt(null);
       setStand({ art: "laeuft", laufId });
       setOffeneLaufId(laufId);
-      const seit = new Date().toISOString();
+      // Schlussprüfung f3-lauf-id-3: Bei einer Wiederholung derselben ID bleibt der gespeicherte Startzeitpunkt.
+      const frueher = wiederholung ? leseOffenenLauf(ablage, schluessel) : null;
+      const seit = frueher !== null && frueher.laufId === laufId && frueher.seit !== "" ? frueher.seit : new Date().toISOString();
       merkeOffenenLauf(ablage, schluessel, { laufId, art: "laeuft", seit });
       const ausgang = ausgangBeiWiederholung(await sendeCaptionLauf(holen, laufKoerper(slug, medium.id, wahl, kategorie, laufId)), wiederholung);
       setStand({ art: "ausgang", ausgang });
@@ -424,23 +431,47 @@ export function TextErzeugen({
           </select>
         </label>
       </div>
-      {gemerkt !== null && stand.art === "zu" && offeneLaufId === gemerkt.laufId && (
+      {gemerkt !== null && (stand.art === "zu" || frage) && offeneLaufId === gemerkt.laufId && (
         <p className="mt-2 break-words" style={{ color: FARBE_BERNSTEIN }} data-text-erzeugen-gemerkt={gemerkt.art}>
           Caption-Lauf zu diesem Video ohne bekannten Ausgang (in diesem Tab gestartet
           {berlinDatumZeit(gemerkt.seit) === null ? "" : ` am ${berlinDatumZeit(gemerkt.seit)} (Europe/Berlin)`}, Lauf-ID {gemerkt.laufId.slice(0, 8)}…) — er kann noch laufen.
           „Erneut senden …“ schickt dieselbe Lauf-ID; läuft er schon, antwortet der Server 409 statt einen zweiten Lauf zu starten.
         </p>
       )}
-      {laufend !== null && ruhig && (
+      {laufend !== null && nichtLaufend && (
         <p className="mt-2 break-words" style={{ color: FARBE_BERNSTEIN }} data-text-erzeugen-laufend={laufend.contentId}>
           Caption #{laufend.contentId} (Status {laufend.status === null ? "nicht gemeldet" : maskiert(laufend.status)}) gehört zu diesem Lauf und ist noch nicht fertig.
         </p>
       )}
-      {bekannt !== null && stand.art === "zu" && offeneLaufId === null && (
+      {bekannt !== null && (stand.art === "zu" || frage) && offeneLaufId === null && (
         <p className="mt-2 break-words" style={{ color: "var(--gp-ink-2)" }} data-text-erzeugen-bekannt={bekannt.caption.contentId}>
           Caption #{bekannt.caption.contentId} (Status {maskiert(bekannt.caption.status)}) zu diesem Lauf (Lauf-ID {bekannt.laufId.slice(0, 8)}…) — der Ausgang
           ist bekannt. „Text erzeugen …“ startet einen neuen Lauf mit neuer Lauf-ID.
         </p>
+      )}
+      {nichtLaufend && (
+        <button
+          type="button"
+          onClick={zeigen}
+          disabled={frage}
+          aria-disabled={frage}
+          className="mt-2 min-h-11 px-4 py-2 rounded-lg text-xs font-medium bg-surface-elevated text-foreground hover:opacity-80 transition-opacity disabled:opacity-40"
+          data-text-erzeugen-knopf
+        >
+          {offeneLaufId === null ? "Text erzeugen …" : "Erneut senden …"}
+        </button>
+      )}
+      {laufend !== null && nichtLaufend && offeneLaufId !== null && (
+        <button
+          type="button"
+          onClick={() => setStand({ art: "verwerfen" })}
+          disabled={frage}
+          aria-disabled={frage}
+          className="mt-2 ml-2 min-h-11 px-4 py-2 rounded-lg text-xs bg-surface-elevated text-foreground hover:opacity-80 transition-opacity disabled:opacity-40"
+          data-text-erzeugen-verwerfen
+        >
+          Lauf-ID verwerfen …
+        </button>
       )}
       {stand.art === "verwerfen" && offeneLaufId !== null && (
         <div className="mt-2 rounded-lg p-3 break-words" style={{ border: `1px solid ${FARBE_ROT}` }} role="group" aria-label="Lauf-ID verwerfen" data-text-erzeugen-verwerfen-bestaetigung>
@@ -457,26 +488,6 @@ export function TextErzeugen({
             </button>
           </div>
         </div>
-      )}
-      {stand.art !== "bestaetigen" && stand.art !== "laeuft" && stand.art !== "verwerfen" && (
-        <button
-          type="button"
-          onClick={zeigen}
-          className="mt-2 min-h-11 px-4 py-2 rounded-lg text-xs font-medium bg-surface-elevated text-foreground hover:opacity-80 transition-opacity"
-          data-text-erzeugen-knopf
-        >
-          {offeneLaufId === null ? "Text erzeugen …" : "Erneut senden …"}
-        </button>
-      )}
-      {laufend !== null && ruhig && offeneLaufId !== null && (
-        <button
-          type="button"
-          onClick={() => setStand({ art: "verwerfen" })}
-          className="mt-2 ml-2 min-h-11 px-4 py-2 rounded-lg text-xs bg-surface-elevated text-foreground hover:opacity-80 transition-opacity"
-          data-text-erzeugen-verwerfen
-        >
-          Lauf-ID verwerfen …
-        </button>
       )}
       {stand.art === "bestaetigen" && (
         <div className="mt-2 rounded-lg p-3 break-words" style={{ border: `1px solid ${FARBE_BERNSTEIN}` }} role="group" aria-label="Bezahlten Lauf bestätigen" data-text-erzeugen-bestaetigung>

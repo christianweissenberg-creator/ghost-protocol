@@ -1457,7 +1457,9 @@ test("M-C23 „Text erzeugen“ nach 409 mit laufender Zeile (Delta-Prüfung f2-
     const frage = zwei.text(zwei.element("data-text-erzeugen-verwerfen-bestaetigung"));
     assert.ok(frage.startsWith(`Lauf-ID ${id.slice(0, 8)}… verwerfen? Caption #${zeileDesLaufs.id} steht noch auf „counsel_geprueft“. Läuft`), frage);
     assert.ok(frage.includes("startet „Text erzeugen …“ danach einen zweiten bezahlten Lauf"), frage);
-    assert.equal(zwei.element("data-text-erzeugen-knopf"), null, "während der Frage kein Start");
+    // Feste Lage (f3-lauf-id-1): Knopfzeile bleibt während der Frage stehen, gesperrt.
+    assert.equal(zwei.element("data-text-erzeugen-knopf").props.disabled, true, "während der Frage kein Start");
+    assert.equal(zwei.element("data-text-erzeugen-verwerfen").props.disabled, true);
     zwei.element("data-text-erzeugen-verwerfen-zurueck").props.onClick();
     assert.equal(JSON.parse(speicher.m.get(schluessel)).laufId, id, "Abbrechen: Eintrag bleibt");
     assert.equal(zwei.text(zwei.element("data-text-erzeugen-knopf")), "Erneut senden …");
@@ -1651,4 +1653,100 @@ test("M-C27 Lage nicht sicher bestimmt (Schlussprüfung f3-pflichtzeile-2 bis -4
   // X, Pflichtzeile schon da, aber Gliederung nicht erkannt: keine Lage-Warnung, aber „nicht prüfbar“.
   const da = await lauf({}, (task) => `1/2 Das Video zeigt den Hof.\n${PFLICHTZEILE}\n2/2 Mehr: ${linkAusAuftrag(task)}`);
   assert.deepEqual(da.w, [NICHT_PRUEFBAR]);
+});
+
+/** data-text-erzeugen-*-Attribute der Karte in der Reihenfolge des Baums (Lage der Elemente zueinander). */
+function reihenfolge(k) {
+  const aus = [];
+  (function lauf(n) {
+    if (Array.isArray(n)) n.forEach(lauf);
+    else if (n && typeof n === "object") {
+      for (const a of Object.keys(n.props ?? {})) if (a.startsWith("data-text-erzeugen")) aus.push(a.slice("data-text-erzeugen".length) || "karte");
+      lauf(n.kinder);
+    }
+  })(k.lz.rendere());
+  return aus;
+}
+
+test("M-C28 „Erneut senden …“ behält den Startzeitpunkt (Schlussprüfung f3-lauf-id-3): Nach einem 409 mit laufender Zeile steht im Eintrag weiter der Zeitpunkt des ersten Versuchs; nach Neuladen nennt die Karte ihn", async (t) => {
+  const speicher = stelleSessionStorage(t);
+  const schluessel = `gp-text-erzeugen:${SLUG}:${EXPORT_ID}`;
+  t.mock.timers.enable({ apis: ["Date"], now: Date.parse("2026-11-11T09:00:00.000Z") });
+  exportMit(RITTERGUT);
+  medien();
+  agenten();
+  const { k, id, zeile: zeileDesLaufs } = await verlorenerLauf();
+  assert.equal(JSON.parse(speicher.m.get(schluessel)).seit, "2026-11-11T09:00:00.000Z");
+  zeileDesLaufs.status = "counsel_geprueft";
+  t.mock.timers.tick(2.5 * 3_600_000);
+  // Wiederholung um 11:30 → 409 (läuft): Eintrag mit derselben ID und dem ersten Zeitpunkt.
+  k.element("data-text-erzeugen-knopf").props.onClick();
+  k.element("data-text-erzeugen-start").props.onClick();
+  await k.lz.ruhe(40);
+  assert.equal(k.s.gesendet[1].lauf_id, id);
+  assert.equal(k.ausgang().props["data-text-erzeugen-ausgang"], "existiert");
+  assert.deepEqual(JSON.parse(speicher.m.get(schluessel)), { laufId: id, art: "unbekannt", seit: "2026-11-11T09:00:00.000Z" });
+  // Neuladen: „in diesem Tab gestartet am 11.11.2026 10:00:00 (Europe/Berlin)“ — nicht 12:30.
+  const zwei = await medienPanelLaufzeit();
+  assert.match(zwei.text(zwei.element("data-text-erzeugen-gemerkt")), /in diesem Tab gestartet am 11\.11\.2026 10:00:00 \(Europe\/Berlin\)/);
+  // Ein neuer Lauf (neue ID) bekommt einen neuen Zeitpunkt.
+  zeileDesLaufs.status = "zur_freigabe";
+  await zwei.neuGelesen();
+  t.mock.timers.tick(60_000);
+  zwei.s.verloren = true;
+  zwei.element("data-text-erzeugen-knopf").props.onClick();
+  zwei.element("data-text-erzeugen-start").props.onClick();
+  await zwei.lz.ruhe(40);
+  zwei.s.verloren = false;
+  assert.notEqual(zwei.s.gesendet[0].lauf_id, id);
+  assert.equal(JSON.parse(speicher.m.get(schluessel)).seit, "2026-11-11T11:31:00.000Z");
+});
+
+test("M-C29 Feste Lage der Fragen und Sichtbarkeit von „Lauf-ID verwerfen …“ (Schlussprüfung f3-lauf-id-1 und -2): Öffnet „Erneut senden …“ oder „Lauf-ID verwerfen …“ die Frage, bleibt alles davor stehen und die Frage kommt danach — „Ja“ liegt nie an der Stelle des geklickten Knopfs; „Lauf-ID verwerfen …“ fehlt ohne bekannte Zeile und während „Pipeline läuft …“", async (t) => {
+  stelleSessionStorage(t);
+  exportMit(RITTERGUT);
+  medien();
+  agenten();
+  // Ohne bekannte Zeile (Antwort verloren, Captions vor dem Lauf gelesen): kein Verwerfen-Knopf (gegen V7).
+  const { k, zeile: zeileDesLaufs } = await verlorenerLauf();
+  assert.equal(k.element("data-text-erzeugen-verwerfen"), null, "ohne bekannte Zeile kein Verwerfen");
+  zeileDesLaufs.status = "counsel_geprueft";
+  // Neuladen: Hinweise und beide Knöpfe.
+  const zwei = await medienPanelLaufzeit();
+  const vorher = reihenfolge(zwei);
+  assert.deepEqual(vorher.slice(-4), ["-gemerkt", "-laufend", "-knopf", "-verwerfen"]);
+  // „Erneut senden …“: alles davor bleibt, die Bestätigung mit „Ja“ kommt danach.
+  zwei.element("data-text-erzeugen-knopf").props.onClick();
+  const mitFrage = reihenfolge(zwei);
+  assert.deepEqual(mitFrage.slice(0, vorher.length), vorher, "nichts vor der Frage verschwindet");
+  assert.ok(mitFrage.indexOf("-start") > mitFrage.indexOf("-knopf"), "„Ja“ steht hinter dem Knopf");
+  assert.equal(zwei.element("data-text-erzeugen-knopf").props.disabled, true);
+  assert.equal(zwei.element("data-text-erzeugen-verwerfen").props.disabled, true);
+  zwei.element("data-text-erzeugen-zurueck").props.onClick();
+  assert.deepEqual(reihenfolge(zwei), vorher);
+  // „Lauf-ID verwerfen …“: ebenso.
+  zwei.element("data-text-erzeugen-verwerfen").props.onClick();
+  const mitVerwerfen = reihenfolge(zwei);
+  assert.deepEqual(mitVerwerfen.slice(0, vorher.length), vorher, "nichts vor der Frage verschwindet");
+  assert.ok(mitVerwerfen.indexOf("-verwerfen-ja") > mitVerwerfen.indexOf("-verwerfen"), "„Ja“ steht hinter dem Verwerfen-Knopf");
+  zwei.element("data-text-erzeugen-verwerfen-zurueck").props.onClick();
+  // Während „Pipeline läuft …“ (Antwort am Tor): weder Start- noch Verwerfen-Knopf (gegen V8).
+  let auf;
+  const tor = new Promise((r) => (auf = r));
+  zwei.s.nachServer = async () => {
+    await tor;
+  };
+  try {
+    zwei.element("data-text-erzeugen-knopf").props.onClick();
+    zwei.element("data-text-erzeugen-start").props.onClick();
+    await zwei.lz.ruhe(5);
+    assert.ok(zwei.element("data-text-erzeugen-laeuft"), "Pipeline läuft …");
+    assert.equal(zwei.element("data-text-erzeugen-verwerfen"), null, "während des Laufs kein Verwerfen");
+    assert.equal(zwei.element("data-text-erzeugen-knopf"), null, "während des Laufs kein Start");
+  } finally {
+    zwei.s.nachServer = null;
+    auf();
+    await zwei.lz.ruhe(40);
+  }
+  assert.equal(zwei.ausgang().props["data-text-erzeugen-ausgang"], "existiert");
 });
