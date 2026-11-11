@@ -46,6 +46,35 @@ test("MCF-1 Pflichtzeile: Wortlaut wie lib/studio/ki-hinweis.ts; nur als eigene 
   assert.equal(regeln.mitPflichtzeile("", P), P);
 });
 
+test("MCF-5 pflichtzeileEinsetzen beim X-Thread (Schlussprüfung d3-caption-auftrag-1): die fehlende Zeile kommt in den ersten Post, an dem das Video hängt — als dessen letzte Zeile vor der Marke „2/…“; ohne Marken „1/…“ und „2/…“ ans Ende; vorhanden und nahe Variante wie bisher; ohne ort wie bisher am Ende", () => {
+  const ein = (text, ort) => regeln.pflichtzeileEinsetzen(text, P, ort);
+  // Thread mit Leerzeilen zwischen den Posts: hinter die letzte nicht leere Zeile von 1/3, nach einer Leerzeile.
+  assert.deepEqual(ein("1/3 Das Video zeigt den Hof.\n#Denkmal\n\n2/3 Zweiter Post.\n\n3/3 Mehr: https://example.test/x", "erster_post"), {
+    text: `1/3 Das Video zeigt den Hof.\n#Denkmal\n\n${P}\n\n2/3 Zweiter Post.\n\n3/3 Mehr: https://example.test/x`,
+    art: "angehaengt",
+    ersetzt: null,
+  });
+  // Fette Marken auf eigener Zeile, Kopfzeile davor; CRLF bleibt CRLF.
+  assert.equal(ein("Finaler Content:\n**1/2**\nDas Video zeigt den Hof.\n**2/2**\nMehr im Profil.", "erster_post").text, `Finaler Content:\n**1/2**\nDas Video zeigt den Hof.\n\n${P}\n**2/2**\nMehr im Profil.`);
+  assert.equal(ein("1/2 Das Video zeigt den Hof.\r\n2/2 Mehr im Profil.", "erster_post").text, `1/2 Das Video zeigt den Hof.\r\n\r\n${P}\r\n2/2 Mehr im Profil.`);
+  // Erster Post nur aus der Marke: die Zeile direkt dahinter.
+  assert.equal(ein("1/2\n\n2/2 Mehr im Profil.", "erster_post").text, `1/2\n\n${P}\n\n2/2 Mehr im Profil.`);
+  // Thread-Vorschau auf /content (splitTweets: Marke am Zeilenanfang): die Zeile steht im Block 1/3.
+  const bloecke = (text) => text.split("\n").reduce((b, z) => (/^\*{0,2}\d+\/\d*\*{0,2}/.test(z.trim()) ? [...b, [z]] : (b.at(-1).push(z), b)), [[]]).map((b) => b.join("\n"));
+  const mitZeile = ein("1/3 A.\n2/3 B.\n3/3 C.", "erster_post").text;
+  assert.deepEqual(bloecke(mitZeile).map((b) => regeln.enthaeltPflichtzeile(b, P)), [false, true, false, false]);
+  // Ohne Thread-Marken (ein Post), nur „2/…“ ohne „1/…“ davor oder „2/…“ vor „1/…“: ans Ende.
+  for (const text of ["Ein Post zum Video.\n#Denkmal", "Ein Post.\n2/3 der Fläche sind Park.", "2/2 Mehr.\n1/2 Das Video."]) {
+    assert.equal(ein(text, "erster_post").text, `${text}\n\n${P}`, text);
+  }
+  // Vorhanden (auch im letzten Post) bleibt, nahe Variante wird an ihrer Stelle ersetzt — wie ohne ort.
+  const vorhanden = `1/2 A.\n2/2 B.\n${P}`;
+  assert.deepEqual(ein(vorhanden, "erster_post"), { text: vorhanden, art: "vorhanden", ersetzt: null });
+  assert.deepEqual(ein(`1/2 A.\n2/2 B.\n${P}.`, "erster_post"), { text: `1/2 A.\n2/2 B.\n${P}`, art: "ersetzt", ersetzt: `${P}.` });
+  // Ohne ort (und mit "ende"): am Ende, auch bei Marken — wie vor der Schlussprüfung.
+  for (const ort of [undefined, "ende"]) assert.equal(ein("1/2 A.\n2/2 B.\n", ort).text, `1/2 A.\n2/2 B.\n\n${P}`, String(ort));
+});
+
 test("MCF-2 pruefeVideoFreigabe: eine Funktion für Caption und Medium — Gründe in der Reihenfolge Caption, Pflichtzeile, Medien-Regel; der erste ist der Sperrgrund; ohne Medien-Urteil gesperrt", () => {
   const ok = regeln.pruefeVideoFreigabe(FREIGABE, TEXT, TEXT, FREI, P);
   assert.deepEqual([ok.freigebbar, ok.grund, ok.gruende, ok.urteil], [true, null, [], "FREIGABE"]);

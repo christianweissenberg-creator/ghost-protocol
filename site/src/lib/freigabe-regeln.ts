@@ -242,12 +242,23 @@ function nahForm(zeile: string): string {
     .toLowerCase();
 }
 
+/** Postmarke am Zeilenanfang wie in der Thread-Vorschau auf /content (splitTweets): „1/3“, „**2/3**“ … */
+const POST_EINS = /^\*{0,2}1\/\d*\*{0,2}/;
+const POST_ZWEI = /^\*{0,2}2\/\d*\*{0,2}/;
+
 /**
  * Pflichtzeile einsetzen: vorhanden (wörtlich als eigene Zeile) → unverändert; eine nahe Variante (Schlusspunkt,
  * anderer Bindestrich, geschütztes Leerzeichen, Fettdruck, Emoji davor, Großschrift) → durch die wörtliche Zeile
- * ersetzt, statt eine zweite Hinweiszeile anzuhängen; sonst als letzte Zeile nach einer Leerzeile angehängt.
+ * ersetzt, statt eine zweite Hinweiszeile anzuhängen; sonst angehängt, nach einer Leerzeile: am Ende des Texts (ort
+ * "ende") oder bei einem X-Thread an den ersten Post, also vor die Zeile mit der Marke „2/…“ (ort "erster_post",
+ * Schlussprüfung d3-caption-auftrag-1: das Video hängt am ersten Post). Ohne Marken „1/…“ und danach „2/…“ (ein
+ * einzelner Post) gilt das Ende.
  */
-export function pflichtzeileEinsetzen(text: string, pflichtzeile: string): { text: string; art: "vorhanden" | "ersetzt" | "angehaengt"; ersetzt: string | null } {
+export function pflichtzeileEinsetzen(
+  text: string,
+  pflichtzeile: string,
+  ort: "ende" | "erster_post" = "ende"
+): { text: string; art: "vorhanden" | "ersetzt" | "angehaengt"; ersetzt: string | null } {
   const soll = pflichtzeile.trim();
   if (enthaeltPflichtzeile(text, soll)) return { text, art: "vorhanden", ersetzt: null };
   const teile = text.split(/(\r?\n)/);
@@ -257,6 +268,18 @@ export function pflichtzeileEinsetzen(text: string, pflichtzeile: string): { tex
       const alt = teile[i];
       teile[i] = soll;
       return { text: teile.join(""), art: "ersetzt", ersetzt: alt };
+    }
+  }
+  if (ort === "erster_post") {
+    const eins = teile.findIndex((t, i) => i % 2 === 0 && POST_EINS.test(t.trim()));
+    const zwei = eins < 0 ? -1 : teile.findIndex((t, i) => i > eins && i % 2 === 0 && POST_ZWEI.test(t.trim()));
+    if (zwei > 0) {
+      // Letzte nicht leere Zeile des ersten Posts; dahinter Leerzeile und Pflichtzeile, mit dem Zeilenumbruch des Texts.
+      let ende = zwei - 2;
+      while (ende > eins && teile[ende].trim() === "") ende -= 2;
+      const nl = teile[ende + 1];
+      teile.splice(ende + 1, 0, nl, "", nl, soll);
+      return { text: teile.join(""), art: "angehaengt", ersetzt: null };
     }
   }
   const rumpf = text.replace(/\s+$/u, "");

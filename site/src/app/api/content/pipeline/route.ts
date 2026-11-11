@@ -592,6 +592,19 @@ function istMediumId(wert: unknown): wert is number {
 }
 
 /**
+ * Kanal und Format („plattform|format“), zu denen die Pipeline eine Caption zu einem Video schreibt (Schlussprüfung
+ * d3-caption-auftrag-4): genau die Wahl von „Text erzeugen“ (CAPTION_WAHL in components/studio/TextErzeugen.tsx; ein Test
+ * hält beide gleich). Nur für sie gibt es Caption-Anweisungen; jede andere Kombination mit medium_id ist 400, vor dem
+ * Insert und ohne bezahlten Aufruf.
+ */
+const CAPTION_KANAELE = ["instagram|reel", "tiktok|tiktok_short", "youtube|short", "x|thread", "linkedin|linkedin_post"] as const;
+type CaptionKanal = (typeof CAPTION_KANAELE)[number];
+
+function istCaptionKanal(wert: string): wert is CaptionKanal {
+  return (CAPTION_KANAELE as readonly string[]).includes(wert);
+}
+
+/**
  * Auftragsart im SCRIBE-Auftrag für die Caption zu einem Video (Paket C, Schritt 9; Spezifikation §6.3 und Z. 1262).
  * Die Pflichtzeile steht allein in ihrer Zeile, damit SCRIBE sie Zeichen für Zeichen übernehmen kann. Fehlt sie in der
  * PUBLISHER-Fassung, ergänzt die Pipeline sie vor der Endprüfung (pflichtzeileEinsetzen; eine nahe Variante wird ersetzt).
@@ -606,53 +619,61 @@ const CAPTION_AUFTRAG =
  * Anweisungen an SCRIBE für die Caption zu einem vorhandenen Video (Paket C, Nachtrag d2-text-erzeugen-2). Das Video ist
  * fertig; SCRIBE schreibt nur den Text, der damit gepostet wird. Sie ersetzen bei medium_id die Anweisungen für einen
  * neuen Beitrag (platformInstructions: Video-Skripte mit Schnitt- und Einblendmarken, Reel von 30-90 Sekunden, Thread
- * aus 6-7 Tweets). Je Plattform: Form und Länge, CTA wie in den Plattform-Anweisungen, Hashtags; dazu keine Marken für
+ * aus 6-7 Tweets). Je Kanal: Form und Länge, CTA wie in den Plattform-Anweisungen, Hashtags; dazu keine Marken für
  * Schnitt, Szene, Einblendung oder Ton. Die Pflichtzeile steht in CAPTION_AUFTRAG. Läufe ohne medium_id bekommen
  * weiter platformInstructions, zeichengleich.
+ * Schlussprüfung: Längen zählen ohne Hashtags, Pflichtzeilen und CTA-Link, sonst belegen die Pflicht-Elemente die Grenze
+ * schon (d3-caption-auftrag-3); bei X gilt die Grenze je Post. Bei X steht die Pflichtzeile im Post mit dem Video (dem
+ * ersten), dort als letzte Zeile; der CTA bleibt im letzten Post (d3-caption-auftrag-1).
  */
-function captionAnweisungen(platform: string, objekt: boolean, ctaLink: string | null): string {
+function captionAnweisungen(kanal: CaptionKanal, objekt: boolean, ctaLink: string | null): string {
   const cta = ctaLink ? `CTA mit EXAKT diesem Link: ${ctaLink}` : objekt ? "CTA ohne Link (kein Kampagnen-Link hinterlegt)" : "CTA ohne Link";
-  const xText = `Schreibe den Text zu einem fertigen Video auf X${objekt ? " im Steinadel-Ton (premium, editorial, ruhig, max 1 Emoji)" : ""}:
-- Ein Post von höchstens 270 Zeichen oder ein Thread aus 2-3 Posts im Stil "1/3", "2/3", ...; das Video hängt am ersten Post
+  const form: Record<CaptionKanal, string> = {
+    "instagram|reel": `Schreibe die Caption zu einem fertigen Instagram-Reel:
+- Der erste Satz trägt allein (vor „… mehr“) und sagt, was das Video zeigt
+- Danach 2-4 kurze Sätze; ${cta}
+- Länge ohne Hashtags, Pflichtzeilen und CTA-Link: höchstens 600 Zeichen
+- Am Ende höchstens 5 passende Hashtags`,
+    "tiktok|tiktok_short": `Schreibe die Caption zu einem fertigen TikTok-Video:
+- 1-3 kurze Sätze; der erste sagt, was das Video zeigt
+- ${cta}
+- Länge ohne Hashtags, Pflichtzeilen und CTA-Link: höchstens 300 Zeichen
+- Am Ende 3-5 passende Hashtags`,
+    "youtube|short": `Schreibe Titel und Beschreibung zu einem fertigen YouTube-Short:
+- Titel: höchstens 70 Zeichen, sachlich
+- Beschreibung: 2-4 Sätze, was das Video zeigt; ${cta}
+- Am Ende der Beschreibung 2-3 passende Hashtags`,
+    "x|thread": `Schreibe den Text zu einem fertigen Video auf X${objekt ? " im Steinadel-Ton (premium, editorial, ruhig, max 1 Emoji)" : ""}:
+- Ein Post oder ein Thread aus 2-3 Posts im Stil "1/3", "2/3", ...; je Post höchstens 270 Zeichen; das Video hängt am ersten Post
 - Falls AfA/Steuerzahlen erwähnt werden: Modellrechnung-Disclaimer-Satz PFLICHT
   ("Modellrechnung — individuelle steuerliche Wirkung abhängig von persönlicher
   Situation und Behördenbescheinigung; keine Steuerberatung.")
 - Letzter Post: ${cta}
-- Höchstens 2 Hashtags`;
-  const form: Record<string, string> = {
-    instagram: `Schreibe die Caption zu einem fertigen Instagram-Reel:
-- Der erste Satz trägt allein (vor „… mehr“) und sagt, was das Video zeigt
-- Danach 2-4 kurze Sätze; ${cta}
-- Länge ohne Hashtags: höchstens 600 Zeichen
-- Am Ende höchstens 5 passende Hashtags`,
-    tiktok: `Schreibe die Caption zu einem fertigen TikTok-Video:
-- 1-3 kurze Sätze; der erste sagt, was das Video zeigt
-- ${cta}
-- Länge ohne Hashtags: höchstens 300 Zeichen
-- Am Ende 3-5 passende Hashtags`,
-    youtube: `Schreibe Titel und Beschreibung zu einem fertigen YouTube-Short:
-- Titel: höchstens 70 Zeichen, sachlich
-- Beschreibung: 2-4 Sätze, was das Video zeigt; ${cta}
-- Am Ende der Beschreibung 2-3 passende Hashtags`,
-    x: xText,
-    twitter: xText,
-    linkedin: `Schreibe den Begleittext zu einem fertigen Video auf LinkedIn (Fachton, premium, editorial, ruhig):
+- Höchstens 2 Hashtags`,
+    "linkedin|linkedin_post": `Schreibe den Begleittext zu einem fertigen Video auf LinkedIn (Fachton, premium, editorial, ruhig):
 - Zeile 1-2: was das Video zeigt, mit einer belegten Zahl oder einer sachlichen These
 - 2-3 kurze Absätze mit je 1-3 Sätzen, keine Reel-Ästhetik, höchstens 1 Emoji
 - Schluss: ${cta}
 - Höchstens 3 fachliche Hashtags am Ende
-- Länge: 500 bis 1.200 Zeichen`,
+- Länge ohne Hashtags, Pflichtzeilen und CTA-Link: 500 bis 1.200 Zeichen`,
   };
   const allgemein = [
     "- Das Video existiert schon: ein kurzer, fertiger Clip. Du schreibst nur den Text, der mit ihm gepostet wird — kein neues Video, keine Szenenfolge.",
     "- Keine Marken für Schnitt, Szene, Einblendung oder Ton (nichts in eckigen Klammern), keine Vorschläge für Musik, Thumbnail oder Texteinblendungen.",
     ...(objekt ? ["- Zahlen NUR aus den Objektdaten (siehe REGEL); nichts erfinden."] : []),
-    "- Die Pflichtzeile aus der AUFTRAGSART als eigene, letzte Zeile (nach den Hashtags).",
+    kanal === "x|thread"
+      ? "- Die Pflichtzeile aus der AUFTRAGSART als eigene Zeile im Post mit dem Video (bei einem Thread im ersten Post), dort als letzte Zeile; der CTA bleibt im letzten Post."
+      : "- Die Pflichtzeile aus der AUFTRAGSART als eigene, letzte Zeile (nach den Hashtags).",
   ];
-  return `${form[platform] ?? `Schreibe den Begleittext zu einem fertigen Video:
-- 2-4 kurze Sätze, was das Video zeigt; ${cta}
-- Höchstens 3 passende Hashtags`}
+  return `${form[kanal]}
 ${allgemein.join("\n")}`;
+}
+
+/** Ort der Pflichtzeile im PUBLISHER-Auftrag: bei X im Post mit dem Video (d3-caption-auftrag-1), sonst am Ende. */
+function publisherPflichtzeile(kanal: CaptionKanal): string {
+  return kanal === "x|thread"
+    ? `; diese Pflichtzeile wörtlich, als eigene Zeile, ohne Formatierung, im Post mit dem Video (bei einem Thread im ersten Post), dort als letzte Zeile; der CTA bleibt im letzten Post:\n  ${KI_PFLICHTZEILE_CAPTION}`
+    : `; als letzte Zeile des finalen Contents diese Pflichtzeile wörtlich, als eigene Zeile, ohne Formatierung:\n  ${KI_PFLICHTZEILE_CAPTION}`;
 }
 
 // Namensschutz (R24): Grund, mit dem ein Freigabetext mit geschütztem Namen endet.
@@ -1481,6 +1502,18 @@ export async function POST(request: NextRequest) {
     if (mediumId !== null && !objekt_slug) {
       return fehlerAntwort(400, "medium_id nur mit objekt_slug: Die Caption gehört zum Video eines Objekts");
     }
+    // Schlussprüfung d3-caption-auftrag-4: Caption-Anweisungen gibt es nur für die Kanal-Wahl von „Text erzeugen“.
+    let captionKanal: CaptionKanal | null = null;
+    if (mediumId !== null) {
+      const kanal = `${platform}|${format}`;
+      if (!istCaptionKanal(kanal)) {
+        return fehlerAntwort(
+          400,
+          `medium_id nur für ${CAPTION_KANAELE.map((k) => k.replace("|", "/")).join(", ")} (Kanäle von „Text erzeugen“), nicht für ${platform}/${format} — Lauf nicht gestartet`
+        );
+      }
+      captionKanal = kanal;
+    }
     if (laufId !== undefined) {
       const vorher = await zeilenZuLauf(supabase, laufId, 1);
       if (vorher.art === "fehler") {
@@ -1735,7 +1768,7 @@ export async function POST(request: NextRequest) {
     // ═══ STEP 1: RESEARCHER — Recherche & Fakten ═══
     await fuehreStufeAus(
       steps[0],
-      `RESEARCH-AUFTRAG: Recherchiere das Thema "${thema}" für ein ${platformLabel[platform]} im Format ${formatLabel[format]}, Kategorie: ${kategorieLabel}.
+      `RESEARCH-AUFTRAG: Recherchiere das Thema "${thema}" für ein ${platformLabel[platform]} im Format ${captionKanal !== null ? "Caption zu einem fertigen Video" : formatLabel[format]}, Kategorie: ${kategorieLabel}.
 
 Liefere:
 1. 5 Kernfakten mit Quellen (Studien, Statistiken, Experten-Zitate)
@@ -1856,7 +1889,7 @@ RECHERCHE-ERGEBNISSE (von RESEARCHER):
 ${maskiereAlter(steps[0].output ?? "", datierung)}
 
 ANWEISUNGEN:
-${mediumId !== null ? captionAnweisungen(platform, objekt !== null, ctaLink) : (platformInstructions[platform] ?? platformInstructions.twitter)}
+${captionKanal !== null ? captionAnweisungen(captionKanal, objekt !== null, ctaLink) : (platformInstructions[platform] ?? platformInstructions.twitter)}
 
 STILREGELN:
 - Tonalität: ${objekt ? "Steinadel — premium, editorial, ruhig" : "Professionell aber zugänglich, keine Corporate-Sprache"}
@@ -1991,7 +2024,7 @@ ${URTEIL_SCHLUSS}`,
       `PUBLISHING-AUFTRAG: Bereite diesen Content für die Veröffentlichung vor.
 
 PLATTFORM: ${platform}
-FORMAT: ${format}
+FORMAT: ${captionKanal !== null ? "Caption zu einem fertigen Video" : format}
 
 CONTENT (von SCRIBE, COUNSEL-geprüft):
 ${steps[1].output}
@@ -2001,15 +2034,14 @@ ${maskiereAlter(maskiereKampagnenseiten(maskiereGeschuetzteNamen(ohneUrteilZeile
 
 AUFGABEN:
 1. Qualitätsprüfung: Fakten-Check, Ton, Länge
-2. SEO-Optimierung: Title Tags, Description, Hashtags
+${captionKanal !== null ? "2. Hashtags: nur die in der Caption, keine zusätzlichen; keine Title Tags, keine SEO-Description" : "2. SEO-Optimierung: Title Tags, Description, Hashtags"}
 3. Scheduling-Empfehlung: Bester Zeitpunkt für ${platform} (DACH-Zielgruppe)
-4. Thumbnail/Preview: Beschreibung für visuelles Asset
+${captionKanal !== null ? "4. Das Video ist fertig: keine Thumbnail-, Musik-, Schnitt- oder Einblendungsvorschläge" : "4. Thumbnail/Preview: Beschreibung für visuelles Asset"}
 5. Cross-Promotion: Wie kann dieser Content auf den anderen Plattformen angeteasert werden?
 
 Liefere:
-- Finaler Content (mit deinen Korrekturen)${mediumId !== null ? `; als letzte Zeile des finalen Contents diese Pflichtzeile wörtlich, als eigene Zeile, ohne Formatierung:\n  ${KI_PFLICHTZEILE_CAPTION}` : ""}
-- Metadaten (Title, Description, Tags, Hashtags)
-- Publishing-Zeitpunkt (Tag + Uhrzeit, DACH-optimiert)
+- Finaler Content (mit deinen Korrekturen)${captionKanal !== null ? publisherPflichtzeile(captionKanal) : ""}
+${captionKanal !== null ? "" : "- Metadaten (Title, Description, Tags, Hashtags)\n"}- Publishing-Zeitpunkt (Tag + Uhrzeit, DACH-optimiert)
 - Cross-Promotion-Posts (1 Tweet, 1 Newsletter-Teaser)${kurzlink ? " — ohne Link, mit Verweis auf den Hauptpost" : ""}
 
 ENDFASSUNG (R2): Deine gesamte Antwort geht wörtlich an COUNSEL und danach unverändert zur
@@ -2050,8 +2082,10 @@ Modellrechnung-Disclaimer wörtlich.${datierungsHinweisPublisher(datierung)}${ob
     // erst an body angehängte Zeile sperrte die Freigabe. Steht die Zeile schon da, bleibt der Text, wie er ist.
     // Nachbesserung caption9-4: Eine nahe Variante (Schlusspunkt, anderer Bindestrich, Fettdruck …) wird durch die
     // wörtliche Zeile ersetzt statt verdoppelt; ersetzt hält die ersetzte Zeile fest (der Text war PUBLISHERs).
+    // Schlussprüfung d3-caption-auftrag-1: Bei X kommt eine fehlende Zeile in den ersten Post (dort hängt das Video), vor
+    // die Marke „2/…“; ohne Thread-Marken ans Ende.
     if (mediumId !== null) {
-      const p = pflichtzeileEinsetzen(freigabeText, KI_PFLICHTZEILE_CAPTION);
+      const p = pflichtzeileEinsetzen(freigabeText, KI_PFLICHTZEILE_CAPTION, captionKanal === "x|thread" ? "erster_post" : "ende");
       const ergaenzt = p.art !== "vorhanden";
       if (ergaenzt) {
         steps[3].output = p.text;
