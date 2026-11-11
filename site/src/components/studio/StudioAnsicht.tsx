@@ -734,7 +734,13 @@ export function StudioAnsicht({
           <ObjektKopfKarte m={lesung.antwort.objekt} slug={lesung.antwort.objekt_slug} />
           <Kennzahlen antwort={lesung.antwort} />
           <AnkerPanel slug={lesung.antwort.objekt_slug} />
-          <MedienPanel slug={lesung.antwort.objekt_slug} medien={lesung.antwort.medien} credits={lesung.antwort.kosten_credits} neuLaden={neuLaden ?? OHNE_NEULADEN} />
+          <MedienPanel
+            slug={lesung.antwort.objekt_slug}
+            medien={lesung.antwort.medien}
+            credits={lesung.antwort.kosten_credits}
+            neuLaden={neuLaden ?? OHNE_NEULADEN}
+            assets={lesung.antwort.assets.wert}
+          />
           <AssetListe
             m={lesung.antwort.assets}
             slug={lesung.antwort.objekt_slug}

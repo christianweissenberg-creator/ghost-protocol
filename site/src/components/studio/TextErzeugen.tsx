@@ -18,7 +18,11 @@
 // - Die offene Lauf-ID je Video steht in sessionStorage (Nachtrag d2-text-erzeugen-4): Nach Neuladen oder Zurück im selben
 //   Tab sendet „Erneut senden …“ dieselbe ID (der Server antwortet 409, wenn der Lauf schon läuft), und die Karte nennt
 //   den Lauf ohne bekannten Ausgang. Gelesen wird erst nach dem Einhängen (sonst wiche das erste Bild vom Server-HTML ab).
-//   Ein zweiter Tab hat einen eigenen sessionStorage; dort hilft nur der Stapel. Eine Doppelsperre am Server (409 bei einer
+//   Ein zweiter Tab hat einen eigenen sessionStorage; dort hilft nur der Stapel.
+// - Abgleich mit den geladenen Captions (Schlussprüfung d3-kosten-knopf-3): Trägt eine Caption dieses Videos die offene
+//   Lauf-ID und steht sie nicht mehr im Entwurf, ist der Ausgang bekannt. Der Eintrag geht weg, die Karte nennt
+//   „Caption #N (Status …) zu diesem Lauf“, und „Text erzeugen …“ gilt wieder mit neuer ID. Eine Zeile im Entwurf kann zu
+//   einem laufenden Lauf gehören; dann bleibt die ID (der Server antwortet 409). Eine Doppelsperre am Server (409 bei einer
 //   Zeile zu medium_id, Kanal und Format in entwurf/counsel_geprueft) gibt es bewusst nicht: Ein abgebrochener Lauf ließe
 //   seine Zeile dort stehen und hielte jede weitere Caption zu diesem Video und Kanal fest, bis jemand sie umstellt.
 // Keine Zahl ohne Quelle: Gemessene Kosten je Lauf gibt es vorab nicht; die Antwort nennt die geschätzten Kosten des Laufs.
@@ -26,6 +30,7 @@
 import { useEffect, useRef, useState } from "react";
 import { FARBE_BERNSTEIN, FARBE_GRUEN, FARBE_ROT, istObjekt, maskiert } from "@/components/studio/beleg-hilfen";
 import { berlinDatumZeit } from "@/lib/types";
+import type { StudioAsset } from "@/lib/studio/typen";
 
 export type Holen = (url: string, init?: RequestInit) => Promise<Response>;
 
@@ -211,6 +216,25 @@ export function leseOffenenLauf(speicher: Speicher | null, schluessel: string): 
   }
 }
 
+/** Caption zu einem Video aus der Lesung des Studios: content-Zeile, ihr Status und die Lauf-ID aus metadata.lauf_id. */
+export type CaptionZumLauf = { contentId: number; status: string; laufId: string };
+
+const KEINE_CAPTIONS: readonly CaptionZumLauf[] = [];
+
+/**
+ * Captions zu einem Video aus den geladenen Assets (Schlussprüfung d3-kosten-knopf-3): Zeilen mit metadata.medium_id gleich
+ * dem Video und einer Lauf-ID nach Vertrag. Ohne lesbare Assets keine; dann bleibt es beim 409 des Servers.
+ */
+export function captionsZumVideo(assets: readonly Pick<StudioAsset, "beleg">[] | null | undefined, mediumId: number): CaptionZumLauf[] {
+  const aus: CaptionZumLauf[] = [];
+  for (const a of assets ?? []) {
+    const m: unknown = a.beleg.metadata;
+    if (!istObjekt(m) || m.medium_id !== mediumId || typeof m.lauf_id !== "string" || !LAUF_ID_MUSTER.test(m.lauf_id)) continue;
+    aus.push({ contentId: a.beleg.id, status: a.beleg.status, laufId: m.lauf_id });
+  }
+  return aus;
+}
+
 /** Offenen Lauf schreiben (null: entfernen). Scheitert der Speicher, bleibt es beim Zustand der Karte. */
 function merkeOffenenLauf(speicher: Speicher | null, schluessel: string, lauf: OffenerLauf | null): void {
   try {
@@ -228,6 +252,7 @@ export function TextErzeugen({
   fertig,
   sperre = null,
   speicher,
+  captions = KEINE_CAPTIONS,
 }: {
   slug: string;
   medium: { id: number; sha256: string };
@@ -237,6 +262,8 @@ export function TextErzeugen({
   sperre?: { freigebbar: boolean; gruende: readonly string[] } | null;
   /** Speicher der offenen Lauf-ID (Standard: sessionStorage; Tests: Attrappe). */
   speicher?: Speicher | null;
+  /** Geladene Captions zu diesem Video (captionsZumVideo), für den Abgleich mit der offenen Lauf-ID. */
+  captions?: readonly CaptionZumLauf[];
 }) {
   const [wahl, setWahl] = useState<string>(CAPTION_WAHL[0].wert);
   const [kategorie, setKategorie] = useState<string>(KATEGORIEN[0].wert);
@@ -247,6 +274,8 @@ export function TextErzeugen({
   const sendet = useRef(false);
   // Offener Lauf aus dem Speicher dieses Tabs (Neuladen, Zurück): erst nach dem Einhängen gelesen.
   const [gemerkt, setGemerkt] = useState<OffenerLauf | null>(null);
+  // Caption mit bekanntem Ausgang zur zuletzt offenen Lauf-ID (Abgleich mit den geladenen Captions).
+  const [bekannt, setBekannt] = useState<{ caption: CaptionZumLauf; laufId: string } | null>(null);
   const schluessel = speicherSchluessel(slug, medium.id);
   const ablage = speicher === undefined ? browserSpeicher() : speicher;
   useEffect(() => {
@@ -256,6 +285,17 @@ export function TextErzeugen({
     setOffeneLaufId((jetzt) => jetzt ?? o.laufId);
   }, [ablage, schluessel]);
   const gesperrt = stand.art === "bestaetigen" || stand.art === "laeuft";
+  // Schlussprüfung d3-kosten-knopf-3: Steht die offene Lauf-ID an einer geladenen Caption, die nicht mehr im Entwurf ist, ist
+  // ihr Ausgang bekannt — nur, solange kein Versuch gezeigt wird oder läuft.
+  const zumLauf = offeneLaufId === null || gesperrt ? null : (captions.find((c) => c.laufId === offeneLaufId && c.status !== "entwurf") ?? null);
+  useEffect(() => {
+    if (zumLauf === null) return;
+    merkeOffenenLauf(ablage, schluessel, null);
+    setOffeneLaufId(null);
+    setGemerkt(null);
+    setBekannt({ caption: zumLauf, laufId: zumLauf.laufId });
+    setStand({ art: "zu" });
+  }, [zumLauf, ablage, schluessel]);
   const w = CAPTION_WAHL.find((x) => x.wert === wahl) ?? CAPTION_WAHL[0];
   const k = KATEGORIEN.find((x) => x.wert === kategorie) ?? KATEGORIEN[0];
 
@@ -276,6 +316,7 @@ export function TextErzeugen({
     // Wiederholung: Dieser Versuch sendet die offene ID eines Versuchs mit unbekanntem Ausgang (vor dem Senden bestimmt).
     const wiederholung = offeneLaufId === laufId;
     try {
+      setBekannt(null);
       setStand({ art: "laeuft", laufId });
       setOffeneLaufId(laufId);
       const seit = new Date().toISOString();
@@ -325,6 +366,12 @@ export function TextErzeugen({
           Caption-Lauf zu diesem Video ohne bekannten Ausgang (in diesem Tab gestartet
           {berlinDatumZeit(gemerkt.seit) === null ? "" : ` am ${berlinDatumZeit(gemerkt.seit)} (Europe/Berlin)`}, Lauf-ID {gemerkt.laufId.slice(0, 8)}…) — er kann noch laufen.
           „Erneut senden …“ schickt dieselbe Lauf-ID; läuft er schon, antwortet der Server 409 statt einen zweiten Lauf zu starten.
+        </p>
+      )}
+      {bekannt !== null && stand.art === "zu" && offeneLaufId === null && (
+        <p className="mt-2 break-words" style={{ color: "var(--gp-ink-2)" }} data-text-erzeugen-bekannt={bekannt.caption.contentId}>
+          Caption #{bekannt.caption.contentId} (Status {maskiert(bekannt.caption.status)}) zu diesem Lauf (Lauf-ID {bekannt.laufId.slice(0, 8)}…) — der Ausgang
+          ist bekannt. „Text erzeugen …“ startet einen neuen Lauf mit neuer Lauf-ID.
         </p>
       )}
       {stand.art !== "bestaetigen" && stand.art !== "laeuft" && (

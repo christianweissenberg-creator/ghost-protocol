@@ -35,6 +35,7 @@ import type {
   SpeicherMessung,
   StudioCredits,
   StudioMedienTeil,
+  StudioAsset,
   StudioMedium,
   StudioMesswert,
   UploadRolle,
@@ -42,7 +43,7 @@ import type {
 import { berlinDatumZeit } from "@/lib/types";
 import { FARBE_BERNSTEIN, FARBE_GRUEN, FARBE_ROT, istObjekt, maskiert } from "@/components/studio/beleg-hilfen";
 import { PruefAnsicht, leereEingaben } from "@/components/studio/PruefAnsicht";
-import { TextErzeugen } from "@/components/studio/TextErzeugen";
+import { TextErzeugen, captionsZumVideo } from "@/components/studio/TextErzeugen";
 import type { PruefEingaben } from "@/components/studio/PruefAnsicht";
 
 // ── Texte ──
@@ -1036,12 +1037,15 @@ export function MedienPanel({
   credits,
   neuLaden,
   holen = fetch,
+  assets = null,
 }: {
   slug: string;
   medien: StudioMedienTeil;
   credits: StudioMesswert<StudioCredits>;
   neuLaden: () => void;
   holen?: Holen;
+  /** Geladene Assets des Objekts (StudioAntwort.assets.wert): Captions je Video für den Abgleich in „Text erzeugen“. */
+  assets?: readonly StudioAsset[] | null;
 }) {
   const manifest = ankerManifest(slug);
   const c = creditsText(credits);
@@ -1084,7 +1088,14 @@ export function MedienPanel({
                       <FreigabeUrteil k={k} />
                       <PruefBereich k={k} slug={slug} anker={manifest?.eintraege.find((e) => e.id === k.export.anker_id) ?? null} holen={holen} neuLaden={neuLaden} />
                       {/* Caption zu diesem Video (Nachbesserung Paket C, Auftrag C; Ablauf Video-Asset, Schritt 5). */}
-                      <TextErzeugen slug={slug} medium={{ id: k.export.id, sha256: k.export.sha256 }} sperre={k.urteil} holen={holen} fertig={neuLaden} />
+                      <TextErzeugen
+                        slug={slug}
+                        medium={{ id: k.export.id, sha256: k.export.sha256 }}
+                        sperre={k.urteil}
+                        holen={holen}
+                        fertig={neuLaden}
+                        captions={captionsZumVideo(assets, k.export.id)}
+                      />
                     </>
                   }
                 />

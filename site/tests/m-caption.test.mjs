@@ -50,11 +50,12 @@ fake.installiere();
 
 const lib = (name) => import(pathToFileURL(process.env[`Z_LIB_${name.replace(/[^A-Za-z0-9]+/g, "_").toUpperCase()}`] ?? path.join(SITE, "src", `${name}.ts`)).href);
 const route = (name, rel) => import(pathToFileURL(process.env[`Z_ROUTE_${name}`] ?? path.join(SITE, "src/app/api", rel)).href);
-const [regeln, counselModul, kiHinweis, pipeline, { NextRequest }] = await Promise.all([
+const [regeln, counselModul, kiHinweis, pipeline, studioRoute, { NextRequest }] = await Promise.all([
   lib("lib/freigabe-regeln"),
   lib("lib/counsel-urteil"),
   lib("lib/studio/ki-hinweis"),
   route("PIPELINE", "content/pipeline/route.ts"),
+  route("STUDIO", "studio/[objekt]/route.ts"),
   import("next/server"),
 ]);
 
@@ -944,4 +945,189 @@ test("M-C9 laufAusgang: Antworten der Pipeline eingeordnet wie auf /content (Erg
   assert.equal(T.neueLaufId({ randomUUID: () => "kurz" }), null, "Lauf-ID nach Vertrag, sonst kein Lauf");
   assert.match(T.neueLaufId(), /^[0-9a-f-]{36}$/);
   assert.deepEqual(T.laufKoerper(SLUG, 3, "tiktok|tiktok_short", "business_automation", "id-0000001"), { platform: "tiktok", format: "tiktok_short", category: "business_automation", objekt_slug: SLUG, medium_id: 3, lauf_id: "id-0000001" });
+});
+
+// ═══ Schlussprüfung d3-kosten-knopf: Tab-Speicher im Betrieb, erster Versuch, Abgleich mit den geladenen Captions ═══
+
+/** Studio wie GET /api/studio/[objekt] es liefert (aus der Attrappe): Medien, Credits und Assets der Seite. */
+async function holeStudio() {
+  const res = await studioRoute.GET(new NextRequest(`http://harness.local/api/studio/${SLUG}`, { headers: { cookie: "gp-auth=test" } }), { params: Promise.resolve({ objekt: SLUG }) });
+  assert.equal(res.status, 200);
+  return res.json();
+}
+
+/**
+ * Medien-Panel als Wurzel, eingebunden wie in StudioAnsicht (ohne speicher-Prop: „Text erzeugen“ nimmt sessionStorage),
+ * mit den Daten von GET /api/studio. „Text erzeugen“ zum Export läuft gegen die echte Pipeline-Route (Agenten-Attrappe,
+ * nichts Bezahltes). neuGelesen() liest das Studio neu und gibt dem Panel die neuen Daten (Neu laden im selben Tab).
+ */
+async function medienPanelLaufzeit(s = { gesendet: [], verloren: false }) {
+  const { hookLaufzeit, ladeStudioBausteine } = await import("./harness/studio.mjs");
+  const lz = hookLaufzeit();
+  const B = ladeStudioBausteine({ ...lz.attrappen, "@/lib/counsel-urteil": counselModul, "@/lib/freigabe-regeln": regeln });
+  const holen = async (url, init) => {
+    assert.equal(url, "/api/content/pipeline");
+    s.gesendet.push(JSON.parse(init.body));
+    const req = new NextRequest(`http://harness.local${url}`, { method: "POST", headers: { ...init.headers, cookie: "gp-auth=test" }, body: init.body });
+    const res = await pipeline.POST(req);
+    if (s.verloren) throw new TypeError("Verbindung nach dem Senden abgebrochen");
+    return res;
+  };
+  const wurzel = (studio) => lz.setzeWurzel(B.medien.MedienPanel, { slug: SLUG, medien: studio.medien, credits: studio.kosten_credits, assets: studio.assets.wert, neuLaden: () => {}, holen });
+  const studio = await holeStudio();
+  assert.equal(studio.medien.wert.ketten.length, 1, "eine Kette (Export 3)");
+  wurzel(studio);
+  const alle = (k, pred, aus = []) => {
+    if (Array.isArray(k)) for (const c of k) alle(c, pred, aus);
+    else if (k && typeof k === "object") {
+      if (pred(k)) aus.push(k);
+      alle(k.kinder, pred, aus);
+    }
+    return aus;
+  };
+  const text = (k) => (Array.isArray(k) ? k.map(text).join("") : k && typeof k === "object" ? text(k.kinder) : k === null || k === undefined || typeof k === "boolean" ? "" : String(k));
+  const element = (attr) => alle(lz.rendere(), (n) => n.props?.[attr] !== undefined)[0] ?? null;
+  const lauf = async () => {
+    element("data-text-erzeugen-knopf").props.onClick();
+    element("data-text-erzeugen-start").props.onClick();
+    await lz.ruhe(40);
+  };
+  return { lz, s, element, text, lauf, ausgang: () => element("data-text-erzeugen-ausgang"), neuGelesen: async () => wurzel(await holeStudio()) };
+}
+
+/** globalThis.sessionStorage für einen Test stellen (Node 25 hat eines, Node 22 nicht) und danach zurücksetzen. */
+function stelleSessionStorage(t) {
+  const alt = Object.getOwnPropertyDescriptor(globalThis, "sessionStorage");
+  const speicher = speicherAttrappe();
+  Object.defineProperty(globalThis, "sessionStorage", { value: speicher, configurable: true, writable: true, enumerable: true });
+  t.after(() => {
+    if (alt) Object.defineProperty(globalThis, "sessionStorage", alt);
+    else delete globalThis.sessionStorage;
+  });
+  return speicher;
+}
+
+test("M-C17 „Text erzeugen“ im Betrieb (Schlussprüfung d3-kosten-knopf-1): Medien-Panel ohne speicher-Prop mit gestelltem sessionStorage — Antwort verloren → Eintrag „unbekannt“; Neuladen, die Caption steht noch im Entwurf → Hinweis und „Erneut senden …“ mit derselben ID → 409 → Eintrag weg; kein zweiter bezahlter Lauf", async (t) => {
+  const speicher = stelleSessionStorage(t);
+  const schluessel = `gp-text-erzeugen:${SLUG}:${EXPORT_ID}`;
+  exportMit(RITTERGUT);
+  medien();
+  agenten();
+  const eins = await medienPanelLaufzeit();
+  assert.equal(eins.text(eins.element("data-text-erzeugen-knopf")), "Text erzeugen …");
+  eins.s.verloren = true;
+  await eins.lauf();
+  eins.s.verloren = false;
+  assert.equal(eins.ausgang().props["data-text-erzeugen-ausgang"], "unbekannt");
+  const id = eins.s.gesendet[0].lauf_id;
+  assert.deepEqual({ ...JSON.parse(speicher.m.get(schluessel)), seit: "…" }, { laufId: id, art: "unbekannt", seit: "…" }, "der Eintrag steht im sessionStorage des Browsers");
+  assert.equal(welt.aktivierungen.length, 6);
+  // Der Lauf läuft aus Sicht des Studios noch: Seine Zeile steht im Entwurf.
+  const zeileDesLaufs = welt.content.find((z) => z.metadata?.lauf_id === id);
+  zeileDesLaufs.status = "entwurf";
+  // Neuladen: neue Laufzeit, neue Studio-Lesung, derselbe sessionStorage.
+  const zwei = await medienPanelLaufzeit();
+  assert.equal(zwei.element("data-text-erzeugen-gemerkt").props["data-text-erzeugen-gemerkt"], "unbekannt");
+  assert.match(zwei.text(zwei.element("data-text-erzeugen-gemerkt")), new RegExp(`Lauf-ID ${id.slice(0, 8)}…\\) — er kann noch laufen\\.`));
+  assert.equal(zwei.element("data-text-erzeugen-bekannt"), null, "eine Zeile im Entwurf ist kein bekannter Ausgang");
+  assert.equal(zwei.text(zwei.element("data-text-erzeugen-knopf")), "Erneut senden …");
+  zwei.element("data-text-erzeugen-knopf").props.onClick();
+  assert.match(zwei.text(zwei.element("data-text-erzeugen-bestaetigung")), /\(dieselbe wie beim Versuch mit unbekanntem Ausgang\)/);
+  zwei.element("data-text-erzeugen-start").props.onClick();
+  await zwei.lz.ruhe(40);
+  assert.equal(zwei.s.gesendet[0].lauf_id, id, "dieselbe Lauf-ID nach dem Neuladen");
+  assert.equal(zwei.ausgang().props["data-text-erzeugen-ausgang"], "existiert");
+  assert.match(zwei.text(zwei.ausgang()), new RegExp(`^Lauf existiert bereits \\(#${zeileDesLaufs.id}\\)`));
+  assert.equal(welt.aktivierungen.length, 6, "kein zweiter bezahlter Lauf");
+  assert.equal(speicher.m.has(schluessel), false, "nach bekanntem Ausgang ist der Eintrag weg");
+  assert.equal(zwei.text(zwei.element("data-text-erzeugen-knopf")), "Text erzeugen …");
+});
+
+test("M-C18 „Text erzeugen“, erster Versuch scheitert bekannt (Schlussprüfung d3-kosten-knopf-2): 400 (Video eines anderen Objekts) → „abgewiesen“, 502 ohne Zeile (Medien nicht lesbar) → „nicht gestartet“ — kein „Ausgang unbekannt“, kein Eintrag im Speicher, der nächste Versuch mit neuer Lauf-ID", async () => {
+  for (const [fall, medium, stoerung, art, meldung] of [
+    ["400", { id: FREMDER_EXPORT_ID, sha256: "5".repeat(64) }, null, "abgewiesen", /^Lauf abgewiesen \(HTTP 400\): Medium 5 gehört nicht zum Objekt dieses Laufs — Lauf nicht gestartet$/],
+    ["502", undefined, (a) => (a.art === "supabase" && a.tabelle === "studio_medium" ? { status: 500, body: { message: "Lesen fehlgeschlagen (Test)" } } : null), "nicht_gestartet", /^Lauf nicht gestartet \(HTTP 502\): Medium 3 nicht lesbar: .* — Lauf nicht gestartet$/],
+  ]) {
+    zuruecksetzen();
+    welt.pipelineModul = pipeline;
+    exportMit(RITTERGUT);
+    medien();
+    agenten();
+    const speicher = speicherAttrappe();
+    const r = await textErzeugenLaufzeit({ speicher, ...(medium ? { medium } : {}) });
+    welt.stoerung = stoerung;
+    try {
+      await r.lauf();
+    } finally {
+      welt.stoerung = null;
+    }
+    assert.equal(r.s.gesendet.length, 1, fall);
+    assert.equal(r.ausgang().props["data-text-erzeugen-ausgang"], art, fall);
+    assert.match(r.text(r.ausgang()), meldung, fall);
+    assert.ok(!r.text(r.ausgang()).includes("Ausgang unbekannt"), `${fall}: kein unbekannter Ausgang`);
+    assert.equal(r.text(r.element("data-text-erzeugen-knopf")), "Text erzeugen …", `${fall}: die Lauf-ID ist verbraucht`);
+    assert.equal(speicher.m.size, 0, `${fall}: kein Eintrag im Speicher`);
+    assert.deepEqual([welt.aktivierungen.length, welt.content.length], [0, 0], `${fall}: kein Lauf, keine Zeile`);
+    r.element("data-text-erzeugen-knopf").props.onClick();
+    assert.match(r.text(r.element("data-text-erzeugen-bestaetigung")), / · Lauf-ID [0-9a-f]{8}… \(neu\)Ja, bezahlten Lauf starten/, `${fall}: neue Lauf-ID`);
+  }
+});
+
+test("M-C19 „Text erzeugen“, Abgleich mit den geladenen Captions (Schlussprüfung d3-kosten-knopf-3): Steht die gemerkte Lauf-ID an einer Caption des Videos, die nicht mehr im Entwurf ist, verschwindet der Eintrag; die Karte nennt „Caption #N (Status …) zu diesem Lauf“, und „Text erzeugen …“ startet ohne vergebliches 409 mit neuer ID — nach Neuladen und beim Neu-Lesen im selben Tab", async (t) => {
+  const speicher = stelleSessionStorage(t);
+  const schluessel = `gp-text-erzeugen:${SLUG}:${EXPORT_ID}`;
+  exportMit(RITTERGUT);
+  medien();
+  agenten();
+  // Antwort verloren, der Lauf läuft durch; der Inhaber lehnt die Caption im Stapel ab.
+  const eins = await medienPanelLaufzeit();
+  eins.s.verloren = true;
+  await eins.lauf();
+  eins.s.verloren = false;
+  const id = eins.s.gesendet[0].lauf_id;
+  assert.equal(JSON.parse(speicher.m.get(schluessel)).art, "unbekannt");
+  const zeileDesLaufs = welt.content.find((z) => z.metadata?.lauf_id === id);
+  zeileDesLaufs.status = "abgelehnt";
+  // Neuladen: Die Karte gleicht ab und nennt die Caption statt „kann noch laufen“.
+  const zwei = await medienPanelLaufzeit();
+  assert.equal(zwei.element("data-text-erzeugen-gemerkt"), null, "kein „kann noch laufen“");
+  const bekannt = zwei.element("data-text-erzeugen-bekannt");
+  assert.equal(bekannt.props["data-text-erzeugen-bekannt"], zeileDesLaufs.id);
+  assert.equal(zwei.text(bekannt), `Caption #${zeileDesLaufs.id} (Status abgelehnt) zu diesem Lauf (Lauf-ID ${id.slice(0, 8)}…) — der Ausgang ist bekannt. „Text erzeugen …“ startet einen neuen Lauf mit neuer Lauf-ID.`);
+  assert.equal(speicher.m.has(schluessel), false, "Eintrag entfernt");
+  assert.equal(zwei.text(zwei.element("data-text-erzeugen-knopf")), "Text erzeugen …");
+  zwei.element("data-text-erzeugen-knopf").props.onClick();
+  assert.match(zwei.text(zwei.element("data-text-erzeugen-bestaetigung")), / · Lauf-ID [0-9a-f]{8}… \(neu\)Ja, bezahlten Lauf starten/);
+  zwei.element("data-text-erzeugen-start").props.onClick();
+  await zwei.lz.ruhe(40);
+  assert.notEqual(zwei.s.gesendet[0].lauf_id, id, "neue Lauf-ID");
+  assert.equal(zwei.ausgang().props["data-text-erzeugen-ausgang"], "ergebnis", "ein neuer Lauf, kein 409");
+  assert.equal(welt.aktivierungen.length, 12);
+  assert.equal(zwei.element("data-text-erzeugen-bekannt"), null, "der Hinweis gehört zum alten Lauf");
+
+  // Im selben Tab: Ausgang unbekannt, dann liest das Studio neu und die Caption ist fertig → derselbe Abgleich.
+  const drei = await medienPanelLaufzeit();
+  drei.s.verloren = true;
+  await drei.lauf();
+  drei.s.verloren = false;
+  const id3 = drei.s.gesendet[0].lauf_id;
+  assert.equal(drei.ausgang().props["data-text-erzeugen-ausgang"], "unbekannt");
+  assert.equal(drei.text(drei.element("data-text-erzeugen-knopf")), "Erneut senden …");
+  const zeile3 = welt.content.find((z) => z.metadata?.lauf_id === id3);
+  assert.equal(zeile3.status, "zur_freigabe");
+  await drei.neuGelesen();
+  assert.equal(drei.ausgang(), null, "„Ausgang unbekannt“ ist ersetzt");
+  assert.equal(drei.text(drei.element("data-text-erzeugen-bekannt")).startsWith(`Caption #${zeile3.id} (Status zur_freigabe) zu diesem Lauf (Lauf-ID ${id3.slice(0, 8)}…)`), true);
+  assert.equal(speicher.m.has(schluessel), false);
+  assert.equal(drei.text(drei.element("data-text-erzeugen-knopf")), "Text erzeugen …");
+  // captionsZumVideo: nur Zeilen dieses Videos mit Lauf-ID nach Vertrag.
+  const { ladeTextErzeugen, ladeStudioBausteine, hookLaufzeit } = await import("./harness/studio.mjs");
+  const lz = hookLaufzeit();
+  const T = ladeTextErzeugen(lz.attrappen, { hilfen: ladeStudioBausteine({ ...lz.attrappen, "@/lib/counsel-urteil": counselModul, "@/lib/freigabe-regeln": regeln }).hilfen });
+  const asset = (id, status, metadata) => ({ beleg: { id, status, body: null, review_notes: null, metadata } });
+  assert.deepEqual(
+    T.captionsZumVideo([asset(1, "zur_freigabe", { medium_id: 3, lauf_id: "lauf-0000001" }), asset(2, "abgelehnt", { medium_id: 5, lauf_id: "lauf-0000002" }), asset(3, "fehler", { medium_id: "3", lauf_id: "lauf-0000003" }), asset(4, "fehler", { medium_id: 3, lauf_id: "kurz" }), asset(5, "fehler", { medium_id: 3 }), asset(6, "fehler", null)], 3),
+    [{ contentId: 1, status: "zur_freigabe", laufId: "lauf-0000001" }],
+  );
+  assert.deepEqual(T.captionsZumVideo(null, 3), []);
 });
