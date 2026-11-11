@@ -970,6 +970,8 @@ async function medienPanelLaufzeit(s = { gesendet: [], verloren: false }) {
     s.gesendet.push(JSON.parse(init.body));
     const req = new NextRequest(`http://harness.local${url}`, { method: "POST", headers: { ...init.headers, cookie: "gp-auth=test" }, body: init.body });
     const res = await pipeline.POST(req);
+    // Server fertig, Antwort noch unterwegs (Tor im Client), wenn der Test es so stellt.
+    if (s.nachServer) await s.nachServer();
     if (s.verloren) throw new TypeError("Verbindung nach dem Senden abgebrochen");
     return res;
   };
@@ -1130,4 +1132,148 @@ test("M-C19 „Text erzeugen“, Abgleich mit den geladenen Captions (Schlusspr�
     [{ contentId: 1, status: "zur_freigabe", laufId: "lauf-0000001" }],
   );
   assert.deepEqual(T.captionsZumVideo(null, 3), []);
+});
+
+/** Wartet höchstens ms auf ein Versprechen (ein Tor, das nie erreicht wird, hält die Suite sonst an). */
+function binnen(versprechen, ms, was) {
+  let griff;
+  const frist = new Promise((_, nein) => {
+    griff = setTimeout(() => nein(new Error(`${was}: nicht binnen ${ms} ms`)), ms);
+  });
+  return Promise.race([versprechen, frist]).finally(() => clearTimeout(griff));
+}
+
+test("M-C20 „Text erzeugen“, Neuladen während PUBLISHER oder AMPLIFIER (Prüfung f-knopf-pruefung-1): Die Caption steht dann auf counsel_geprueft — kein bekannter Ausgang. Die Lauf-ID bleibt, die Karte nennt die Caption als nicht fertig, „Erneut senden …“ bekommt 409; es bleibt bei einem bezahlten Lauf und einer Caption", async (t) => {
+  const speicher = stelleSessionStorage(t);
+  const schluessel = `gp-text-erzeugen:${SLUG}:${EXPORT_ID}`;
+  for (const halt of ["publisher", "amplifier"]) {
+    zuruecksetzen();
+    welt.pipelineModul = pipeline;
+    exportMit(RITTERGUT);
+    medien();
+    agenten();
+    speicher.m.clear();
+    let auf;
+    let angekommen;
+    const tor = new Promise((r) => (auf = r));
+    const da = new Promise((r) => (angekommen = r));
+    welt.vorAntwort = async (a) => {
+      if (a.art === "activate" && a.body?.agent_id === halt) {
+        angekommen();
+        await tor;
+      }
+    };
+    const eins = await medienPanelLaufzeit();
+    try {
+      eins.element("data-text-erzeugen-knopf").props.onClick();
+      eins.element("data-text-erzeugen-start").props.onClick();
+      await binnen(da, 5_000, `Tor vor ${halt}`);
+      const id = eins.s.gesendet[0].lauf_id;
+      const zeileDesLaufs = welt.content.find((z) => z.metadata?.lauf_id === id);
+      assert.equal(zeileDesLaufs.status, "counsel_geprueft", `${halt}: Status während der Stufe`);
+      assert.equal(JSON.parse(speicher.m.get(schluessel)).art, "laeuft");
+      // Neuladen während der Stufe: neue Karte, neue Studio-Lesung, derselbe sessionStorage.
+      const zwei = await medienPanelLaufzeit();
+      assert.equal(zwei.element("data-text-erzeugen-bekannt"), null, `${halt}: kein bekannter Ausgang`);
+      assert.equal(zwei.element("data-text-erzeugen-laufend").props["data-text-erzeugen-laufend"], zeileDesLaufs.id);
+      assert.equal(zwei.text(zwei.element("data-text-erzeugen-laufend")), `Caption #${zeileDesLaufs.id} (Status counsel_geprueft) gehört zu diesem Lauf und ist noch nicht fertig.`);
+      assert.equal(zwei.element("data-text-erzeugen-gemerkt").props["data-text-erzeugen-gemerkt"], "laeuft");
+      assert.equal(JSON.parse(speicher.m.get(schluessel)).laufId, id, `${halt}: der Eintrag bleibt`);
+      assert.equal(zwei.text(zwei.element("data-text-erzeugen-knopf")), "Erneut senden …");
+      zwei.element("data-text-erzeugen-knopf").props.onClick();
+      assert.match(zwei.text(zwei.element("data-text-erzeugen-bestaetigung")), /\(dieselbe wie beim Versuch mit unbekanntem Ausgang\)/);
+      zwei.element("data-text-erzeugen-start").props.onClick();
+      await zwei.lz.ruhe(40);
+      assert.equal(zwei.s.gesendet[0].lauf_id, id, `${halt}: dieselbe Lauf-ID`);
+      assert.equal(zwei.ausgang().props["data-text-erzeugen-ausgang"], "existiert");
+      assert.match(zwei.text(zwei.ausgang()), /Status counsel_geprueft/);
+    } finally {
+      welt.vorAntwort = null;
+      auf();
+      await eins.lz.ruhe(40);
+    }
+    assert.equal(welt.aktivierungen.length, 6, `${halt}: ein bezahlter Lauf`);
+    assert.equal(welt.content.filter((z) => z.metadata?.medium_id === EXPORT_ID).length, 1, `${halt}: eine Caption zum Video`);
+  }
+  // Positivliste: nur Endzustände sind ein bekannter Ausgang.
+  const { ladeTextErzeugen, ladeStudioBausteine, hookLaufzeit } = await import("./harness/studio.mjs");
+  const lz = hookLaufzeit();
+  const T = ladeTextErzeugen(lz.attrappen, { hilfen: ladeStudioBausteine({ ...lz.attrappen, "@/lib/counsel-urteil": counselModul, "@/lib/freigabe-regeln": regeln }).hilfen });
+  assert.deepEqual([...T.LAUF_VORBEI].sort(), ["abgelehnt", "fehler", "freigegeben", "gepostet", "zur_freigabe"]);
+});
+
+test("M-C21 „Text erzeugen“, Neu-Lesen im selben Tab während des Laufs (Prüfung f-knopf-pruefung-1): Solange die Karte auf die Antwort wartet, gleicht sie nicht ab, auch wenn die Caption schon fertig ist; nach verlorener Antwort nennt sie die Caption der letzten Lesung (counsel_geprueft) als nicht fertig; das nächste Neu-Lesen im Endzustand ergibt den bekannten Ausgang", async (t) => {
+  const speicher = stelleSessionStorage(t);
+  const schluessel = `gp-text-erzeugen:${SLUG}:${EXPORT_ID}`;
+  exportMit(RITTERGUT);
+  medien();
+  agenten();
+  // (a) Der Server ist fertig (zur_freigabe), die Antwort aber noch unterwegs: Neu-Lesen ändert die laufende Karte nicht.
+  let auf;
+  let serverFertig;
+  const tor = new Promise((r) => (auf = r));
+  const fertigDa = new Promise((r) => (serverFertig = r));
+  const s = { gesendet: [], verloren: false, nachServer: async () => { serverFertig(); await tor; } };
+  const k = await medienPanelLaufzeit(s);
+  try {
+    k.element("data-text-erzeugen-knopf").props.onClick();
+    k.element("data-text-erzeugen-start").props.onClick();
+    await binnen(fertigDa, 5_000, "Server fertig");
+    const z = welt.content.find((x) => x.metadata?.lauf_id === s.gesendet[0].lauf_id);
+    assert.equal(z.status, "zur_freigabe");
+    await k.neuGelesen();
+    assert.ok(k.element("data-text-erzeugen-laeuft"), "„Pipeline läuft …“ bleibt");
+    assert.equal(k.element("data-text-erzeugen-bekannt"), null);
+    assert.equal(k.element("data-text-erzeugen-laufend"), null);
+    assert.equal(JSON.parse(speicher.m.get(schluessel)).art, "laeuft", "der Eintrag bleibt, bis die Antwort da ist");
+  } finally {
+    s.nachServer = null;
+    auf();
+    await k.lz.ruhe(40);
+  }
+  assert.equal(k.ausgang().props["data-text-erzeugen-ausgang"], "ergebnis");
+  assert.equal(speicher.m.has(schluessel), false);
+  assert.equal(welt.aktivierungen.length, 6);
+
+  // (b) Tor vor PUBLISHER; Neu-Lesen während des Laufs (counsel_geprueft), dann bricht die Verbindung ab, der Server läuft weiter.
+  let auf2;
+  let angekommen;
+  const tor2 = new Promise((r) => (auf2 = r));
+  const da = new Promise((r) => (angekommen = r));
+  welt.vorAntwort = async (a) => {
+    if (a.art === "activate" && a.body?.agent_id === "publisher") {
+      angekommen();
+      await tor2;
+    }
+  };
+  const s2 = { gesendet: [], verloren: false };
+  const k2 = await medienPanelLaufzeit(s2);
+  try {
+    k2.element("data-text-erzeugen-knopf").props.onClick();
+    k2.element("data-text-erzeugen-start").props.onClick();
+    await binnen(da, 5_000, "Tor vor publisher");
+    await k2.neuGelesen();
+    assert.ok(k2.element("data-text-erzeugen-laeuft"));
+    s2.verloren = true;
+  } finally {
+    welt.vorAntwort = null;
+    auf2();
+    await k2.lz.ruhe(40);
+  }
+  const id2 = s2.gesendet[0].lauf_id;
+  const z2 = welt.content.find((x) => x.metadata?.lauf_id === id2);
+  assert.equal(z2.status, "zur_freigabe", "der Server lief weiter");
+  assert.equal(k2.ausgang().props["data-text-erzeugen-ausgang"], "unbekannt");
+  assert.equal(k2.text(k2.element("data-text-erzeugen-laufend")), `Caption #${z2.id} (Status counsel_geprueft) gehört zu diesem Lauf und ist noch nicht fertig.`, "Stand der letzten Lesung");
+  assert.equal(k2.element("data-text-erzeugen-bekannt"), null);
+  assert.equal(JSON.parse(speicher.m.get(schluessel)).art, "unbekannt");
+  assert.equal(k2.text(k2.element("data-text-erzeugen-knopf")), "Erneut senden …");
+  // Nächstes Neu-Lesen: Die Caption steht im Endzustand → bekannter Ausgang, neue ID beim nächsten Lauf.
+  await k2.neuGelesen();
+  assert.equal(k2.ausgang(), null);
+  assert.equal(k2.element("data-text-erzeugen-laufend"), null);
+  assert.ok(k2.text(k2.element("data-text-erzeugen-bekannt")).startsWith(`Caption #${z2.id} (Status zur_freigabe) zu diesem Lauf`));
+  assert.equal(speicher.m.has(schluessel), false);
+  assert.equal(k2.text(k2.element("data-text-erzeugen-knopf")), "Text erzeugen …");
+  assert.equal(welt.aktivierungen.length, 12, "zwei Läufe, je 6 Stufen — keiner doppelt");
 });

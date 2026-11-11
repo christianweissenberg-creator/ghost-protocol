@@ -19,10 +19,11 @@
 //   Tab sendet „Erneut senden …“ dieselbe ID (der Server antwortet 409, wenn der Lauf schon läuft), und die Karte nennt
 //   den Lauf ohne bekannten Ausgang. Gelesen wird erst nach dem Einhängen (sonst wiche das erste Bild vom Server-HTML ab).
 //   Ein zweiter Tab hat einen eigenen sessionStorage; dort hilft nur der Stapel.
-// - Abgleich mit den geladenen Captions (Schlussprüfung d3-kosten-knopf-3): Trägt eine Caption dieses Videos die offene
-//   Lauf-ID und steht sie nicht mehr im Entwurf, ist der Ausgang bekannt. Der Eintrag geht weg, die Karte nennt
-//   „Caption #N (Status …) zu diesem Lauf“, und „Text erzeugen …“ gilt wieder mit neuer ID. Eine Zeile im Entwurf kann zu
-//   einem laufenden Lauf gehören; dann bleibt die ID (der Server antwortet 409). Eine Doppelsperre am Server (409 bei einer
+// - Abgleich mit den geladenen Captions (Schlussprüfung d3-kosten-knopf-3, Prüfung f-knopf-pruefung-1): Trägt eine Caption
+//   dieses Videos die offene Lauf-ID und steht sie in einem Endzustand (LAUF_VORBEI), ist der Ausgang bekannt. Der Eintrag
+//   geht weg, die Karte nennt „Caption #N (Status …) zu diesem Lauf“, und „Text erzeugen …“ gilt wieder mit neuer ID. In
+//   „entwurf“ und „counsel_geprueft“ läuft der Lauf noch (oder wurde abgebrochen): Die ID bleibt, die Karte nennt die
+//   Caption als nicht fertig, und „Erneut senden …“ bekommt 409. Eine Doppelsperre am Server (409 bei einer
 //   Zeile zu medium_id, Kanal und Format in entwurf/counsel_geprueft) gibt es bewusst nicht: Ein abgebrochener Lauf ließe
 //   seine Zeile dort stehen und hielte jede weitere Caption zu diesem Video und Kanal fest, bis jemand sie umstellt.
 // Keine Zahl ohne Quelle: Gemessene Kosten je Lauf gibt es vorab nicht; die Antwort nennt die geschätzten Kosten des Laufs.
@@ -222,6 +223,14 @@ export type CaptionZumLauf = { contentId: number; status: string; laufId: string
 const KEINE_CAPTIONS: readonly CaptionZumLauf[] = [];
 
 /**
+ * Status, mit denen ein Caption-Lauf vorbei ist — Positivliste (Prüfung f-knopf-pruefung-1): Die Pipeline endet mit
+ * zur_freigabe, abgelehnt oder fehler; danach setzt nur der Betreiber freigegeben oder gepostet. „entwurf“ (RESEARCHER bis
+ * COUNSEL-Vorprüfung) und „counsel_geprueft“ (PUBLISHER, Endprüfung, AMPLIFIER) heißen: Der Lauf kann noch laufen. Ein
+ * unbekannter Status zählt ebenso; dann bleibt die ID, und der Server antwortet 409 statt eines zweiten Laufs.
+ */
+export const LAUF_VORBEI: ReadonlySet<string> = new Set(["zur_freigabe", "abgelehnt", "fehler", "freigegeben", "gepostet"]);
+
+/**
  * Captions zu einem Video aus den geladenen Assets (Schlussprüfung d3-kosten-knopf-3): Zeilen mit metadata.medium_id gleich
  * dem Video und einer Lauf-ID nach Vertrag. Ohne lesbare Assets keine; dann bleibt es beim 409 des Servers.
  */
@@ -285,9 +294,12 @@ export function TextErzeugen({
     setOffeneLaufId((jetzt) => jetzt ?? o.laufId);
   }, [ablage, schluessel]);
   const gesperrt = stand.art === "bestaetigen" || stand.art === "laeuft";
-  // Schlussprüfung d3-kosten-knopf-3: Steht die offene Lauf-ID an einer geladenen Caption, die nicht mehr im Entwurf ist, ist
-  // ihr Ausgang bekannt — nur, solange kein Versuch gezeigt wird oder läuft.
-  const zumLauf = offeneLaufId === null || gesperrt ? null : (captions.find((c) => c.laufId === offeneLaufId && c.status !== "entwurf") ?? null);
+  // Schlussprüfung d3-kosten-knopf-3, Prüfung f-knopf-pruefung-1: Steht die offene Lauf-ID an einer geladenen Caption in einem
+  // Endzustand, ist ihr Ausgang bekannt — nur, solange kein Versuch gezeigt wird oder läuft. Eine Caption mit der ID in einem
+  // anderen Status gehört zu einem Lauf, der noch laufen kann: Die ID bleibt, die Karte nennt die Caption.
+  const zuDieserId = offeneLaufId === null || gesperrt ? null : (captions.find((c) => c.laufId === offeneLaufId) ?? null);
+  const zumLauf = zuDieserId !== null && LAUF_VORBEI.has(zuDieserId.status) ? zuDieserId : null;
+  const laufend = zuDieserId !== null && !LAUF_VORBEI.has(zuDieserId.status) ? zuDieserId : null;
   useEffect(() => {
     if (zumLauf === null) return;
     merkeOffenenLauf(ablage, schluessel, null);
@@ -366,6 +378,11 @@ export function TextErzeugen({
           Caption-Lauf zu diesem Video ohne bekannten Ausgang (in diesem Tab gestartet
           {berlinDatumZeit(gemerkt.seit) === null ? "" : ` am ${berlinDatumZeit(gemerkt.seit)} (Europe/Berlin)`}, Lauf-ID {gemerkt.laufId.slice(0, 8)}…) — er kann noch laufen.
           „Erneut senden …“ schickt dieselbe Lauf-ID; läuft er schon, antwortet der Server 409 statt einen zweiten Lauf zu starten.
+        </p>
+      )}
+      {laufend !== null && (
+        <p className="mt-2 break-words" style={{ color: FARBE_BERNSTEIN }} data-text-erzeugen-laufend={laufend.contentId}>
+          Caption #{laufend.contentId} (Status {maskiert(laufend.status)}) gehört zu diesem Lauf und ist noch nicht fertig.
         </p>
       )}
       {bekannt !== null && stand.art === "zu" && offeneLaufId === null && (
