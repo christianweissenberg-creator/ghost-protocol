@@ -342,7 +342,8 @@ test("M-C4 Caption-Lauf: medium_id in metadata, SCRIBE-Auftrag mit Auftragsart u
   assert.deepEqual(z.metadata.pflichtzeile, { wortlaut: PFLICHTZEILE, von_pipeline_ergaenzt: true, ersetzt: null });
   assert.equal(z.metadata.lauf_id, "lauf-caption-0001");
   // Prüfung f-caption-1: Jede Ergänzung steht als Warnung im Beleg, mit der Lage.
-  const warnung = [{ stufe: "pipeline", grund: LAGE_PRUEFEN, detail: "als letzte Zeile von Post 1 eingesetzt (vor der Marke „2/…“), hinter: „1/2 Denkmal-AfA bis 100 %. Visualisierung: KI-generiert.“" }];
+  // Die Nachbarzeile steht gekürzt auf 40 Zeichen (Schlussprüfung f3-pflichtzeile-1).
+  const warnung = [{ stufe: "pipeline", grund: LAGE_PRUEFEN, detail: "als letzte Zeile von Post 1 eingesetzt (vor der Marke „2/…“), hinter: „1/2 Denkmal-AfA bis 100 %. Visualisieru…“" }];
   assert.deepEqual(ohneZeit(r.body.warnungen), warnung);
   assert.deepEqual(ohneZeit(z.metadata.warnungen), warnung);
 });
@@ -653,15 +654,15 @@ test("M-C15 Fehlende Pflichtzeile im Abschnitt „Finaler Content“ (Prüfung f
     `Qualitätsprüfung:\n1/3: 84 Zeichen\n2/3: 90 Zeichen\n\n${gegliedert((link) => `Post 1/3: Das Video zeigt den Hof bei Nacht.\nPost 2/3: Denkmal-AfA bis 100 %.\nPost 3/3: Mehr: ${link}`)(task)}`;
   const liste = await lauf({}, mitListe);
   assert.equal(liste.z.body, liste.roh.replace("\nPost 2/3:", `\n\n${PFLICHTZEILE}\nPost 2/3:`));
-  assert.deepEqual(ohneZeit(liste.z.metadata.warnungen), warnung("als letzte Zeile von Post 1 eingesetzt (vor der Marke „2/…“), hinter: „Post 1/3: Das Video zeigt den Hof bei Nacht.“"));
+  assert.deepEqual(ohneZeit(liste.z.metadata.warnungen), warnung("als letzte Zeile von Post 1 eingesetzt (vor der Marke „2/…“), hinter: „Post 1/3: Das Video zeigt den Hof bei N…“"));
   // Die Längenmessung nimmt Post 1 des finalen Contents, nicht den Eintrag der Längenliste (f2-pflichtzeile-3).
   assert.equal(regeln.xPostEinsLaenge(liste.z.body), "Post 1/3: Das Video zeigt den Hof bei Nacht.".length + 2 + PFLICHTZEILE.length);
 
-  // Ohne folgenden Abschnitt: ans Ende des Texts, wie bisher.
+  // Abschnitt ohne folgenden Abschnitt: am Ende des Texts, der zugleich das Ende des Abschnitts ist (sicher erkannt).
   const ohneFolge = (task) => `Finaler Content: Das Video zeigt den Hof bei Nacht. ${linkAusAuftrag(task)}\n#Denkmal`;
   const ende = await lauf({}, ohneFolge);
   assert.equal(ende.z.body, `${ende.roh}\n\n${PFLICHTZEILE}`);
-  assert.deepEqual(ohneZeit(ende.z.metadata.warnungen), warnung("ans Ende des Texts gehängt (kein Abschnitt „Finaler Content“ mit folgendem Abschnitt und kein Thread davor erkannt), hinter: „#Denkmal“"));
+  assert.deepEqual(ohneZeit(ende.z.metadata.warnungen), warnung(`${ABSCHNITT}, hinter: „#Denkmal“`));
 
   // Eine nahe Variante wird ersetzt — auch das ist eine Ergänzung mit Warnung; steht die Zeile schon da, keine Warnung.
   const nah = await lauf({}, gegliedert((link) => `1/2 Das Video zeigt den Hof.\n${PFLICHTZEILE}.\n2/2 Mehr: ${link}`));
@@ -1558,4 +1559,96 @@ test("M-C25 „Text erzeugen“ nach 409, ohne geladene Caption (Delta-Prüfung 
   assert.equal(zwei.text(zwei.element("data-text-erzeugen-knopf")), "Erneut senden …");
   assert.equal(zwei.text(zwei.element("data-text-erzeugen-verwerfen")), "Lauf-ID verwerfen …");
   assert.equal(welt.aktivierungen.length, 6);
+});
+
+/** Strenge wie Postgres JSONB in der Attrappe: jeder Text im Körper wohlgeformt und ohne U+0000, sonst 400/22P02. */
+const speicherbar = (w) =>
+  typeof w === "string" ? w.isWellFormed() && !w.includes("\u0000") : Array.isArray(w) ? w.every(speicherbar) : w !== null && typeof w === "object" ? Object.entries(w).every(([k, v]) => speicherbar(k) && speicherbar(v)) : true;
+const strengesJsonb = (a) =>
+  a.art === "supabase" && a.tabelle === "content" && (a.methode === "PATCH" || a.methode === "POST") && !speicherbar(a.body)
+    ? { status: 400, body: { code: "22P02", message: "invalid input syntax for type json" } }
+    : null;
+
+test("M-C26 Warnungsdetail und metadata speicherbar (Schlussprüfung f3-pflichtzeile-1): Die Nachbarzeile wird erst maskiert, dann nach Zeichen gekürzt — ein Emoji an der Schnittstelle bleibt ganz, vom geschützten Namen bleibt kein Bruchstück, ein Abbruchwort bleibt Text; ein einzelnes Ersatzzeichen in metadata wird vor dem Speichern zu U+FFFD; mit strengem JSONB läuft der Caption-Lauf durch", async () => {
+  welt.stoerung = strengesJsonb;
+  try {
+    // (a) Emoji (zwei UTF-16-Einheiten) als 39. Zeichen der Nachbarzeile — genau an der Schnittstelle; dazu „aborted“.
+    exportMit(RITTERGUT);
+    medien();
+    const nachbar = `aborted ${"x".repeat(30)}🏰${"y".repeat(30)}`;
+    assert.equal(Array.from(nachbar).indexOf("🏰"), 38);
+    agenten({ publisher: gegliedert((link) => `1/2 Das Video zeigt den Hof.\n${nachbar}\n2/2 Mehr: ${link}`) });
+    const r = await pipePost({ ...LAUF, medium_id: EXPORT_ID });
+    assert.equal(r.body.status, "complete", JSON.stringify(r.body.speicherfehler ?? r.body.fehler ?? null));
+    const z = zeile(r.body.contentId);
+    assert.equal(z.status, "zur_freigabe");
+    const w = z.metadata.warnungen.find((x) => x.grund === LAGE_PRUEFEN);
+    assert.equal(w.detail, `als letzte Zeile von Post 1 eingesetzt (vor der Marke „2/…“), hinter: „aborted ${"x".repeat(30)}🏰…“`);
+    assert.ok(w.detail.isWellFormed(), "kein halbes Ersatzzeichen");
+    assert.ok(w.detail.length <= 160);
+
+    // (b) Geschützter Name über der Schnittstelle: erst maskiert, dann gekürzt — kein Bruchstück (der Lauf endet am Namensschutz).
+    zuruecksetzen();
+    welt.pipelineModul = pipeline;
+    welt.stoerung = strengesJsonb;
+    exportMit(RITTERGUT);
+    medien();
+    const NAME = ["Immo", "Nexus"].join("");
+    agenten({ publisher: gegliedert((link) => `1/2 Das Video zeigt den Hof.\n${"z".repeat(35)} ${NAME} und mehr Text danach\n2/2 Mehr: ${link}`) });
+    const n = await pipePost({ ...LAUF, medium_id: EXPORT_ID });
+    const zn = zeile(n.body.contentId);
+    const wn = zn.metadata.warnungen.find((x) => x.grund === LAGE_PRUEFEN);
+    assert.ok(wn, JSON.stringify(zn.metadata.warnungen));
+    assert.ok(!wn.detail.includes(NAME.slice(0, 3)), wn.detail);
+
+    // (c) Ein einzelnes Ersatzzeichen in einer Agentenantwort (AMPLIFIER) geht als U+FFFD in metadata, der Lauf wird gespeichert.
+    zuruecksetzen();
+    welt.pipelineModul = pipeline;
+    welt.stoerung = strengesJsonb;
+    exportMit(RITTERGUT);
+    medien();
+    agenten();
+    welt.agentAntworten.amplifier = () => agentOk("amplifier", "Distribution: Teaser \ud83c am Dienstag.");
+    const a = await pipePost({ ...LAUF, medium_id: EXPORT_ID });
+    assert.equal(a.body.status, "complete", JSON.stringify(a.body.speicherfehler ?? a.body.fehler ?? null));
+    const za = zeile(a.body.contentId);
+    assert.equal(za.status, "zur_freigabe");
+    assert.equal(za.metadata.amplifier_empfehlung, "Distribution: Teaser \uFFFD am Dienstag.");
+    assert.ok(speicherbar(za.metadata), "alles in metadata speicherbar");
+  } finally {
+    welt.stoerung = null;
+  }
+});
+
+test("M-C27 Lage nicht sicher bestimmt (Schlussprüfung f3-pflichtzeile-2 bis -4): Ohne erkannte Überschrift „Finaler Content“ oder ohne sicher erkannten Post 1 setzt die Pipeline nichts an geratener Stelle ein — Ende des Abschnitts bzw. des Texts mit der Warnung „Lage der Pflichtzeile nicht sicher bestimmt, prüfen“; bei X meldet die Längenprüfung dann „nicht prüfbar“, nie stillschweigend", async () => {
+  const lauf = async (body, publisher) => {
+    zuruecksetzen();
+    welt.pipelineModul = pipeline;
+    exportMit(RITTERGUT);
+    medien();
+    agenten({ publisher });
+    const r = await pipePost({ ...LAUF, ...body, medium_id: EXPORT_ID });
+    assert.equal(r.body.status, "complete", JSON.stringify(r.body.fehler ?? null));
+    const z = zeile(r.body.contentId);
+    assert.equal(pflichtzeilen(z.body), 1);
+    return { z, roh: publisher(auftrag("publisher")), w: ohneZeit(z.metadata.warnungen) };
+  };
+  const UNSICHER = "Lage der Pflichtzeile nicht sicher bestimmt, prüfen";
+  const NICHT_PRUEFBAR = { stufe: "pipeline", grund: "X: Länge von Post 1 nicht prüfbar", detail: "Post 1 nicht sicher abgegrenzt (Abschnitt „Finaler Content“ oder Postmarken nicht erkannt)" };
+  // X mit Keycap-Gliederung: keine erkannte Überschrift → Textende, unsicher, Länge nicht prüfbar.
+  const keycap = (task) => `1️⃣ Qualitätsprüfung\n- 1/2: 41 Zeichen ✓\n\n2️⃣ Finaler Content\n1/2 Das Video zeigt den Hof.\n2/2 Mehr: ${linkAusAuftrag(task)}\n\n3️⃣ Publishing-Zeitpunkt\nDienstag`;
+  const k = await lauf({}, keycap);
+  assert.equal(k.z.body, `${k.roh}\n\n${PFLICHTZEILE}`);
+  assert.deepEqual(k.w, [{ stufe: "pipeline", grund: UNSICHER, detail: "ans Ende des Texts gehängt (Abschnitt „Finaler Content“ nicht erkannt), hinter: „Dienstag“" }, NICHT_PRUEFBAR]);
+  // X mit „1/3“ in der Überschriftszeile ohne Doppelpunkt: Post 1 unklar → Ende des Abschnitts, Länge nicht prüfbar (kein Fehlalarm).
+  const ohneDoppelpunkt = gegliedert((link) => `**Finaler Content** 1/3 Das Video zeigt den Hof.\n2/3 ${"x".repeat(300)}\n3/3 Mehr: ${link}`);
+  const o = await lauf({}, (task) => ohneDoppelpunkt(task).replace("Finaler Content:\n", ""));
+  assert.deepEqual(o.w.map((x) => x.grund), [UNSICHER, NICHT_PRUEFBAR.grund]);
+  assert.ok(o.w[0].detail.startsWith("am Ende des Abschnitts „Finaler Content“ eingesetzt (Post 1 nicht sicher erkannt), hinter: „3/3 Mehr: "), o.w[0].detail);
+  // Instagram ohne Überschrift: Textende, unsicher — keine Längenprüfung außerhalb von X.
+  const ig = await lauf({ platform: "instagram", format: "reel" }, (task) => `Das Video zeigt den Hof bei Nacht. ${linkAusAuftrag(task)}\n#Denkmal`);
+  assert.deepEqual(ig.w.map((x) => x.grund), [UNSICHER]);
+  // X, Pflichtzeile schon da, aber Gliederung nicht erkannt: keine Lage-Warnung, aber „nicht prüfbar“.
+  const da = await lauf({}, (task) => `1/2 Das Video zeigt den Hof.\n${PFLICHTZEILE}\n2/2 Mehr: ${linkAusAuftrag(task)}`);
+  assert.deepEqual(da.w, [NICHT_PRUEFBAR]);
 });

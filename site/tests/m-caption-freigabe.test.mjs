@@ -46,35 +46,41 @@ test("MCF-1 Pflichtzeile: Wortlaut wie lib/studio/ki-hinweis.ts; nur als eigene 
   assert.equal(regeln.mitPflichtzeile("", P), P);
 });
 
-test("MCF-5 pflichtzeileEinsetzen beim X-Thread (Schlussprüfung d3-caption-auftrag-1): die fehlende Zeile kommt in den ersten Post, an dem das Video hängt — als dessen letzte Zeile vor der Marke „2/…“; ohne Marken „1/…“ und „2/…“ ans Ende; vorhanden und nahe Variante wie bisher; ohne ort wie bisher am Ende", () => {
+test("MCF-5 pflichtzeileEinsetzen beim X-Thread (Schlussprüfung d3-caption-auftrag-1, f3-pflichtzeile-2): die fehlende Zeile kommt in den ersten Post, an dem das Video hängt — als dessen letzte Zeile vor der Marke „2/…“, wenn Abschnitt und Post 1 sicher erkannt sind; Einzelpost ans Abschnittsende; sonst nichts geraten (unsicher); vorhanden und nahe Variante wie bisher", () => {
   const ein = (text, ort) => regeln.pflichtzeileEinsetzen(text, P, ort);
   // Thread mit Leerzeilen zwischen den Posts: hinter die letzte nicht leere Zeile von 1/3, nach einer Leerzeile.
-  assert.deepEqual(ein("1/3 Das Video zeigt den Hof.\n#Denkmal\n\n2/3 Zweiter Post.\n\n3/3 Mehr: https://example.test/x", "erster_post"), {
-    text: `1/3 Das Video zeigt den Hof.\n#Denkmal\n\n${P}\n\n2/3 Zweiter Post.\n\n3/3 Mehr: https://example.test/x`,
+  assert.deepEqual(ein("Finaler Content:\n1/3 Das Video zeigt den Hof.\n#Denkmal\n\n2/3 Zweiter Post.\n\n3/3 Mehr: https://example.test/x", "erster_post"), {
+    text: `Finaler Content:\n1/3 Das Video zeigt den Hof.\n#Denkmal\n\n${P}\n\n2/3 Zweiter Post.\n\n3/3 Mehr: https://example.test/x`,
     art: "angehaengt",
     ersetzt: null,
     lage: "erster_post",
     hinter: "#Denkmal",
   });
-  // Fette Marken auf eigener Zeile, Kopfzeile davor; CRLF bleibt CRLF.
+  // Fette Marken auf eigener Zeile; CRLF bleibt CRLF.
   assert.equal(ein("Finaler Content:\n**1/2**\nDas Video zeigt den Hof.\n**2/2**\nMehr im Profil.", "erster_post").text, `Finaler Content:\n**1/2**\nDas Video zeigt den Hof.\n\n${P}\n**2/2**\nMehr im Profil.`);
-  assert.equal(ein("1/2 Das Video zeigt den Hof.\r\n2/2 Mehr im Profil.", "erster_post").text, `1/2 Das Video zeigt den Hof.\r\n\r\n${P}\r\n2/2 Mehr im Profil.`);
+  assert.equal(ein("Finaler Content:\r\n1/2 Das Video zeigt den Hof.\r\n2/2 Mehr im Profil.", "erster_post").text, `Finaler Content:\r\n1/2 Das Video zeigt den Hof.\r\n\r\n${P}\r\n2/2 Mehr im Profil.`);
   // Erster Post nur aus der Marke: die Zeile direkt dahinter.
-  assert.equal(ein("1/2\n\n2/2 Mehr im Profil.", "erster_post").text, `1/2\n\n${P}\n\n2/2 Mehr im Profil.`);
+  assert.equal(ein("Finaler Content:\n1/2\n\n2/2 Mehr im Profil.", "erster_post").text, `Finaler Content:\n1/2\n\n${P}\n\n2/2 Mehr im Profil.`);
   // Thread-Vorschau auf /content (splitTweets: Marke am Zeilenanfang): die Zeile steht im Block 1/3.
   const bloecke = (text) => text.split("\n").reduce((b, z) => (/^\*{0,2}\d+\/\d*\*{0,2}/.test(z.trim()) ? [...b, [z]] : (b.at(-1).push(z), b)), [[]]).map((b) => b.join("\n"));
-  const mitZeile = ein("1/3 A.\n2/3 B.\n3/3 C.", "erster_post").text;
+  const mitZeile = ein("Finaler Content:\n1/3 A.\n2/3 B.\n3/3 C.", "erster_post").text;
   assert.deepEqual(bloecke(mitZeile).map((b) => regeln.enthaeltPflichtzeile(b, P)), [false, true, false, false]);
-  // Ohne Thread-Marken (ein Post), nur „2/…“ ohne „1/…“ davor oder „2/…“ vor „1/…“: ans Ende.
-  for (const text of ["Ein Post zum Video.\n#Denkmal", "Ein Post.\n2/3 der Fläche sind Park.", "2/2 Mehr.\n1/2 Das Video."]) {
-    assert.equal(ein(text, "erster_post").text, `${text}\n\n${P}`, text);
+  // Einzelpost ohne Marken: Ende des Abschnitts, sicher.
+  assert.deepEqual([ein("Finaler Content:\nEin Post zum Video.\n#Denkmal", "erster_post").lage], ["abschnitt"]);
+  // Marken in unklarer Folge („2/…“ ohne „1/…“ davor, „2/…“ vor „1/…“, nur „1/…“): nicht geraten, Ende des Abschnitts.
+  for (const inhalt of ["Ein Post.\n2/3 der Fläche sind Park.", "2/2 Mehr.\n1/2 Das Video.", "1/2 Das Video.\n#Denkmal"]) {
+    const r = ein(`Finaler Content:\n${inhalt}`, "erster_post");
+    assert.deepEqual([r.text, r.lage], [`Finaler Content:\n${inhalt}\n\n${P}`, "unsicher_abschnitt"], inhalt);
+  }
+  // Ohne Überschrift „Finaler Content“: nichts geraten, auch nicht bei klaren Marken — Ende des Texts, unsicher.
+  for (const ort of [undefined, "ende", "erster_post"]) {
+    const r = ein("1/2 A.\n2/2 B.\n", ort);
+    assert.deepEqual([r.text, r.lage, r.hinter], [`1/2 A.\n2/2 B.\n\n${P}`, "unsicher_ende", "2/2 B."], String(ort));
   }
   // Vorhanden (auch im letzten Post) bleibt, nahe Variante wird an ihrer Stelle ersetzt — wie ohne ort.
   const vorhanden = `1/2 A.\n2/2 B.\n${P}`;
   assert.deepEqual(ein(vorhanden, "erster_post"), { text: vorhanden, art: "vorhanden", ersetzt: null, lage: null, hinter: null });
   assert.deepEqual(ein(`1/2 A.\n2/2 B.\n${P}.`, "erster_post"), { text: `1/2 A.\n2/2 B.\n${P}`, art: "ersetzt", ersetzt: `${P}.`, lage: "ersetzt", hinter: null });
-  // Ohne ort (und mit "ende"): am Ende, auch bei Marken — wie vor der Schlussprüfung.
-  for (const ort of [undefined, "ende"]) assert.equal(ein("1/2 A.\n2/2 B.\n", ort).text, `1/2 A.\n2/2 B.\n\n${P}`, String(ort));
 });
 
 test("MCF-6 pflichtzeileEinsetzen im Abschnitt „Finaler Content“ und Länge von Post 1 (Prüfung f-caption-1, f-caption-2): Marken und Einsetzort nur im Abschnitt, bis Publishing-Zeitpunkt, Cross-Promotion, Qualitätsprüfung oder Metadaten; Postmarken auch mit Emoji, in Klammern und als „Post/Tweet 1/3“; xPostEinsLaenge zählt wie die Thread-Vorschau", () => {
@@ -100,13 +106,13 @@ test("MCF-6 pflichtzeileEinsetzen im Abschnitt „Finaler Content“ und Länge 
     assert.equal(r.text, `Finaler Content:\n${eins}\n\n${P}\n${zwei}${FOLGE}`, eins);
     assert.equal(r.lage, "erster_post", eins);
   }
-  // „2/…“ erst hinter dem Abschnitt: kein Thread im Abschnitt → Ende des Abschnitts.
-  assert.equal(ein(`Finaler Content:\n1/2 A.${FOLGE}\n2/2 Teaser`, "erster_post").lage, "abschnitt");
-  // Ohne Überschrift wie bisher: X-Marken im ganzen Text, sonst ans Ende.
-  assert.equal(ein("Ein Post.\n#Denkmal", "erster_post").lage, "ende");
-  assert.equal(ein("1/2 A.\n2/2 B.", "erster_post").text, `1/2 A.\n\n${P}\n2/2 B.`);
-  // Abschnitt bis zum Ende des Texts: ans Ende, wie bisher.
-  assert.deepEqual(ein("Finaler Content:\nText.\n"), { text: `Finaler Content:\nText.\n\n${P}`, art: "angehaengt", ersetzt: null, lage: "ende", hinter: "Text." });
+  // „2/…“ erst hinter dem Abschnitt: im Abschnitt nur „1/…“ — unklar, Ende des Abschnitts (f3-pflichtzeile-2).
+  assert.equal(ein(`Finaler Content:\n1/2 A.${FOLGE}\n2/2 Teaser`, "erster_post").lage, "unsicher_abschnitt");
+  // Ohne Überschrift: Ende des Texts, unsicher (f3-pflichtzeile-2).
+  assert.equal(ein("Ein Post.\n#Denkmal", "erster_post").lage, "unsicher_ende");
+  assert.equal(ein("1/2 A.\n2/2 B.", "erster_post").text, `1/2 A.\n2/2 B.\n\n${P}`);
+  // Abschnitt bis zum Ende des Texts: ans Ende, sicher.
+  assert.deepEqual(ein("Finaler Content:\nText.\n"), { text: `Finaler Content:\nText.\n\n${P}`, art: "angehaengt", ersetzt: null, lage: "abschnitt", hinter: "Text." });
 
   // xPostEinsLaenge: Block ab „1/…“ bis vor „2/…“ im Abschnitt, ohne „**“ und Leerraum am Rand.
   assert.equal(regeln.X_POST_HOECHSTENS, 280);
@@ -114,9 +120,10 @@ test("MCF-6 pflichtzeileEinsetzen im Abschnitt „Finaler Content“ und Länge 
   // Ohne Marken: der Abschnitt ohne seine Überschrift (Inhalt hinter dem Doppelpunkt zählt mit).
   assert.equal(regeln.xPostEinsLaenge(`Finaler Content:\nEin Post.${FOLGE}`), "Ein Post.".length);
   assert.equal(regeln.xPostEinsLaenge(`**Finaler Content:** Ein Post.\n#Denkmal${FOLGE}`), "Ein Post.\n#Denkmal".length);
-  // Ohne Überschrift: mit Marken der Block, ohne Marken nicht messbar.
-  assert.equal(regeln.xPostEinsLaenge("1/2 A.\n2/2 B."), "1/2 A.".length);
+  // Ohne Überschrift oder mit Marken in unklarer Folge: nicht prüfbar (f3-pflichtzeile-2).
+  assert.equal(regeln.xPostEinsLaenge("1/2 A.\n2/2 B."), null);
   assert.equal(regeln.xPostEinsLaenge("Ein Post.\nPublishing-Zeitpunkt: Dienstag"), null);
+  assert.equal(regeln.xPostEinsLaenge(`Finaler Content:\n2/2 Mehr.\n1/2 Das Video.${FOLGE}`), null);
 });
 
 test("MCF-7 Delta-Prüfung f2-pflichtzeile-1 bis -3: Überschrift „Finaler Content“ auch mit Emoji, folgender Abschnitt auch „Empfohlener Publishing-Zeitpunkt“ oder „Scheduling-Empfehlung“; ohne Überschrift keine Marken in anderen Abschnitten (keine Ergänzung in einer Längenliste, sondern Textende mit der echten Nachbarzeile); „1/3“ in der Überschriftszeile ist Post 1; „Thread“ und „Teil“ als Marken; die Längenmessung bleibt im Abschnitt", () => {
@@ -139,11 +146,11 @@ test("MCF-7 Delta-Prüfung f2-pflichtzeile-1 bis -3: Überschrift „Finaler Con
   const unbenannt = `${LISTE}## Finaler X-Thread\n1/2 Das Video zeigt den Hof.\n2/2 Mehr im Profil.`;
   const r2 = ein(unbenannt, "erster_post");
   assert.equal(r2.text, `${unbenannt}\n\n${P}`);
-  assert.deepEqual([r2.lage, r2.hinter], ["ende", "2/2 Mehr im Profil."]);
+  assert.deepEqual([r2.lage, r2.hinter], ["unsicher_ende", "2/2 Mehr im Profil."]);
   assert.ok(!r2.text.includes(`41 Zeichen ✓\n\n${P}`), "nicht in der Längenliste");
-  // Ohne Überschrift, Thread vor dem ersten anderen Abschnitt: weiter Post 1.
+  // Ohne Überschrift, Thread vor dem ersten anderen Abschnitt: auch nicht geraten (f3-pflichtzeile-2) — Textende.
   const vorn = `1/2 Das Video zeigt den Hof.\n2/2 Mehr im Profil.${FOLGE}`;
-  assert.equal(ein(vorn, "erster_post").text, vorn.replace("\n2/2 Mehr", `\n\n${P}\n2/2 Mehr`));
+  assert.deepEqual([ein(vorn, "erster_post").text, ein(vorn, "erster_post").lage], [`${vorn}\n\n${P}`, "unsicher_ende"]);
   // „1/3“ in der Überschriftszeile ist Post 1 — Einsetzort und Länge.
   const inKopf = `**Finaler Content:** 1/3 Das Video zeigt den Hof.\n2/3 Denkmal-AfA.\n3/3 Mehr im Profil.${FOLGE}`;
   const r3 = ein(inKopf, "erster_post");
@@ -155,9 +162,30 @@ test("MCF-7 Delta-Prüfung f2-pflichtzeile-1 bis -3: Überschrift „Finaler Con
   for (const [eins, zwei] of [["Thread 1/2: A.", "Thread 2/2: B."], ["Teil 1/2 A.", "Teil 2/2 B."]]) {
     assert.equal(ein(`Finaler Content:\n${eins}\n${zwei}${FOLGE}`, "erster_post").lage, "erster_post", eins);
   }
-  // Längenmessung im Abschnitt (f2-pflichtzeile-3): Längenliste davor und „2/…“ dahinter zählen nicht.
-  const lang = `Qualitätsprüfung:\n1/2: 84 Zeichen\n2/2: 90 Zeichen\n\nFinaler Content:\n1/2 ${"x".repeat(280)}\n\nCross-Promotion-Posts:\n2/2 Teaser`;
-  assert.equal(regeln.xPostEinsLaenge(lang), 4 + 280, "Post 1 des finalen Contents bis zum Abschnittsende");
+  // Längenmessung im Abschnitt (f2-pflichtzeile-3): Die Längenliste davor zählt nicht.
+  const lang = `Qualitätsprüfung:\n1/2: 84 Zeichen\n2/2: 90 Zeichen\n\nFinaler Content:\n1/2 ${"x".repeat(280)}\n2/2 Mehr.\n\nCross-Promotion-Posts:\n- Teaser`;
+  assert.equal(regeln.xPostEinsLaenge(lang), 4 + 280, "Post 1 des finalen Contents");
+});
+
+test("MCF-8 Schlussprüfung f3-pflichtzeile-2 bis -4: Keycap-Gliederung, „1/3“ in der Überschriftszeile ohne Doppelpunkt und eine Qualitätsprüfung vor einer nicht erkannten Content-Überschrift — nichts geraten: Ende des Abschnitts bzw. des Texts (unsicher), Länge von Post 1 nicht prüfbar (null), nie die Längenliste", () => {
+  const ein = (text, ort) => regeln.pflichtzeileEinsetzen(text, P, ort);
+  // Keycap-Nummern: Überschriften nicht erkannt → Textende, unsicher; Länge nicht prüfbar statt Listeneintrag.
+  const keycap = "1️⃣ Qualitätsprüfung\n- 1/2: 41 Zeichen ✓\n- 2/2: 30 Zeichen ✓\n\n2️⃣ Finaler Content\n1/2 Das Video zeigt den Hof.\n2/2 Mehr im Profil.\n\n3️⃣ Publishing-Zeitpunkt\nDienstag";
+  const r1 = ein(keycap, "erster_post");
+  assert.deepEqual([r1.text, r1.lage, r1.hinter], [`${keycap}\n\n${P}`, "unsicher_ende", "Dienstag"]);
+  assert.ok(!r1.text.includes(`41 Zeichen ✓\n\n${P}`), "nicht in der Längenliste");
+  assert.equal(regeln.xPostEinsLaenge(keycap), null);
+  // „1/3“ in der Überschriftszeile ohne Doppelpunkt: Post 1 unklar → Ende des Abschnitts, Länge nicht prüfbar (kein Fehlalarm).
+  for (const kopf of ["**Finaler Content** 1/3 Das Video zeigt den Hof.", "## Finaler Content 1/3 Das Video zeigt den Hof.", "Finaler Content – 1/3 Das Video zeigt den Hof."]) {
+    const t = `${kopf}\n2/3 ${"x".repeat(300)}\n3/3 Mehr im Profil.\n\nPublishing-Zeitpunkt: Dienstag`;
+    const r = ein(t, "erster_post");
+    assert.deepEqual([r.lage, r.hinter], ["unsicher_abschnitt", "3/3 Mehr im Profil."], kopf);
+    assert.equal(regeln.xPostEinsLaenge(t), null, kopf);
+  }
+  // Qualitätsprüfung vor einer nicht erkannten Content-Überschrift: Textende, Länge nicht prüfbar (nicht stillschweigend).
+  const vorher = "## ✅ Qualitätsprüfung\n- Länge geprüft ✓\n\n## 🧵 Finaler X-Thread\n1/3 Das Video zeigt den Hof.\n2/3 Zweiter.\n3/3 Mehr.";
+  assert.equal(ein(vorher, "erster_post").lage, "unsicher_ende");
+  assert.equal(regeln.xPostEinsLaenge(vorher), null);
 });
 
 test("MCF-2 pruefeVideoFreigabe: eine Funktion für Caption und Medium — Gründe in der Reihenfolge Caption, Pflichtzeile, Medien-Regel; der erste ist der Sperrgrund; ohne Medien-Urteil gesperrt", () => {

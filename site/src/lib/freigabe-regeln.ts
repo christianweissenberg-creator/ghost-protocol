@@ -259,15 +259,12 @@ const KOPF_DANACH = /^(?:empfohlene[rs]?\s+)?(?:publishing-zeitpunkt|scheduling|
 /**
  * Bereich des Abschnitts „Finaler Content“ in teile (gerade Indizes sind Zeilen; Prüfung f-caption-1): von seiner
  * Überschrift bis vor die nächste Zeile „Publishing-Zeitpunkt“, „Scheduling“, „Cross-Promotion“, „Qualitätsprüfung“ oder
- * „Metadaten“. Ohne diese Überschrift (kopf false) gilt der Text bis vor den ersten solchen Abschnitt als Suchbereich der
- * Postmarken (Delta-Prüfung f2-pflichtzeile-1): Eine Längenliste in der Qualitätsprüfung ist kein Thread.
+ * „Metadaten“. Ohne diese Überschrift (kopf false) ist die Gliederung nicht sicher erkannt; dann sucht niemand Postmarken
+ * (Schlussprüfung f3-pflichtzeile-2 bis -4: kein Einsetzen an geratener Stelle).
  */
 function finalerAbschnitt(teile: readonly string[]): { von: number; bis: number; kopf: boolean } {
   const von = teile.findIndex((t, i) => i % 2 === 0 && KOPF_FINAL.test(abschnittsKopf(t)));
-  if (von < 0) {
-    const andere = teile.findIndex((t, i) => i % 2 === 0 && KOPF_DANACH.test(abschnittsKopf(t)));
-    return { von: 0, bis: andere < 0 ? teile.length : andere, kopf: false };
-  }
+  if (von < 0) return { von: 0, bis: teile.length, kopf: false };
   const bis = teile.findIndex((t, i) => i > von && i % 2 === 0 && KOPF_DANACH.test(abschnittsKopf(t)));
   return { von, bis: bis < 0 ? teile.length : bis, kopf: true };
 }
@@ -288,24 +285,33 @@ function postNummer(zeile: string): number | null {
 }
 
 /**
- * Zeilen von Post 1 eines X-Threads im Bereich [von, bis): ab der Marke „1/…“ bis vor „2/…“; null ohne Marke „1/…“. In der
+ * Post 1 eines X-Threads im Bereich [von, bis) (Schlussprüfung f3-pflichtzeile-2 bis -4): „paar“, wenn die erste Postmarke
+ * „1/…“ ist und die nächste „2/…“ — Post 1 sind dann die Zeilen dazwischen; „keine“, wenn keine Zeile eine Postmarke trägt
+ * (ein einzelner Post); sonst „unklar“ (Marken in anderer Folge, etwa „1/3“ in einer Überschrift ohne Doppelpunkt). In der
  * Überschriftszeile („**Finaler Content:** 1/3 …“) zählt der Rest hinter dem Doppelpunkt (f2-pflichtzeile-2).
  */
-function ersterPostBereich(teile: readonly string[], von: number, bis: number, kopf: boolean): { eins: number; zwei: number } | null {
+type PostLage = { art: "paar"; eins: number; zwei: number } | { art: "keine" } | { art: "unklar" };
+
+function postLage(teile: readonly string[], von: number, bis: number): PostLage {
   let eins = -1;
   for (let i = von; i < bis; i += 2) {
-    const n = postNummer(kopf && i === von ? kopfRest(teile[i]) : teile[i]);
+    const n = postNummer(i === von ? kopfRest(teile[i]) : teile[i]);
+    if (n === null) continue;
     if (eins < 0) {
-      if (n === 1) eins = i;
-    } else if (n === 2) {
-      return { eins, zwei: i };
+      if (n !== 1) return { art: "unklar" };
+      eins = i;
+    } else {
+      return n === 2 ? { art: "paar", eins, zwei: i } : { art: "unklar" };
     }
   }
-  return eins < 0 ? null : { eins, zwei: bis };
+  return eins < 0 ? { art: "keine" } : { art: "unklar" };
 }
 
-/** Wo pflichtzeileEinsetzen die Zeile gesetzt hat (für die Warnung der Pipeline); null, wenn sie schon da war. */
-export type PflichtzeilenLage = "erster_post" | "abschnitt" | "ende" | "ersetzt";
+/**
+ * Wo pflichtzeileEinsetzen die Zeile gesetzt hat (für die Warnung der Pipeline); null, wenn sie schon da war. „unsicher_…“:
+ * Abschnitt oder Post 1 nicht sicher erkannt, die Zeile steht am Ende des Abschnitts bzw. des Texts (f3-pflichtzeile-2).
+ */
+export type PflichtzeilenLage = "erster_post" | "abschnitt" | "ersetzt" | "unsicher_abschnitt" | "unsicher_ende";
 
 /** Ergebnis von pflichtzeileEinsetzen; hinter ist die Zeile, hinter der die Pflichtzeile eingesetzt wurde (f2-pflichtzeile-1). */
 export interface PflichtzeilenEinsatz {
@@ -321,8 +327,10 @@ export interface PflichtzeilenEinsatz {
  * anderer Bindestrich, geschütztes Leerzeichen, Fettdruck, Emoji davor, Großschrift) → durch die wörtliche Zeile
  * ersetzt, an ihrer Stelle, statt eine zweite Hinweiszeile anzuhängen. Fehlt sie, wird sie nach einer Leerzeile
  * eingesetzt, und zwar nur im Abschnitt „Finaler Content“ (Prüfung f-caption-1): bei einem X-Thread (ort "erster_post")
- * als letzte Zeile von Post 1 vor die Marke „2/…“, sonst ans Ende des Abschnitts, vor Publishing-Zeitpunkt,
- * Cross-Promotion und Qualitätsprüfung. Ohne diese Überschrift (und ohne folgenden Abschnitt) wie bisher ans Ende des Texts.
+ * als letzte Zeile von Post 1 vor die Marke „2/…“, beim Einzelpost und auf anderen Kanälen ans Ende des Abschnitts, vor
+ * Publishing-Zeitpunkt, Cross-Promotion und Qualitätsprüfung. Nichts wird geraten (Schlussprüfung f3-pflichtzeile-2 bis
+ * -4): Ist Post 1 nicht sicher erkannt, kommt die Zeile ans Ende des Abschnitts (lage unsicher_abschnitt); fehlt die
+ * Überschrift, ans Ende des Texts (unsicher_ende). Die Pipeline warnt dann „Lage der Pflichtzeile nicht sicher bestimmt“.
  */
 export function pflichtzeileEinsetzen(text: string, pflichtzeile: string, ort: "ende" | "erster_post" = "ende"): PflichtzeilenEinsatz {
   const soll = pflichtzeile.trim();
@@ -337,7 +345,6 @@ export function pflichtzeileEinsetzen(text: string, pflichtzeile: string, ort: "
     }
   }
   const { von, bis, kopf } = finalerAbschnitt(teile);
-  const post = ort === "erster_post" ? ersterPostBereich(teile, von, bis, kopf) : null;
   // Einsetzen hinter der letzten nicht leeren Zeile vor grenze (frühestens hinter unten), mit dem Zeilenumbruch des Texts.
   const hinterLetzter = (unten: number, grenze: number, lage: PflichtzeilenLage): PflichtzeilenEinsatz => {
     let letzte = grenze - 2;
@@ -347,11 +354,20 @@ export function pflichtzeileEinsetzen(text: string, pflichtzeile: string, ort: "
     teile.splice(letzte + 1, 0, nl, "", nl, soll);
     return { text: teile.join(""), art: "angehaengt", ersetzt: null, lage, hinter };
   };
-  if (post !== null && post.zwei < bis) return hinterLetzter(post.eins, post.zwei, "erster_post");
-  if (kopf && bis < teile.length) return hinterLetzter(von, bis, "abschnitt");
-  const rumpf = text.replace(/\s+$/u, "");
-  const letzteZeile = rumpf.split(/\r?\n/).at(-1)?.trim() ?? "";
-  return { text: rumpf === "" ? soll : `${rumpf}\n\n${soll}`, art: "angehaengt", ersetzt: null, lage: "ende", hinter: rumpf === "" ? null : letzteZeile };
+  // Ans Ende des Texts (auch, wenn der Abschnitt bis zum Ende reicht): Leerraum am Ende weg, nach einer Leerzeile.
+  const amEnde = (lage: PflichtzeilenLage): PflichtzeilenEinsatz => {
+    const rumpf = text.replace(/\s+$/u, "");
+    const letzteZeile = rumpf.split(/\r?\n/).at(-1)?.trim() ?? "";
+    return { text: rumpf === "" ? soll : `${rumpf}\n\n${soll}`, art: "angehaengt", ersetzt: null, lage, hinter: rumpf === "" ? null : letzteZeile };
+  };
+  if (!kopf) return amEnde("unsicher_ende");
+  const ansAbschnittsende = (lage: PflichtzeilenLage) => (bis < teile.length ? hinterLetzter(von, bis, lage) : amEnde(lage));
+  if (ort === "erster_post") {
+    const post = postLage(teile, von, bis);
+    if (post.art === "paar") return hinterLetzter(post.eins, post.zwei, "erster_post");
+    if (post.art === "unklar") return ansAbschnittsende("unsicher_abschnitt");
+  }
+  return ansAbschnittsende("abschnitt");
 }
 
 /** Höchstlänge eines Posts auf X, wie die Thread-Vorschau auf /content (TWEET_MAX). */
@@ -360,25 +376,20 @@ export const X_POST_HOECHSTENS = 280;
 /**
  * Länge von Post 1 eines X-Texts (Prüfung f-caption-2), gezählt wie die Thread-Vorschau auf /content: ohne „**“, ohne
  * Leerraum am Rand, jedes Zeichen (UTF-16) einzeln, URLs voll. Post 1 ist im Abschnitt „Finaler Content“ der Block ab der
- * Marke „1/…“ bis vor „2/…“; ohne Marken der ganze Abschnitt ohne seine Überschrift. null, wenn weder Überschrift noch
- * Marke den Post abgrenzen.
+ * Marke „1/…“ bis vor „2/…“; ohne Marken der ganze Abschnitt ohne seine Überschrift. null heißt „nicht prüfbar“: ohne
+ * erkannte Überschrift oder mit Marken in unklarer Folge (Schlussprüfung f3-pflichtzeile-2 bis -4) — die Pipeline meldet das.
  */
 export function xPostEinsLaenge(text: string): number | null {
   const teile = text.split(/(\r?\n)/);
   const { von, bis, kopf } = finalerAbschnitt(teile);
-  const post = ersterPostBereich(teile, von, bis, kopf);
+  if (!kopf) return null;
+  const post = postLage(teile, von, bis);
+  if (post.art === "unklar") return null;
   // In der Überschriftszeile zählt nur der Rest hinter dem Doppelpunkt (f2-pflichtzeile-2).
-  const zeile = (i: number) => (kopf && i === von ? kopfRest(teile[i]) : teile[i]);
-  let zeilen: string[];
-  if (post !== null) {
-    zeilen = [];
-    for (let i = post.eins; i < post.zwei; i += 2) zeilen.push(zeile(i));
-  } else if (kopf) {
-    zeilen = [];
-    for (let i = von; i < bis; i += 2) zeilen.push(zeile(i));
-  } else {
-    return null;
-  }
+  const zeile = (i: number) => (i === von ? kopfRest(teile[i]) : teile[i]);
+  const [anfang, ende] = post.art === "paar" ? [post.eins, post.zwei] : [von, bis];
+  const zeilen: string[] = [];
+  for (let i = anfang; i < ende; i += 2) zeilen.push(zeile(i));
   return zeilen.join("\n").replace(/\*\*/g, "").trim().length;
 }
 

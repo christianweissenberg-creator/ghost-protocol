@@ -12,7 +12,8 @@ import {
   xPostEinsLaenge,
   X_POST_HOECHSTENS,
 } from "@/lib/freigabe-regeln";
-import type { PflichtzeilenLage } from "@/lib/freigabe-regeln";
+import type { PflichtzeilenEinsatz, PflichtzeilenLage } from "@/lib/freigabe-regeln";
+import { machSpeicherbar } from "@/lib/studio/medien";
 import { ABFRAGE_TIMEOUT_MS, bereinigeFehler, leseProtokollEintraege, pruefeAnfrageHerkunft } from "@/lib/status-server";
 import { STEINADEL_REGELPAKET } from "@/lib/steinadel-regelpaket";
 import { baueKurzlink, maskiereKampagnenseiten, pruefeKurzlinksImText } from "@/lib/steinadel-kurzlink";
@@ -672,13 +673,41 @@ function captionAnweisungen(kanal: CaptionKanal, objekt: boolean, ctaLink: strin
 ${allgemein.join("\n")}`;
 }
 
-/** Detail der Warnung „Pflichtzeile von der Pipeline ergänzt, Lage prüfen“ je Lage (Prüfung f-caption-1). */
+/** Detail der Warnung zur ergänzten Pflichtzeile je Lage (Prüfung f-caption-1, Schlussprüfung f3-pflichtzeile-2). */
 const PFLICHTZEILE_LAGE_TEXT: Record<PflichtzeilenLage, string> = {
   erster_post: "als letzte Zeile von Post 1 eingesetzt (vor der Marke „2/…“)",
   abschnitt: "am Ende des Abschnitts „Finaler Content“ eingesetzt",
-  ende: "ans Ende des Texts gehängt (kein Abschnitt „Finaler Content“ mit folgendem Abschnitt und kein Thread davor erkannt)",
   ersetzt: "eine nahe Variante durch den Wortlaut ersetzt",
+  unsicher_abschnitt: "am Ende des Abschnitts „Finaler Content“ eingesetzt (Post 1 nicht sicher erkannt)",
+  unsicher_ende: "ans Ende des Texts gehängt (Abschnitt „Finaler Content“ nicht erkannt)",
 };
+
+/** Höchstzahl Zeichen (Codepoints) der Nachbarzeile im Warnungsdetail; mit dem längsten Lagetext bleibt es unter 160. */
+const NACHBAR_ZEICHEN = 40;
+
+/** Nach Zeichen (Codepoints) kürzen, nie mitten in einem Ersatzzeichenpaar (Schlussprüfung f3-pflichtzeile-1). */
+function kuerzeNachZeichen(text: string, max: number): string {
+  const zeichen = Array.from(text);
+  return zeichen.length > max ? `${zeichen.slice(0, max - 1).join("")}…` : text;
+}
+
+/**
+ * Warnung zur ergänzten Pflichtzeile mit Lage und Nachbarzeile (f-caption-1, f2-pflichtzeile-1). Die Nachbarzeile ist Text aus
+ * der PUBLISHER-Antwort: erst maskiert, dann nach Zeichen gekürzt (Schlussprüfung f3-pflichtzeile-1) — nicht über vermerk
+ * und fehlerText, deren Abbruch-Erkennung und Schnitt nach UTF-16-Einheiten für Fehlermeldungen gedacht sind. Ist die Lage
+ * nicht sicher bestimmt, sagt der Grund das (f3-pflichtzeile-2).
+ */
+function pflichtzeilenWarnung(p: PflichtzeilenEinsatz): Vermerk {
+  const lage: PflichtzeilenLage = p.lage ?? "unsicher_ende";
+  const unsicher = lage === "unsicher_abschnitt" || lage === "unsicher_ende";
+  const hinter = p.hinter === null ? "" : `, hinter: „${kuerzeNachZeichen(maskiereGeschuetzteNamen(p.hinter), NACHBAR_ZEICHEN)}“`;
+  return {
+    stufe: "pipeline",
+    grund: unsicher ? "Lage der Pflichtzeile nicht sicher bestimmt, prüfen" : "Pflichtzeile von der Pipeline ergänzt, Lage prüfen",
+    detail: `${PFLICHTZEILE_LAGE_TEXT[lage]}${hinter}`,
+    am: new Date().toISOString(),
+  };
+}
 
 /** Ort der Pflichtzeile im PUBLISHER-Auftrag: bei X im Post mit dem Video (d3-caption-auftrag-1), sonst am Ende. */
 function publisherPflichtzeile(kanal: CaptionKanal): string {
@@ -1425,9 +1454,12 @@ export async function POST(request: NextRequest) {
   // gemessen. Ein vorhandener Trigger überschreibt den Wert.
   async function speichere(felder: Record<string, unknown>, anlass: string): Promise<boolean> {
     if (!supabase || contentId === null) return false;
+    // Schlussprüfung f3-pflichtzeile-1: Jeder Text in metadata (JSONB) wird nach der Regel von speicherbarerText abgesichert
+    // (U+0000 weg, einzelnes Ersatzzeichen → U+FFFD); speicherbarer Text bleibt zeichengleich.
+    const sicher = "metadata" in felder ? { ...felder, metadata: machSpeicherbar(felder.metadata) } : felder;
     const { data, error } = await supabase
       .from("content")
-      .update({ ...felder, updated_at: new Date().toISOString() })
+      .update({ ...sicher, updated_at: new Date().toISOString() })
       .eq("id", contentId)
       .select("id");
     let meldung: string | null = null;
@@ -1624,7 +1656,7 @@ export async function POST(request: NextRequest) {
         platform,
         language: "de",
         created_by: "scribe",
-        metadata: basisMetadata,
+        metadata: machSpeicherbar(basisMetadata),
       })
       .select("id")
       .single();
@@ -2108,13 +2140,16 @@ Modellrechnung-Disclaimer wörtlich.${datierungsHinweisPublisher(datierung)}${ob
         steps[3].output = p.text;
         freigabeText = p.text;
         // Delta-Prüfung f2-pflichtzeile-1: Das Detail nennt die tatsächliche Nachbarzeile, nicht nur die beabsichtigte Lage.
-        const hinter = p.hinter === null ? "" : `, hinter: „${p.hinter.length > 60 ? `${p.hinter.slice(0, 59)}…` : p.hinter}“`;
-        warnungen.push(vermerk("pipeline", "Pflichtzeile von der Pipeline ergänzt, Lage prüfen", `${PFLICHTZEILE_LAGE_TEXT[p.lage ?? "ende"]}${hinter}`));
+        warnungen.push(pflichtzeilenWarnung(p));
       }
       basisMetadata = { ...basisMetadata, pflichtzeile: { wortlaut: KI_PFLICHTZEILE_CAPTION, von_pipeline_ergaenzt: ergaenzt, ersetzt: p.ersetzt } };
       if (captionKanal === "x|thread") {
+        // Schlussprüfung f3-pflichtzeile-2: Die Längenprüfung entfällt nie stillschweigend — ohne sicher abgegrenzten Post 1
+        // meldet sie „nicht prüfbar“.
         const laenge = xPostEinsLaenge(freigabeText);
-        if (laenge !== null && laenge > X_POST_HOECHSTENS) {
+        if (laenge === null) {
+          warnungen.push(vermerk("pipeline", "X: Länge von Post 1 nicht prüfbar", "Post 1 nicht sicher abgegrenzt (Abschnitt „Finaler Content“ oder Postmarken nicht erkannt)"));
+        } else if (laenge > X_POST_HOECHSTENS) {
           warnungen.push(vermerk("pipeline", `X: Post 1 länger als ${X_POST_HOECHSTENS} Zeichen`, `${laenge} Zeichen, gezählt wie die Thread-Vorschau (URLs voll)`));
         }
       }
