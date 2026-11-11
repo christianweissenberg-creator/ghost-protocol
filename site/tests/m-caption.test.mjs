@@ -1574,7 +1574,7 @@ const strengesJsonb = (a) =>
 test("M-C26 Warnungsdetail und metadata speicherbar (Schlussprüfung f3-pflichtzeile-1): Die Nachbarzeile wird erst maskiert, dann nach Zeichen gekürzt — ein Emoji an der Schnittstelle bleibt ganz, vom geschützten Namen bleibt kein Bruchstück, ein Abbruchwort bleibt Text; ein einzelnes Ersatzzeichen in metadata wird vor dem Speichern zu U+FFFD; mit strengem JSONB läuft der Caption-Lauf durch", async () => {
   welt.stoerung = strengesJsonb;
   try {
-    // (a) Emoji (zwei UTF-16-Einheiten) als 39. Zeichen der Nachbarzeile — genau an der Schnittstelle; dazu „aborted“.
+    // Fall a: Emoji (zwei UTF-16-Einheiten) als 39. Zeichen der Nachbarzeile — genau an der Schnittstelle; dazu „aborted“.
     exportMit(RITTERGUT);
     medien();
     const nachbar = `aborted ${"x".repeat(30)}🏰${"y".repeat(30)}`;
@@ -1589,7 +1589,7 @@ test("M-C26 Warnungsdetail und metadata speicherbar (Schlussprüfung f3-pflichtz
     assert.ok(w.detail.isWellFormed(), "kein halbes Ersatzzeichen");
     assert.ok(w.detail.length <= 160);
 
-    // (b) Geschützter Name über der Schnittstelle: erst maskiert, dann gekürzt — kein Bruchstück (der Lauf endet am Namensschutz).
+    // Fall b: Geschützter Name über der Schnittstelle: erst maskiert, dann gekürzt — kein Bruchstück (der Lauf endet am Namensschutz).
     zuruecksetzen();
     welt.pipelineModul = pipeline;
     welt.stoerung = strengesJsonb;
@@ -1603,7 +1603,7 @@ test("M-C26 Warnungsdetail und metadata speicherbar (Schlussprüfung f3-pflichtz
     assert.ok(wn, JSON.stringify(zn.metadata.warnungen));
     assert.ok(!wn.detail.includes(NAME.slice(0, 3)), wn.detail);
 
-    // (c) Ein einzelnes Ersatzzeichen in einer Agentenantwort (AMPLIFIER) geht als U+FFFD in metadata, der Lauf wird gespeichert.
+    // Fall c: Ein einzelnes Ersatzzeichen in einer Agentenantwort (AMPLIFIER) geht als U+FFFD in metadata, der Lauf wird gespeichert.
     zuruecksetzen();
     welt.pipelineModul = pipeline;
     welt.stoerung = strengesJsonb;
@@ -1618,7 +1618,7 @@ test("M-C26 Warnungsdetail und metadata speicherbar (Schlussprüfung f3-pflichtz
     assert.equal(za.metadata.amplifier_empfehlung, "Distribution: Teaser \uFFFD am Dienstag.");
     assert.ok(speicherbar(za.metadata), "alles in metadata speicherbar");
 
-    // (d) Schon beim ersten Schreiben (Insert): ein einzelnes Ersatzzeichen aus dem Export im Objekt-Snapshot.
+    // Fall d: Schon beim ersten Schreiben (Insert): ein einzelnes Ersatzzeichen aus dem Export im Objekt-Snapshot.
     zuruecksetzen();
     welt.pipelineModul = pipeline;
     welt.stoerung = strengesJsonb;
