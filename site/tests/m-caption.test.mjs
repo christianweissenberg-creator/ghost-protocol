@@ -1617,6 +1617,19 @@ test("M-C26 Warnungsdetail und metadata speicherbar (Schlussprüfung f3-pflichtz
     assert.equal(za.status, "zur_freigabe");
     assert.equal(za.metadata.amplifier_empfehlung, "Distribution: Teaser \uFFFD am Dienstag.");
     assert.ok(speicherbar(za.metadata), "alles in metadata speicherbar");
+
+    // (d) Schon beim ersten Schreiben (Insert): ein einzelnes Ersatzzeichen aus dem Export im Objekt-Snapshot.
+    zuruecksetzen();
+    welt.pipelineModul = pipeline;
+    welt.stoerung = strengesJsonb;
+    exportMit({ ...RITTERGUT, kurzbeschreibung: "Testbeschreibung \ud83c mit Rest." });
+    medien();
+    agenten();
+    const e = await pipePost({ ...LAUF, medium_id: EXPORT_ID });
+    assert.equal(e.status, 200, JSON.stringify(e.body).slice(0, 300));
+    assert.equal(e.body.status, "complete", JSON.stringify(e.body.speicherfehler ?? e.body.fehler ?? null));
+    const ze = zeile(e.body.contentId);
+    assert.equal(ze.metadata.objekt_snapshot.objekt.kurzbeschreibung, "Testbeschreibung \uFFFD mit Rest.");
   } finally {
     welt.stoerung = null;
   }
