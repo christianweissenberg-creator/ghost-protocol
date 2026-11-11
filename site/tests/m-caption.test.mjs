@@ -1023,7 +1023,16 @@ test("M-C9 laufAusgang: Antworten der Pipeline eingeordnet wie auf /content (Erg
   const a = T.laufAusgang;
   assert.equal(a(200, { status: "complete", steps: [], contentId: 12, summary: { total_cost_usd: 0.1656 } }).text, "Lauf beendet: Caption #12 — zur Freigabe im Stapel · geschätzt $0.1656");
   assert.equal(a(200, { status: "abgelehnt", steps: [], contentId: 13 }).text, "Lauf beendet: Caption #13 — COUNSEL lehnt ab — nicht im Stapel · Kosten nicht gemeldet");
-  assert.deepEqual(a(409, { fehler: "Lauf-ID schon vergeben", content_id: 12 }), { art: "existiert", contentId: 12, text: "Lauf existiert bereits (#12) — kein zweiter Lauf gestartet · Lauf-ID schon vergeben" });
+  assert.deepEqual(a(409, { fehler: "Lauf-ID schon vergeben", content_id: 12 }), { art: "existiert", contentId: 12, status: null, text: "Lauf existiert bereits (#12) — kein zweiter Lauf gestartet · Lauf-ID schon vergeben" });
+  assert.equal(a(409, { fehler: "x", content_id: 12, status: "counsel_geprueft" }).status, "counsel_geprueft");
+  // Delta-Prüfung f2-endzustand-1: Die ID bleibt bei unbekanntem Ausgang und bei 409 mit Zeile, die nicht in einem Endzustand ist.
+  const offen = (status, daten) => T.laufNochOffen(a(status, daten));
+  assert.equal(offen(null, null), true, "Netz");
+  for (const st of ["entwurf", "counsel_geprueft", "archiviert"]) assert.equal(offen(409, { fehler: "x", content_id: 12, status: st }), true, st);
+  assert.equal(offen(409, { fehler: "x", content_id: 12 }), true, "409 ohne Status");
+  for (const st of ["zur_freigabe", "abgelehnt", "fehler", "freigegeben", "gepostet"]) assert.equal(offen(409, { fehler: "x", content_id: 12, status: st }), false, st);
+  assert.equal(offen(409, { fehler: "x" }), false, "409 ohne Zeile");
+  for (const [st, d] of [[200, { status: "complete", steps: [], contentId: 12 }], [400, { fehler: "x" }], [500, { fehler: "x", content_id: 14, status: "fehler" }]]) assert.equal(offen(st, d), false, String(st));
   assert.equal(a(400, { fehler: "medium_id ungültig" }).art, "abgewiesen");
   assert.equal(a(500, { fehler: "Agent nicht erreichbar", content_id: 14, status: "fehler" }).art, "abgebrochen");
   assert.equal(a(500, { fehler: "Lauf-ID nicht prüfbar" }).art, "nicht_gestartet");
@@ -1107,7 +1116,7 @@ function stelleSessionStorage(t) {
   return speicher;
 }
 
-test("M-C17 „Text erzeugen“ im Betrieb (Schlussprüfung d3-kosten-knopf-1): Medien-Panel ohne speicher-Prop mit gestelltem sessionStorage — Antwort verloren → Eintrag „unbekannt“; Neuladen, die Caption steht noch im Entwurf → Hinweis und „Erneut senden …“ mit derselben ID → 409 → Eintrag weg; kein zweiter bezahlter Lauf", async (t) => {
+test("M-C17 „Text erzeugen“ im Betrieb (Schlussprüfung d3-kosten-knopf-1, Delta-Prüfung f2-endzustand-1): Medien-Panel ohne speicher-Prop mit gestelltem sessionStorage — Antwort verloren → Eintrag „unbekannt“; Neuladen, die Caption steht noch im Entwurf → Hinweis und „Erneut senden …“ mit derselben ID → 409, die ID bleibt; nach dem Ende des Laufs gibt das nächste „Erneut senden …“ (409, zur_freigabe) sie frei; kein zweiter bezahlter Lauf", async (t) => {
   const speicher = stelleSessionStorage(t);
   const schluessel = `gp-text-erzeugen:${SLUG}:${EXPORT_ID}`;
   exportMit(RITTERGUT);
@@ -1139,7 +1148,20 @@ test("M-C17 „Text erzeugen“ im Betrieb (Schlussprüfung d3-kosten-knopf-1): 
   assert.equal(zwei.ausgang().props["data-text-erzeugen-ausgang"], "existiert");
   assert.match(zwei.text(zwei.ausgang()), new RegExp(`^Lauf existiert bereits \\(#${zeileDesLaufs.id}\\)`));
   assert.equal(welt.aktivierungen.length, 6, "kein zweiter bezahlter Lauf");
-  assert.equal(speicher.m.has(schluessel), false, "nach bekanntem Ausgang ist der Eintrag weg");
+  // Die Zeile steht im Entwurf: Die ID bleibt (f2-endzustand-1), die Karte nennt die Zeile als nicht fertig.
+  assert.equal(JSON.parse(speicher.m.get(schluessel)).laufId, id, "nach 409 mit Zeile im Entwurf bleibt der Eintrag");
+  assert.equal(zwei.text(zwei.element("data-text-erzeugen-laufend")), `Caption #${zeileDesLaufs.id} (Status entwurf) gehört zu diesem Lauf und ist noch nicht fertig.`);
+  assert.equal(zwei.text(zwei.element("data-text-erzeugen-knopf")), "Erneut senden …");
+  // Der Lauf ist fertig: Das nächste „Erneut senden …“ bekommt 409 mit zur_freigabe und gibt die ID frei.
+  zeileDesLaufs.status = "zur_freigabe";
+  zwei.element("data-text-erzeugen-knopf").props.onClick();
+  zwei.element("data-text-erzeugen-start").props.onClick();
+  await zwei.lz.ruhe(40);
+  assert.equal(zwei.s.gesendet[1].lauf_id, id);
+  assert.equal(zwei.ausgang().props["data-text-erzeugen-ausgang"], "existiert");
+  assert.equal(welt.aktivierungen.length, 6, "kein zweiter bezahlter Lauf");
+  assert.equal(speicher.m.has(schluessel), false, "nach 409 mit Endzustand ist der Eintrag weg");
+  assert.equal(zwei.element("data-text-erzeugen-laufend"), null);
   assert.equal(zwei.text(zwei.element("data-text-erzeugen-knopf")), "Text erzeugen …");
 });
 
@@ -1173,7 +1195,7 @@ test("M-C18 „Text erzeugen“, erster Versuch scheitert bekannt (Schlussprüfu
   }
 });
 
-test("M-C19 „Text erzeugen“, Abgleich mit den geladenen Captions (Schlussprüfung d3-kosten-knopf-3): Steht die gemerkte Lauf-ID an einer Caption des Videos, die nicht mehr im Entwurf ist, verschwindet der Eintrag; die Karte nennt „Caption #N (Status …) zu diesem Lauf“, und „Text erzeugen …“ startet ohne vergebliches 409 mit neuer ID — nach Neuladen und beim Neu-Lesen im selben Tab", async (t) => {
+test("M-C19 „Text erzeugen“, Abgleich mit den geladenen Captions (Schlussprüfung d3-kosten-knopf-3, Delta-Prüfung f2-endzustand-3): Steht die gemerkte Lauf-ID an einer Caption des Videos in einem Endzustand (LAUF_VORBEI: zur_freigabe, abgelehnt, fehler, freigegeben, gepostet), verschwindet der Eintrag; die Karte nennt „Caption #N (Status …) zu diesem Lauf“, und „Text erzeugen …“ startet ohne vergebliches 409 mit neuer ID — nach Neuladen und beim Neu-Lesen im selben Tab", async (t) => {
   const speicher = stelleSessionStorage(t);
   const schluessel = `gp-text-erzeugen:${SLUG}:${EXPORT_ID}`;
   exportMit(RITTERGUT);
@@ -1374,4 +1396,135 @@ test("M-C21 „Text erzeugen“, Neu-Lesen im selben Tab während des Laufs (Pr�
   assert.equal(speicher.m.has(schluessel), false);
   assert.equal(k2.text(k2.element("data-text-erzeugen-knopf")), "Text erzeugen …");
   assert.equal(welt.aktivierungen.length, 12, "zwei Läufe, je 6 Stufen — keiner doppelt");
+});
+
+/** Lauf mit verlorener Antwort über das Medien-Panel; liefert Karte, Lauf-ID und Zeile (der Server lief durch). */
+async function verlorenerLauf() {
+  const k = await medienPanelLaufzeit();
+  k.s.verloren = true;
+  await k.lauf();
+  k.s.verloren = false;
+  assert.equal(k.ausgang().props["data-text-erzeugen-ausgang"], "unbekannt");
+  const id = k.s.gesendet[0].lauf_id;
+  return { k, id, zeile: welt.content.find((z) => z.metadata?.lauf_id === id) };
+}
+
+test("M-C23 „Text erzeugen“ nach 409 mit laufender Zeile (Delta-Prüfung f2-endzustand-1, PROBE-K3): Neuladen während PUBLISHER, „Erneut senden …“ → 409 mit counsel_geprueft → die Lauf-ID bleibt, auch nach Neu-Lesen; „Lauf-ID verwerfen …“ gibt sie erst nach Bestätigung frei; Abbrechen lässt sie stehen; ohne Verwerfen bleibt es bei einem bezahlten Lauf", async (t) => {
+  const speicher = stelleSessionStorage(t);
+  const schluessel = `gp-text-erzeugen:${SLUG}:${EXPORT_ID}`;
+  exportMit(RITTERGUT);
+  medien();
+  agenten();
+  let auf;
+  let angekommen;
+  const tor = new Promise((r) => (auf = r));
+  const da = new Promise((r) => (angekommen = r));
+  welt.vorAntwort = async (a) => {
+    if (a.art === "activate" && a.body?.agent_id === "publisher") {
+      angekommen();
+      await tor;
+    }
+  };
+  const eins = await medienPanelLaufzeit();
+  try {
+    eins.element("data-text-erzeugen-knopf").props.onClick();
+    eins.element("data-text-erzeugen-start").props.onClick();
+    await binnen(da, 5_000, "Tor vor publisher");
+    const id = eins.s.gesendet[0].lauf_id;
+    const zeileDesLaufs = welt.content.find((z) => z.metadata?.lauf_id === id);
+    // 1. Neuladen während PUBLISHER: nicht fertig, „Erneut senden …“.
+    const zwei = await medienPanelLaufzeit();
+    assert.equal(zwei.text(zwei.element("data-text-erzeugen-knopf")), "Erneut senden …");
+    // 2. Erneut senden → 409 mit counsel_geprueft.
+    zwei.element("data-text-erzeugen-knopf").props.onClick();
+    zwei.element("data-text-erzeugen-start").props.onClick();
+    await zwei.lz.ruhe(40);
+    assert.equal(zwei.ausgang().props["data-text-erzeugen-ausgang"], "existiert");
+    assert.match(zwei.text(zwei.ausgang()), /Status counsel_geprueft/);
+    // 3. Die ID bleibt: Eintrag, Hinweis „noch nicht fertig“, „Erneut senden …“ — auch nach fertig() und Neu-Lesen.
+    for (const schritt of ["nach dem 409", "nach dem Neu-Lesen"]) {
+      if (schritt === "nach dem Neu-Lesen") await zwei.neuGelesen();
+      assert.equal(JSON.parse(speicher.m.get(schluessel)).laufId, id, `${schritt}: Eintrag bleibt`);
+      assert.equal(zwei.text(zwei.element("data-text-erzeugen-laufend")), `Caption #${zeileDesLaufs.id} (Status counsel_geprueft) gehört zu diesem Lauf und ist noch nicht fertig.`, schritt);
+      assert.equal(zwei.text(zwei.element("data-text-erzeugen-knopf")), "Erneut senden …", schritt);
+      assert.equal(zwei.text(zwei.element("data-text-erzeugen-verwerfen")), "Lauf-ID verwerfen …", schritt);
+    }
+    // 4. Verwerfen erst nach Bestätigung; Abbrechen lässt alles stehen.
+    zwei.element("data-text-erzeugen-verwerfen").props.onClick();
+    const frage = zwei.text(zwei.element("data-text-erzeugen-verwerfen-bestaetigung"));
+    assert.ok(frage.startsWith(`Lauf-ID ${id.slice(0, 8)}… verwerfen? Caption #${zeileDesLaufs.id} steht noch auf „counsel_geprueft“. Läuft`), frage);
+    assert.ok(frage.includes("startet „Text erzeugen …“ danach einen zweiten bezahlten Lauf"), frage);
+    assert.equal(zwei.element("data-text-erzeugen-knopf"), null, "während der Frage kein Start");
+    zwei.element("data-text-erzeugen-verwerfen-zurueck").props.onClick();
+    assert.equal(JSON.parse(speicher.m.get(schluessel)).laufId, id, "Abbrechen: Eintrag bleibt");
+    assert.equal(zwei.text(zwei.element("data-text-erzeugen-knopf")), "Erneut senden …");
+    zwei.element("data-text-erzeugen-verwerfen").props.onClick();
+    zwei.element("data-text-erzeugen-verwerfen-ja").props.onClick();
+    assert.equal(speicher.m.has(schluessel), false, "verworfen: Eintrag weg");
+    assert.equal(zwei.element("data-text-erzeugen-laufend"), null);
+    assert.equal(zwei.element("data-text-erzeugen-verwerfen"), null);
+    assert.equal(zwei.text(zwei.element("data-text-erzeugen-knopf")), "Text erzeugen …");
+    zwei.element("data-text-erzeugen-knopf").props.onClick();
+    assert.match(zwei.text(zwei.element("data-text-erzeugen-bestaetigung")), / · Lauf-ID [0-9a-f]{8}… \(neu\)Ja, bezahlten Lauf starten/);
+    assert.equal(zwei.s.gesendet.length, 1, "die Bestätigung sendet nichts");
+  } finally {
+    welt.vorAntwort = null;
+    auf();
+    await eins.lz.ruhe(40);
+  }
+  assert.equal(welt.aktivierungen.length, 6, "ein bezahlter Lauf");
+  assert.equal(welt.content.filter((z) => z.metadata?.medium_id === EXPORT_ID).length, 1);
+});
+
+test("M-C24 „Text erzeugen“, Positivliste im Verhalten (Delta-Prüfung f2-endzustand-2): Ein unbekannter Status lässt den Eintrag stehen (nicht fertig, „Erneut senden …“ → 409, ID bleibt); fehler (echter Abbruch in AMPLIFIER), freigegeben und gepostet geben ihn frei — ein Klick, neue Lauf-ID, ein POST, kein 409", async (t) => {
+  const speicher = stelleSessionStorage(t);
+  const schluessel = `gp-text-erzeugen:${SLUG}:${EXPORT_ID}`;
+  // (a) Unbekannter Status, direkt gesetzt.
+  exportMit(RITTERGUT);
+  medien();
+  agenten();
+  const a = await verlorenerLauf();
+  a.zeile.status = "archiviert";
+  const a2 = await medienPanelLaufzeit();
+  assert.equal(a2.element("data-text-erzeugen-bekannt"), null);
+  assert.equal(a2.text(a2.element("data-text-erzeugen-laufend")), `Caption #${a.zeile.id} (Status archiviert) gehört zu diesem Lauf und ist noch nicht fertig.`);
+  assert.equal(JSON.parse(speicher.m.get(schluessel)).laufId, a.id);
+  assert.equal(a2.text(a2.element("data-text-erzeugen-knopf")), "Erneut senden …");
+  a2.element("data-text-erzeugen-knopf").props.onClick();
+  a2.element("data-text-erzeugen-start").props.onClick();
+  await a2.lz.ruhe(40);
+  assert.equal(a2.s.gesendet[0].lauf_id, a.id);
+  assert.equal(a2.ausgang().props["data-text-erzeugen-ausgang"], "existiert");
+  assert.equal(JSON.parse(speicher.m.get(schluessel)).laufId, a.id, "409 mit unbekanntem Status: ID bleibt");
+  assert.equal(welt.aktivierungen.length, 6);
+
+  // (b) Endzustände: fehler (AMPLIFIER scheitert, der Lauf bricht ab), freigegeben, gepostet.
+  for (const fall of ["fehler", "freigegeben", "gepostet"]) {
+    zuruecksetzen();
+    welt.pipelineModul = pipeline;
+    exportMit(RITTERGUT);
+    medien();
+    agenten();
+    speicher.m.clear();
+    if (fall === "fehler") welt.agentAntworten.amplifier = [{ status: 502, body: { fehler: "Claude-API-Fehler: HTTP 529" } }];
+    const b = await verlorenerLauf();
+    if (fall === "fehler") assert.equal(b.zeile.status, "fehler", "echter Abbruch");
+    else b.zeile.status = fall;
+    assert.equal(JSON.parse(speicher.m.get(schluessel)).laufId, b.id);
+    const vorher = welt.aktivierungen.length;
+    const b2 = await medienPanelLaufzeit();
+    assert.equal(b2.element("data-text-erzeugen-laufend"), null, fall);
+    assert.ok(b2.text(b2.element("data-text-erzeugen-bekannt")).startsWith(`Caption #${b.zeile.id} (Status ${fall}) zu diesem Lauf`), fall);
+    assert.equal(speicher.m.has(schluessel), false, `${fall}: Eintrag weg`);
+    assert.equal(b2.text(b2.element("data-text-erzeugen-knopf")), "Text erzeugen …", fall);
+    // Ein Klick: Bestätigung mit neuer ID, ein POST, Ergebnis statt 409.
+    b2.element("data-text-erzeugen-knopf").props.onClick();
+    assert.match(b2.text(b2.element("data-text-erzeugen-bestaetigung")), / · Lauf-ID [0-9a-f]{8}… \(neu\)Ja, bezahlten Lauf starten/, fall);
+    b2.element("data-text-erzeugen-start").props.onClick();
+    await b2.lz.ruhe(40);
+    assert.equal(b2.s.gesendet.length, 1, `${fall}: ein POST`);
+    assert.notEqual(b2.s.gesendet[0].lauf_id, b.id, `${fall}: neue Lauf-ID`);
+    assert.equal(b2.ausgang().props["data-text-erzeugen-ausgang"], "ergebnis", `${fall}: kein 409`);
+    assert.equal(welt.aktivierungen.length, vorher + 6, `${fall}: genau ein neuer Lauf`);
+  }
 });
