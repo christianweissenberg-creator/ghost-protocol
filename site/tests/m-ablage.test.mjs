@@ -1565,22 +1565,29 @@ test("M-G2 Pixelgrenze (Nachbesserung sicherheit-2): Ein Bild über 40 Mio. Bild
   assert.match(p.body.fehler, /^Prüflauf nicht möglich: Bild über 40\.000\.000 Bildpunkten/);
 });
 
-test("M-G3 Beschädigtes Bild (Nachtrag d2-oberflaeche-4): Ein abgeschnittenes PNG mit gültigem Kopf und passenden Maßen → 422 „Bild nicht lesbar“ statt 500 „programmfehler“ — im Abgleich und im Prüflauf", async () => {
-  // Gültiger Kopf (Maße wie das Rezept), aber nur 60 % der Datei: metadata() liest den Kopf, das Dekodieren scheitert.
+test("M-G3 Beschädigtes Bild (Nachtrag d2-oberflaeche-4, Schlussprüfung d3-rauchtest-rest-3): Ein abgeschnittenes PNG → 422 „Bild nicht lesbar“ statt 500 „programmfehler“ — im Abgleich und im Prüflauf; mit lesbarem Kopf (scheitert beim Dekodieren) und mit abgeschnittenem Kopf (scheitert schon beim Lesen der Maße)", async () => {
   const ganz = await sharp(ANKER_BYTES).extract({ left: REZEPT.x, top: REZEPT.y, width: REZEPT.breite, height: REZEPT.hoehe }).png().toBuffer();
-  const abgeschnitten = ganz.subarray(0, Math.floor(ganz.length * 0.6));
-  const kopf = await sharp(abgeschnitten).metadata();
+  // (a) Gültiger Kopf (Maße wie das Rezept), aber nur 60 % der Datei: metadata() liest den Kopf, das Dekodieren scheitert.
+  const datenAbgeschnitten = ganz.subarray(0, Math.floor(ganz.length * 0.6));
+  const kopf = await sharp(datenAbgeschnitten).metadata();
   assert.deepEqual([kopf.width, kopf.height], [REZEPT.breite, REZEPT.hoehe], "der Kopf ist lesbar");
-  const g = await hochladen({ abgleich: { bytes: abgeschnitten, mime: "image/png" } });
-  const r = await post(abgleichRoute, "/abgleich", { eingang: g.abgleich, anker_id: "test-anker", ausschnitt: REZEPT });
-  assert.equal(r.status, 422, JSON.stringify(r.body));
-  assert.equal(r.body.fehler_art, "eingabe");
-  assert.match(r.body.fehler, /^Abgleich nicht möglich: Bild nicht lesbar \(beschädigt oder abgeschnitten\): /);
-  const dateien = { ...DATEIEN, startbild: { bytes: abgeschnitten, mime: "image/png" } };
-  const e = await hochladen(dateien);
-  const p = await pruefen(e, beleg({}, dateien));
-  assert.equal(p.status, 422, JSON.stringify(p.body));
-  assert.match(p.body.fehler, /^Prüflauf nicht möglich: Bild nicht lesbar \(beschädigt oder abgeschnitten\): /);
+  // (b) Nach 24 Bytes abgeschnitten: Die PNG-Signatur stimmt (kein 415), aber schon die Maße sind nicht lesbar.
+  const kopfAbgeschnitten = ganz.subarray(0, 24);
+  assert.deepEqual([...kopfAbgeschnitten.subarray(0, 8)], [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], "PNG-Signatur");
+  await assert.rejects(sharp(kopfAbgeschnitten).metadata(), "die Maße sind nicht lesbar");
+  for (const [fall, bytes] of [["Daten abgeschnitten", datenAbgeschnitten], ["Kopf abgeschnitten", kopfAbgeschnitten]]) {
+    const g = await hochladen({ abgleich: { bytes, mime: "image/png" } });
+    const r = await post(abgleichRoute, "/abgleich", { eingang: g.abgleich, anker_id: "test-anker", ausschnitt: REZEPT });
+    assert.equal(r.status, 422, `${fall}: ${JSON.stringify(r.body)}`);
+    assert.equal(r.body.fehler_art, "eingabe", fall);
+    assert.match(r.body.fehler, /^Abgleich nicht möglich: Bild nicht lesbar \(beschädigt oder abgeschnitten\): /, fall);
+    const dateien = { ...DATEIEN, startbild: { bytes, mime: "image/png" } };
+    const e = await hochladen(dateien);
+    const p = await pruefen(e, beleg({}, dateien));
+    assert.equal(p.status, 422, `${fall}: ${JSON.stringify(p.body)}`);
+    assert.equal(p.body.fehler_art, "eingabe", fall);
+    assert.match(p.body.fehler, /^Prüflauf nicht möglich: Bild nicht lesbar \(beschädigt oder abgeschnitten\): /, fall);
+  }
 });
 
 test("M-U3 upload-url räumt nicht auf, solange ein Job läuft (Mutant X40): alte Reste bleiben, aufgeraeumt ist null", async () => {

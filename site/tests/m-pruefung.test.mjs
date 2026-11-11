@@ -1270,58 +1270,150 @@ test("MP-22 Prüfansicht (Nachbesserung oberflaeche-4): Videofehler mit eigenem 
   assert.equal(radio(baum2(), "personen", 1).props.checked, true);
 });
 
-test("MP-30 Prüfbereich (Nachtrag d2-oberflaeche-2): Nach dem Speichern, Schließen und Öffnen bleibt „Prüfprotokoll speichern“ ohne Änderung gesperrt — kein zweites gleiches Protokoll; nach einer Änderung wieder frei", async () => {
-  video();
+/**
+ * Prüfbereich (Medien-Panel) als Wurzel mit Mitschnitt der Ansicht. Die Hook-Attrappe behält die Slots einer abgebauten
+ * Teil-Ansicht (Schlussprüfung d3-rauchtest-rest-1); „Schließen und Öffnen“ baut die Ansicht deshalb wirklich neu auf: in
+ * einer frischen Laufzeit, mit genau den Eigenschaften, die der Prüfbereich ihr nach dem Öffnen gibt (wie React nach dem
+ * Unmount). ansicht() rendert den Bereich und die frische Ansicht neu und gibt deren Baum.
+ */
+async function pruefBereichLaufzeit(holen) {
   const k = await kette();
   const lz = hookLaufzeit();
   const B = ladeStudioBausteine({ ...lz.attrappen, "@/lib/counsel-urteil": counsel, "@/lib/freigabe-regeln": regeln });
-  const gesendet = [];
-  const holen = async (url, init) => {
-    gesendet.push(JSON.parse(init.body));
-    const req = new NextRequest(`http://harness.local${url}`, { method: "POST", headers: { ...init.headers, "sec-fetch-site": "same-origin" }, body: init.body });
-    return pruefRoute.POST(req, { params: Promise.resolve({ objekt: SLUG, id: "3" }) });
-  };
-  const M = ladeMedienPanel({ ...lz.attrappen, "@/lib/counsel-urteil": counsel, "@/lib/freigabe-regeln": regeln }, { anker: ladeTsx("lib/studio/anker.ts", {}), types: ladeTsx("lib/types.ts", {}), hilfen: B.hilfen });
+  const aufrufe = [];
+  const pruef = { ...B.pruef, PruefAnsicht: (props) => (aufrufe.push(props), B.pruef.PruefAnsicht(props)) };
+  const M = ladeMedienPanel({ ...lz.attrappen, "@/lib/counsel-urteil": counsel, "@/lib/freigabe-regeln": regeln }, { anker: ladeTsx("lib/studio/anker.ts", {}), types: ladeTsx("lib/types.ts", {}), hilfen: B.hilfen, pruef });
   lz.setzeWurzel(M.PruefBereich, { k, slug: SLUG, anker: HOF, holen, neuLaden: () => {} });
-  const baum = () => lz.rendere();
-  const oeffne = (offen) => findeKnoten(baum(), (n) => n.type === "details").props.onToggle({ currentTarget: { open: offen } });
+  const bereich = () => lz.rendere();
+  const oeffne = (offen) => findeKnoten(bereich(), (n) => n.type === "details").props.onToggle({ currentTarget: { open: offen } });
+  let frisch = null;
+  /** Schließen und Öffnen: die Ansicht neu, in frischer Laufzeit. */
+  const neuAufbauen = () => {
+    oeffne(false);
+    assert.equal(findeKnoten(bereich(), (n) => n.props?.["data-pruefansicht"] !== undefined), null, "geschlossen: keine Ansicht");
+    oeffne(true);
+    bereich();
+    const lz2 = hookLaufzeit();
+    const B2 = ladeStudioBausteine({ ...lz2.attrappen, "@/lib/counsel-urteil": counsel, "@/lib/freigabe-regeln": regeln });
+    frisch = { lz: lz2, P: B2.pruef };
+  };
+  /** Baum der Ansicht: vor dem ersten Neuaufbau die im Bereich, danach die frische mit den jüngsten Eigenschaften. */
+  const ansicht = () => {
+    const b = bereich();
+    if (frisch === null) return b;
+    frisch.lz.setzeWurzel(frisch.P.PruefAnsicht, aufrufe.at(-1));
+    return frisch.lz.rendere();
+  };
   const waehle = (punkt, i) => {
-    const feld = findeKnoten(baum(), (n) => n.type === "fieldset" && n.props["data-pruefpunkt"] === punkt);
+    const feld = findeKnoten(ansicht(), (n) => n.type === "fieldset" && n.props["data-pruefpunkt"] === punkt);
     const radios = [];
     (function sammle(n) { if (Array.isArray(n)) n.forEach(sammle); else if (n && typeof n === "object") { if (n.type === "input" && n.props.type === "radio") radios.push(n); sammle(n.kinder); } })(feld);
     radios[i].props.onChange();
   };
-  const form = () => findeKnoten(baum(), (n) => n.type === "form");
-  const knopf = () => findeKnoten(baum(), (n) => n.type === "button" && n.props["data-protokoll-speichern"] !== undefined);
-  const hinweis = () => findeKnoten(baum(), (n) => n.props?.["data-erneut-speichern"] !== undefined);
-  oeffne(true);
-  for (const punkt of ["klausel-licht", "klausel-rahmen", "architektur", "personen", "wasser", "hinweis"]) waehle(punkt, 0);
-  findeKnoten(baum(), (n) => n.props?.["data-durchsicht"] !== undefined && n.type === "input").props.onChange({ currentTarget: { checked: true } });
-  findeKnoten(baum(), (n) => n.props?.["data-kuerzel"] !== undefined && n.type === "input").props.onChange({ currentTarget: { value: "TS" } });
-  form().props.onSubmit({ preventDefault() {} });
-  await lz.ruhe();
+  const knoten = (attr) => findeKnoten(ansicht(), (n) => n.props?.[attr] !== undefined);
+  const ruhe = async () => {
+    await lz.ruhe();
+    if (frisch) await frisch.lz.ruhe();
+  };
+  const ausfuellen = () => {
+    for (const punkt of ["klausel-licht", "klausel-rahmen", "architektur", "personen", "wasser", "hinweis"]) waehle(punkt, 0);
+    findeKnoten(ansicht(), (n) => n.props?.["data-durchsicht"] !== undefined && n.type === "input").props.onChange({ currentTarget: { checked: true } });
+    findeKnoten(ansicht(), (n) => n.props?.["data-kuerzel"] !== undefined && n.type === "input").props.onChange({ currentTarget: { value: "TS" } });
+  };
+  const absenden = () => findeKnoten(ansicht(), (n) => n.type === "form").props.onSubmit({ preventDefault() {} });
+  const knopf = () => findeKnoten(ansicht(), (n) => n.type === "button" && n.props["data-protokoll-speichern"] !== undefined);
+  const text = (k) => (Array.isArray(k) ? k.map(text).join("") : k && typeof k === "object" ? text(k.kinder) : k === null || k === undefined || typeof k === "boolean" ? "" : String(k));
+  return { lz, aufrufe, oeffne, neuAufbauen, ansicht, waehle, knoten, ruhe, ausfuellen, absenden, knopf, text };
+}
+
+test("MP-30 Prüfbereich (Nachtrag d2-oberflaeche-2, Schlussprüfung d3-rauchtest-rest-1): Nach dem Speichern, Schließen und Öffnen — die Ansicht wirklich neu aufgebaut — bleibt „Prüfprotokoll speichern“ ohne Änderung gesperrt; kein zweites gleiches Protokoll; nach einer Änderung wieder frei", async () => {
+  video();
+  const gesendet = [];
+  const holen = async (url, init) => {
+    gesendet.push(init.body);
+    const req = new NextRequest(`http://harness.local${url}`, { method: "POST", headers: { ...init.headers, "sec-fetch-site": "same-origin" }, body: init.body });
+    return pruefRoute.POST(req, { params: Promise.resolve({ objekt: SLUG, id: "3" }) });
+  };
+  const b = await pruefBereichLaufzeit(holen);
+  b.oeffne(true);
+  b.ausfuellen();
+  b.absenden();
+  await b.ruhe();
   assert.equal(gesendet.length, 1);
   assert.equal(protokolle().length, 1);
-  // Schließen und Öffnen baut die Ansicht neu auf: gesperrt, mit Hinweis, kein zweiter POST.
-  oeffne(false);
-  baum();
-  oeffne(true);
-  assert.equal(knopf().props["aria-disabled"], true, "nach Schließen und Öffnen gesperrt");
-  assert.ok(hinweis(), "Hinweis „Gespeichert. Ein weiteres Protokoll erst nach einer Änderung“");
-  form().props.onSubmit({ preventDefault() {} });
-  await lz.ruhe();
+  // Der Bereich hält die gespeicherte Anfrage (Mitschnitt): genau den gesendeten Körper.
+  b.ansicht();
+  assert.equal(b.aufrufe.at(-1).gehalten.gespeichertAls, gesendet[0]);
+  assert.equal(b.aufrufe.at(-1).gehalten.sendetAls, null, "nach dem Ausgang läuft nichts mehr");
+  // Schließen und Öffnen baut die Ansicht neu auf (frischer Zustand): gesperrt, mit Hinweis, kein zweiter POST.
+  b.neuAufbauen();
+  assert.equal(b.knopf().props["aria-disabled"], true, "nach Schließen und Öffnen gesperrt");
+  assert.ok(b.knoten("data-erneut-speichern"), "Hinweis „Gespeichert. Ein weiteres Protokoll erst nach einer Änderung“");
+  assert.equal(b.knoten("data-pruef-ergebnis"), null, "die neue Ansicht hat kein eigenes Ergebnis — die Sperre kommt aus dem Bereich");
+  b.absenden();
+  await b.ruhe();
   assert.equal(gesendet.length, 1, "kein zweites gleiches Protokoll");
   assert.equal(protokolle().length, 1);
   // Nach einer Änderung wieder frei; zurück zur gespeicherten Auswahl wieder gesperrt.
-  waehle("wasser", 1);
-  assert.equal(knopf().props["aria-disabled"], false);
-  waehle("wasser", 0);
-  assert.equal(knopf().props["aria-disabled"], true, "gleich der gespeicherten Anfrage");
-  waehle("wasser", 1);
-  form().props.onSubmit({ preventDefault() {} });
-  await lz.ruhe();
+  b.waehle("wasser", 1);
+  assert.equal(b.knopf().props["aria-disabled"], false);
+  b.waehle("wasser", 0);
+  assert.equal(b.knopf().props["aria-disabled"], true, "gleich der gespeicherten Anfrage");
+  b.waehle("wasser", 1);
+  b.absenden();
+  await b.ruhe();
   assert.equal(gesendet.length, 2);
   assert.equal(protokolle().length, 2);
+});
+
+test("MP-31 Prüfbereich während des Speicherns (Schlussprüfung d3-rauchtest-rest-2): Schließen und Öffnen, solange der POST am Tor wartet → die neue Ansicht zeigt „Wird gespeichert …“, der Knopf ist gesperrt, kein zweiter POST; nach der Antwort gesperrt als gespeichert; scheitert der POST, ist der Knopf danach wieder frei", async () => {
+  video();
+  for (const fall of ["ok", "netzfehler"]) {
+    welt.tabellen.studio_pruefung = [];
+    const gesendet = [];
+    let auf;
+    const tor = new Promise((r) => (auf = r));
+    const holen = async (url, init) => {
+      gesendet.push(init.body);
+      await tor;
+      if (fall === "netzfehler") throw new TypeError("Verbindung abgebrochen");
+      const req = new NextRequest(`http://harness.local${url}`, { method: "POST", headers: { ...init.headers, "sec-fetch-site": "same-origin" }, body: init.body });
+      return pruefRoute.POST(req, { params: Promise.resolve({ objekt: SLUG, id: "3" }) });
+    };
+    const b = await pruefBereichLaufzeit(holen);
+    try {
+      b.oeffne(true);
+      b.ausfuellen();
+      b.absenden();
+      await b.ruhe();
+      assert.equal(gesendet.length, 1, fall);
+      b.ansicht();
+      assert.equal(b.aufrufe.at(-1).gehalten.sendetAls, gesendet[0], `${fall}: der Bereich hält die laufende Anfrage`);
+      // Schließen und Öffnen, während die Antwort am Tor wartet.
+      b.neuAufbauen();
+      assert.equal(b.knopf().props["aria-disabled"], true, `${fall}: gesperrt, solange die Anfrage läuft`);
+      assert.equal(b.text(b.knoten("data-pruef-speichert")), "Wird gespeichert … (Server hasht die Datei nach)", fall);
+      assert.equal(b.knoten("data-pruef-felder").props.disabled, true, `${fall}: Felder gesperrt`);
+      b.absenden();
+      await b.ruhe();
+      assert.equal(gesendet.length, 1, `${fall}: kein zweiter POST`);
+    } finally {
+      auf();
+    }
+    await b.ruhe();
+    b.ansicht();
+    assert.equal(b.aufrufe.at(-1).gehalten.sendetAls, null, `${fall}: nach dem Ausgang geleert`);
+    assert.equal(b.knoten("data-pruef-speichert"), null, fall);
+    if (fall === "ok") {
+      assert.equal(protokolle().length, 1);
+      assert.equal(b.knopf().props["aria-disabled"], true, "gespeichert: gesperrt");
+      assert.ok(b.knoten("data-erneut-speichern"));
+    } else {
+      assert.equal(protokolle().length, 0);
+      assert.equal(b.knopf().props["aria-disabled"], false, "gescheitert: wieder frei");
+      assert.equal(b.knoten("data-erneut-speichern"), null);
+    }
+  }
 });
 
 test("MP-23 Prüfansicht (Nachbesserung oberflaeche-7): Felder während des Speicherns gesperrt; nach Erfolg kein zweites Protokoll ohne Änderung; jede Änderung (auch eine Klausel) gibt den Knopf frei; Enter in einem Eingabefeld sendet nicht ab", async () => {

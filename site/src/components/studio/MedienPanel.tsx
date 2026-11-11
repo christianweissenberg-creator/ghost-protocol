@@ -450,8 +450,17 @@ export function PruefBereich({ k, slug, anker, holen, neuLaden }: { k: MedienKet
   const [eingaben, setEingaben] = useState<PruefEingaben | null>(null);
   // Zuletzt gespeicherte Anfrage (Nachtrag d2-oberflaeche-2): hält die Sperre „kein zweites gleiches Protokoll“ über Schließen und Öffnen.
   const [gespeichertAls, setGespeichertAls] = useState<string | null>(null);
+  // Anfrage, deren POST gerade läuft (Schlussprüfung d3-rauchtest-rest-2): hält die Sperre auch während des Speicherns.
+  const [sendetAls, setSendetAls] = useState<string | null>(null);
   const leer = () => leereEingaben(k.original?.prompt_klauseln ?? []);
-  const gehalten = { wert: eingaben ?? leer(), setze: (f: (e: PruefEingaben) => PruefEingaben) => setEingaben((alt) => f(alt ?? leer())), gespeichertAls, merkeGespeichert: setGespeichertAls };
+  const gehalten = {
+    wert: eingaben ?? leer(),
+    setze: (f: (e: PruefEingaben) => PruefEingaben) => setEingaben((alt) => f(alt ?? leer())),
+    gespeichertAls,
+    merkeGespeichert: setGespeichertAls,
+    sendetAls,
+    merkeSendet: (anfrage: string, an: boolean) => setSendetAls((jetzt) => (an ? anfrage : jetzt === anfrage ? null : jetzt)),
+  };
   return (
     <details className="mt-3" onToggle={(e) => setOffen(e.currentTarget.open)} data-pruefbereich={k.export.id}>
       <summary className="cursor-pointer text-[12px]" style={{ color: "var(--gp-ink)" }}>
