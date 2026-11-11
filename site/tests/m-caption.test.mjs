@@ -1530,3 +1530,32 @@ test("M-C24 „Text erzeugen“, Positivliste im Verhalten (Delta-Prüfung f2-en
     assert.equal(welt.aktivierungen.length, vorher + 6, `${fall}: genau ein neuer Lauf`);
   }
 });
+
+test("M-C25 „Text erzeugen“ nach 409, ohne geladene Caption (Delta-Prüfung f2-endzustand-1): Ist die Asset-Lesung des Studios gestört, nennt die Karte die Zeile laut 409 als nicht fertig, behält die Lauf-ID und bietet „Lauf-ID verwerfen …“", async (t) => {
+  const speicher = stelleSessionStorage(t);
+  const schluessel = `gp-text-erzeugen:${SLUG}:${EXPORT_ID}`;
+  exportMit(RITTERGUT);
+  medien();
+  agenten();
+  const { id, zeile: zeileDesLaufs } = await verlorenerLauf();
+  zeileDesLaufs.status = "counsel_geprueft";
+  // Neuladen mit gestörter Asset-Lesung (nur die Abfrage nach dem Objekt, nicht die Lauf-ID-Prüfung der Pipeline).
+  welt.stoerung = (a) => (a.art === "supabase" && a.tabelle === "content" && a.methode === "GET" && a.params.has("metadata->>objekt_slug") ? { status: 500, body: { message: "Lesen fehlgeschlagen (Test)" } } : null);
+  let zwei;
+  try {
+    zwei = await medienPanelLaufzeit();
+  } finally {
+    welt.stoerung = null;
+  }
+  assert.equal(zwei.element("data-text-erzeugen-laufend"), null, "ohne Assets keine Zeile aus der Lesung");
+  assert.equal(zwei.text(zwei.element("data-text-erzeugen-knopf")), "Erneut senden …");
+  zwei.element("data-text-erzeugen-knopf").props.onClick();
+  zwei.element("data-text-erzeugen-start").props.onClick();
+  await zwei.lz.ruhe(40);
+  assert.equal(zwei.ausgang().props["data-text-erzeugen-ausgang"], "existiert");
+  assert.equal(zwei.text(zwei.element("data-text-erzeugen-laufend")), `Caption #${zeileDesLaufs.id} (Status counsel_geprueft) gehört zu diesem Lauf und ist noch nicht fertig.`, "Zeile laut 409");
+  assert.equal(JSON.parse(speicher.m.get(schluessel)).laufId, id);
+  assert.equal(zwei.text(zwei.element("data-text-erzeugen-knopf")), "Erneut senden …");
+  assert.equal(zwei.text(zwei.element("data-text-erzeugen-verwerfen")), "Lauf-ID verwerfen …");
+  assert.equal(welt.aktivierungen.length, 6);
+});
