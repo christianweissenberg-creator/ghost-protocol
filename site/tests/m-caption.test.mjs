@@ -9,6 +9,10 @@
 //   body ist dieser Text, und R2 (geprueftenTextAusSchritten) gibt ihn frei.
 // - Keine Verdopplung, wenn PUBLISHER die Zeile schon schreibt; ein abweichender Wortlaut zählt nicht.
 // - Ohne medium_id bleibt alles wie bisher: keine Abfrage auf studio_medium, keine Pflichtzeile, metadata ohne medium_id.
+// - Abnahmelauf 12.11.2026 abends: PRÜFPUNKT PFLICHTZEILE in beiden COUNSEL-Aufträgen eines Caption-Laufs, mit und ohne
+//   greifende Datierungs-Ausnahme (M-C30). Die Differenz zum selben Lauf ohne medium_id ist genau dieser Absatz (M-C31). Ein
+//   Zitat, ganz oder Satz für Satz, ist harmlos (M-C32). Dazu die Auftragskennung (M-C33). Gegenprüfung PR #20: Der Absatz
+//   sagt, was zur Caption gehört.
 // Die Umgebungswerte unten sind Testwerte dieses Prozesses, keine echten Schlüssel; Medien-Zeilen und Hashes sind Testwerte.
 // Z_ROUTE_PIPELINE=<pfad> und Z_LIB_<NAME>=<pfad> prüfen Kopien statt der Repo-Dateien (Mutationstests).
 import { test, beforeEach } from "node:test";
@@ -1762,4 +1766,269 @@ test("M-C29 Feste Lage der Fragen und Sichtbarkeit von „Lauf-ID verwerfen …�
     await zwei.lz.ruhe(40);
   }
   assert.equal(zwei.ausgang().props["data-text-erzeugen-ausgang"], "existiert");
+});
+
+// ═══ Abnahmelauf 12.11.2026 abends: PRÜFPUNKT PFLICHTZEILE in beiden COUNSEL-Aufträgen ═══
+
+/** Lage der Pflichtzeile je Kanal, wie in captionAnweisungen und publisherPflichtzeile; nach den Hashtags auch ohne Hashtags erfüllbar. */
+const LAGE_ENDE = "als eigene, letzte Zeile der Caption, nach den Hashtags, falls es welche gibt";
+const LAGE_X = "als eigene Zeile im Post mit dem Video (bei einem Thread im ersten Post), dort als letzte Zeile";
+/** Was „Caption“ ist (Gegenprüfung PR #20): im Entwurf der Text selbst, in der Endfassung der Abschnitt mit dem finalen Content; bei X der Post mit dem Video. */
+const CAPTION_ENDE = "Mit „Caption“ ist im Entwurf der Caption-Text selbst gemeint, in der Endfassung der Text im Abschnitt mit dem finalen Content.";
+const CAPTION_X = "Mit „Caption“ ist der Post mit dem Video gemeint: im Entwurf dieser Post selbst, in der Endfassung derselbe Post im Abschnitt mit dem finalen Content.";
+/** Absatz PRÜFPUNKT PFLICHTZEILE (Schnappschuss), für X (x true) oder die anderen Kanäle. */
+const pflichtPruefpunkt = (x) =>
+  "\n\nPRÜFPUNKT PFLICHTZEILE (Auftrag, zusätzlich zum Regelpaket): Die Caption gehört zu einem fertigen, KI-generierten " +
+  `Video. Ihre KI-Kennzeichnung ist eine Pflichtzeile mit dem Wortlaut „${PFLICHTZEILE}“. Diese Zeile wird mit der Caption ` +
+  `veröffentlicht und ist sichtbarer Text des Posts, keine Notiz. Ihre Lage ist festgelegt: ${x ? LAGE_X : LAGE_ENDE}. ` +
+  `${x ? CAPTION_X : CAPTION_ENDE} Notizen, Status- und Prüfvermerke, die Qualitätsprüfung, die Posting-Empfehlung und die ` +
+  "Cross-Promotion gehören nicht zur Caption und zählen für die Lage nicht mit. Eine Pflichtzeile, die nur dort steht, ersetzt " +
+  "die in der Caption nicht. Ob diese Teile selbst eine KI-Kennzeichnung brauchen, richtet sich nach dem Regelpaket. Zu prüfen " +
+  "ist, ob die Pflichtzeile in der Caption vorhanden ist, wörtlich, als eigene Zeile und an dieser Lage; fehlt sie oder weicht " +
+  "sie davon ab, ist das ein Befund.";
+const PRUEFPUNKT_MARKE = "PRÜFPUNKT PFLICHTZEILE";
+/** Ende des Kopfs beider COUNSEL-Aufträge; ohne Datierungs-Prüfpunkt folgt der Absatz direkt darauf. */
+const KOPF_ENDE = "(Form: LETZTE ZEILE am Ende dieses Auftrags).";
+/** Ende des Datierungs-Prüfpunkts (RitterGut mit greifender Ausnahme). */
+const DATIERUNG_ENDE = "„1335 urkundlich erstmals erwähnt“.";
+/** Sätze des Absatzes: getrennt an „. “ vor einem Großbuchstaben oder „„“. */
+const saetze = (absatz) => absatz.trim().split(/(?<=\.)\s+(?=[A-ZÄÖÜ„])/u);
+/**
+ * Nachprüfung PR #20: Zitatfest muss auch jeder Satzteil sein. Das sind die Sätze, geteilt an Komma, Semikolon, Doppelpunkt,
+ * Klammer und „und“/„oder“, dazu jeder Begriff in Anführungszeichen. Jeder Teil wird ohne und mit den Präfixen „- “, „> “,
+ * „**“ und „1. “ geprüft, wie ihn ein Review als eigene Zeile zitieren könnte.
+ */
+const satzteile = (absatz) => {
+  const teile = new Set();
+  for (const satz of saetze(absatz)) {
+    teile.add(satz);
+    for (const teil of satz.split(/[,;:()]|\s(?:und|oder)\s/u)) if (teil.trim()) teile.add(teil.trim());
+    for (const zitat of satz.match(/„[^“]*“[.,;:]?/gu) ?? []) teile.add(zitat);
+  }
+  return [...teile].flatMap((teil) => ["", "- ", "> ", "**", "1. "].map((praefix) => `${praefix}${teil}`));
+};
+/**
+ * Beginnt ein Satz so, dass die Pipeline ihn als Abschnitt oder Post lesen könnte? Der Zeilenanfang wird behandelt wie
+ * abschnittsKopf in lib/freigabe-regeln.ts (Zeichen vor dem ersten Buchstaben weg, klein) und gegen KOPF_FINAL und
+ * KOPF_DANACH geprüft; dazu „#“ am Anfang und Postmarken „1/…“ wie postNummer.
+ */
+const liestSichAlsAbschnitt = (satz) =>
+  /^#/.test(satz) ||
+  /^[^\p{L}\p{N}]*?(?:(?:post|tweet|thread|teil)\s*)?\(?\s*\d+\s*\//iu.test(satz) ||
+  /^(?:finaler content\b|(?:empfohlene[rs]?\s+)?(?:publishing-zeitpunkt|scheduling|cross-promotion|qualitätsprüfung|metadaten))/.test(
+    satz.trim().replace(/^(?:[^\p{L}\p{N}]+|\d+[.)]\s+)+/u, "").toLowerCase(),
+  );
+/** Kanal-Wahl von „Text erzeugen“ (CAPTION_KANAELE in der Route). */
+const CAPTION_WAHL = [["instagram", "reel"], ["tiktok", "tiktok_short"], ["youtube", "short"], ["x", "thread"], ["linkedin", "linkedin_post"]];
+/** Jede Kombination aus Plattform und Format, wie GET sie meldet. */
+const KOMBINATIONEN = Object.entries((await (await pipeline.GET()).json()).formats).flatMap(([p, formate]) => formate.map((f) => [p, f]));
+const OHNE_OBJEKT = { topic: "KI-Agenten erklärt", category: "ki_automation" };
+const EXPORT_1750 = { ...RITTERGUT, baujahr: 1750 };
+
+test("M-C30 PRÜFPUNKT PFLICHTZEILE (Abnahmelauf 12.11.2026 abends, Gegenprüfung PR #20): Bei einer Caption tragen beide COUNSEL-Aufträge den Absatz genau einmal vor dem geprüften Text, direkt hinter dem Datierungs-Prüfpunkt oder, ohne greifende Ausnahme, direkt hinter dem Kopf — Wortlaut, sichtbarer Text des Posts, Lage je Kanal, was zur Caption gehört; kein Satz und kein Satzteil liest sich als Abschnitt oder Post (Nachprüfung PR #20); ohne medium_id bei keiner Kombination, mit und ohne Objekt; in keinem anderen Auftrag", async () => {
+  // Zitat-fest: eine Zeile, Wortlaut einmal und nur in Anführungszeichen, kein Urteilswort, keine Adresse, kein Satz mit
+  // Abschnittswort, „#“ oder Postmarke am Anfang („Finaler Content“ nur mitten im Satz)
+  for (const x of [false, true]) {
+    const absatz = pflichtPruefpunkt(x).slice(2);
+    assert.ok(!absatz.includes("\n") && !/urteil/i.test(absatz) && !/https?:|steinadel\.de/i.test(absatz), `x=${x}`);
+    assert.ok(absatz.includes(`„${PFLICHTZEILE}“`) && absatz.split(PFLICHTZEILE).length === 2, `x=${x}: Wortlaut einmal, in Anführungszeichen`);
+    const s = saetze(absatz);
+    assert.equal(s.length, 9, `x=${x}: neun Sätze`);
+    for (const satz of s) assert.ok(!liestSichAlsAbschnitt(satz) && !satz.startsWith(PFLICHTZEILE), `x=${x}: ${satz.slice(0, 50)}`);
+    // Nachprüfung PR #20: auch kein Satzteil, kein Aufzählungsglied und kein Begriff in Anführungszeichen, mit und ohne Präfix
+    const teile = satzteile(absatz);
+    assert.ok(teile.length > 150, `x=${x}: ${teile.length} Teile geprüft`);
+    for (const teil of teile) assert.ok(!liestSichAlsAbschnitt(teil), `x=${x}: Teil liest sich als Abschnitt: ${teil.slice(0, 60)}`);
+    assert.ok(absatz.includes("Abschnitt mit dem finalen Content") && !absatz.includes("Finaler Content"), `x=${x}: kein Abschnittsname`);
+    assert.ok(absatz.includes("die Qualitätsprüfung, die Posting-Empfehlung und die Cross-Promotion gehören nicht zur Caption und zählen für die Lage nicht mit."), `x=${x}`);
+    assert.ok(absatz.includes("Eine Pflichtzeile, die nur dort steht, ersetzt die in der Caption nicht."), `x=${x}: keine Freistellung`);
+    assert.ok(absatz.includes("Ob diese Teile selbst eine KI-Kennzeichnung brauchen, richtet sich nach dem Regelpaket."), `x=${x}: neutral`);
+  }
+  for (const [platform, format] of CAPTION_WAHL) {
+    for (const [fall, objekt, vorAbsatz] of [["RitterGut", RITTERGUT, DATIERUNG_ENDE], ["Exportwert 1750", EXPORT_1750, KOPF_ENDE]]) {
+      zuruecksetzen();
+      welt.pipelineModul = pipeline;
+      exportMit(objekt);
+      medien();
+      agenten();
+      const r = await pipePost({ ...LAUF, platform, format, medium_id: EXPORT_ID });
+      const name = `${fall} ${platform}`;
+      assert.equal(r.body.status, "complete", `${name}: ${JSON.stringify(r.body.fehler ?? null)}`);
+      const x = platform === "x";
+      const absatz = pflichtPruefpunkt(x);
+      const vor = auftrag("counsel", 0);
+      const end = auftrag("counsel", 1);
+      assert.ok(vor.includes(`${vorAbsatz}${absatz}\n\nCONTENT:\n`), `${name}: Vorprüfung`);
+      assert.ok(end.startsWith("ENDPRUEFUNG (R2)") && end.includes(`${vorAbsatz}${absatz}\n\nENDFASSUNG (PUBLISHER):\n`), `${name}: Endprüfung`);
+      for (const t of [vor, end]) {
+        assert.equal(t.split(PRUEFPUNKT_MARKE).length, 2, `${name}: genau einmal`);
+        assert.equal(t.includes("PRÜFPUNKT DATIERUNG"), objekt === RITTERGUT, `${name}: Datierungs-Prüfpunkt nur bei greifender Ausnahme`);
+        for (const fremd of x ? [LAGE_ENDE, CAPTION_ENDE] : [LAGE_X, CAPTION_X]) assert.ok(!t.includes(fremd), `${name}: nichts von einem anderen Kanal`);
+      }
+      for (const a of welt.aktivierungen.filter((y) => y.agent !== "counsel")) {
+        assert.ok(!a.task.includes(PRUEFPUNKT_MARKE) && !a.task.includes("keine Notiz"), `${name}: ${a.agent} ohne den Absatz`);
+      }
+    }
+  }
+  // Ohne medium_id: bei keiner Kombination, mit Objekt (Datierungs-Prüfpunkt da) und ohne Objekt
+  let ohne = 0;
+  for (const [platform, format] of KOMBINATIONEN) {
+    for (const [fall, vorbereiten, body] of [
+      ["RitterGut", () => exportMit(RITTERGUT), { ...LAUF, platform, format }],
+      ["ohne Objekt", () => {}, { ...OHNE_OBJEKT, platform, format }],
+    ]) {
+      zuruecksetzen();
+      welt.pipelineModul = pipeline;
+      vorbereiten();
+      medien();
+      agenten();
+      const r = await pipePost(body);
+      const name = `${fall} ${platform}|${format}`;
+      assert.equal(r.body.status, "complete", `${name}: ${JSON.stringify(r.body.fehler ?? null)}`);
+      assert.equal(welt.aktivierungen.length, 6, name);
+      for (const a of welt.aktivierungen) assert.ok(!a.task.includes(PRUEFPUNKT_MARKE) && !a.task.includes("keine Notiz"), `${name}: ${a.agent}`);
+      ohne += 1;
+    }
+  }
+  assert.equal(ohne, 22);
+});
+
+test("M-C31 Differenz im Lauf: Ein Caption-Lauf und derselbe Lauf ohne medium_id unterscheiden sich in beiden COUNSEL-Aufträgen genau um den Absatz (gleicher SCRIBE- und PUBLISHER-Text, Pflichtzeile schon da), mit und ohne greifende Datierungs-Ausnahme", async () => {
+  const publisher = (task) => `Finaler Content:\n1/2 Das Video zeigt den Hof.\n${PFLICHTZEILE}\n2/2 Mehr: ${linkAusAuftrag(task)}\n#Denkmal\n${PFLICHTZEILE}`;
+  const counselAuftraege = async (objekt, body) => {
+    zuruecksetzen();
+    welt.pipelineModul = pipeline;
+    exportMit(objekt);
+    medien();
+    agenten({ publisher });
+    const r = await pipePost(body);
+    assert.equal(r.body.status, "complete", JSON.stringify(r.body.fehler ?? null));
+    return [auftrag("counsel", 0), auftrag("counsel", 1)];
+  };
+  for (const objekt of [RITTERGUT, EXPORT_1750]) {
+    for (const [platform, format] of CAPTION_WAHL) {
+      const [vorOhne, endOhne] = await counselAuftraege(objekt, { ...LAUF, platform, format });
+      const [vorMit, endMit] = await counselAuftraege(objekt, { ...LAUF, platform, format, medium_id: EXPORT_ID });
+      const absatz = pflichtPruefpunkt(platform === "x");
+      const name = `${objekt.baujahr} ${platform}`;
+      assert.equal(vorMit, vorOhne.replace("\n\nCONTENT:\n", `${absatz}\n\nCONTENT:\n`), `${name}: Vorprüfung`);
+      assert.equal(endMit, endOhne.replace("\n\nENDFASSUNG (PUBLISHER):\n", `${absatz}\n\nENDFASSUNG (PUBLISHER):\n`), `${name}: Endprüfung`);
+      assert.equal(vorMit.length - vorOhne.length, absatz.length, name);
+      assert.equal(endMit.length - endOhne.length, absatz.length, name);
+    }
+  }
+});
+
+test("M-C32 Zitat des Absatzes ist harmlos (das Review der Vorprüfung geht an PUBLISHER): COUNSEL zitiert ihn ganz, Satz für Satz und Satzteil für Satzteil (auch mit „- “, „> “, „**“, „1. “), je eine Zeile; PUBLISHER übernimmt das Review in seine Qualitätsprüfung vor dem finalen Content, dahinter Postmarken und eine Scheduling-Überschrift — die Pipeline erkennt den finalen Content weiter an seiner Überschrift (kein Zitat gilt als Abschnitt), setzt eine fehlende Pflichtzeile dort ein (bei X in Post 1), eine vorhandene bleibt einmal; die Zitate bleiben unverändert und gelten nicht als nahe Variante", async () => {
+  // Der ganze Absatz bis vor den geprüften Text, auch über Zeilenumbrüche (so fällt ein Wortlaut in eigener Zeile auf)
+  const absatzAus = (task) => /\n\n(PRÜFPUNKT PFLICHTZEILE[\s\S]*?)\n\n(?:CONTENT|ENDFASSUNG \(PUBLISHER\)):\n/.exec(task)?.[1];
+  const MARKEN = "1/2: 28 Zeichen ✓\n2/2: 30 Zeichen ✓";
+  for (const [platform, format, mitZeile] of [["instagram", "reel", false], ["instagram", "reel", true], ["x", "thread", false], ["x", "thread", true]]) {
+    zuruecksetzen();
+    welt.pipelineModul = pipeline;
+    exportMit(RITTERGUT);
+    medien();
+    agenten({
+      publisher: (task) => {
+        const review = /COUNSEL-REVIEW:\n([\s\S]*?)\n\nAUFGABEN:/.exec(task)?.[1];
+        const link = linkAusAuftrag(task);
+        const caption = platform === "x"
+          ? `1/2 Das Video zeigt den Hof.${mitZeile ? `\n${PFLICHTZEILE}` : ""}\n2/2 Mehr: ${link}`
+          : `Das Video zeigt den Hof bei Nacht. Mehr: ${link}\n#Denkmal #Rittergut${mitZeile ? `\n${PFLICHTZEILE}` : ""}`;
+        // Hinter den Zitaten stehen Postmarken und eine Überschrift aus KOPF_DANACH („Scheduling“). Läse die Pipeline ein Zitat
+        // als Überschrift „Finaler Content“, begänne der Abschnitt dort: Bei X stünde Post 1 in den Postmarken, sonst endete der
+        // Abschnitt vor „Scheduling“ — eine fehlende Pflichtzeile landete in beiden Fällen in der Qualitätsprüfung.
+        return (
+          `## 1. Qualitätsprüfung\nAus dem Review:\n${review}\n${MARKEN}\n\n## 2. Scheduling-Empfehlung\nDienstag, 18:00\n\n` +
+          `## 3. Finaler Content\n${caption}\n\n## 4. Publishing-Zeitpunkt\nDienstag, 18:00 (Empfehlung)`
+        );
+      },
+    });
+    welt.agentAntworten.counsel = (task) => {
+      if (task.startsWith("ENDPRUEFUNG (R2)")) return agentOk("counsel", FREIGABE_END);
+      const absatz = absatzAus(task) ?? "";
+      return agentOk("counsel", `Geprüft: ${absatz} ✓\n${saetze(absatz).join("\n")}\n${satzteile(absatz).join("\n")}\nURTEIL: FREIGABE-EMPFEHLUNG`);
+    };
+    const r = await pipePost({ ...LAUF, platform, format, medium_id: EXPORT_ID });
+    const fall = `${platform} ${mitZeile ? "mit" : "ohne"} Pflichtzeile`;
+    assert.equal(r.body.status, "complete", `${fall}: ${JSON.stringify(r.body.fehler ?? null)}`);
+    assert.equal(welt.aktivierungen.length, 6, fall);
+    const z = zeile(r.body.contentId);
+    const absatz = absatzAus(auftrag("counsel", 0));
+    assert.ok(absatz?.startsWith(`${PRUEFPUNKT_MARKE} (Auftrag`), `${fall}: COUNSEL zitiert den Absatz`);
+    const zitate = [`Geprüft: ${absatz} ✓`, ...saetze(absatz), ...satzteile(absatz)];
+    assert.ok(zitate.length > 150, `${fall}: ${zitate.length} Zitatzeilen`);
+    for (const zitat of zitate) {
+      assert.ok(z.body.includes(`\n${zitat}\n`), `${fall}: Zitat unverändert im Freigabetext: ${zitat.slice(0, 50)}`);
+    }
+    assert.ok(z.body.includes(`\n${MARKEN}\n\n## 2. Scheduling-Empfehlung\nDienstag, 18:00\n\n## 3. Finaler Content\n`), `${fall}: in der Qualitätsprüfung nichts eingesetzt`);
+    assert.equal(pflichtzeilen(z.body), 1, `${fall}: Pflichtzeile genau einmal als eigene Zeile`);
+    const final = z.body.slice(z.body.indexOf("## 3. Finaler Content"), z.body.indexOf("## 4. Publishing-Zeitpunkt"));
+    assert.equal(pflichtzeilen(final), 1, `${fall}: im finalen Content`);
+    if (platform === "x") assert.ok(final.includes(`${PFLICHTZEILE}\n2/2 Mehr: `), `${fall}: letzte Zeile von Post 1`);
+    else assert.ok(final.trimEnd().endsWith(`#Denkmal #Rittergut\n${mitZeile ? "" : "\n"}${PFLICHTZEILE}`), `${fall}: letzte Zeile nach den Hashtags`);
+    assert.deepEqual(
+      [z.metadata.pflichtzeile.von_pipeline_ergaenzt, z.metadata.pflichtzeile.ersetzt],
+      [!mitZeile, null],
+      `${fall}: ergänzt nur ohne Zeile, nichts ersetzt`,
+    );
+  }
+});
+
+test("M-C33 Auftragskennung bei Caption: metadata.pruefauftrag deckt den Absatz mit ab — nachgerechnet aus den gesendeten COUNSEL-Aufträgen, verschieden ohne medium_id, zwischen den Lagen und ohne greifende Datierungs-Ausnahme; der Umfang nennt den Prüfpunkt; ohne medium_id wie bisher", async () => {
+  const { createHash } = await import("node:crypto");
+  /** Kennung aus den gesendeten Aufträgen: [Kopf vor, Kopf end, Datierungs-Prüfpunkt, Schluss] und, wenn da, der Absatz. */
+  const nachgerechnet = () => {
+    const vor = auftrag("counsel", 0);
+    const end = auftrag("counsel", 1);
+    const kopf = (t, marke) => t.slice(0, t.indexOf(marke));
+    const vorKopf = kopf(vor, "\n\nCONTENT:\n");
+    const endKopf = kopf(end, "\n\nENDFASSUNG (PUBLISHER):\n");
+    const ab = (t, marke) => (t.indexOf(marke) < 0 ? t.length : t.indexOf(marke));
+    const pflicht = vorKopf.slice(ab(vorKopf, `\n\n${PRUEFPUNKT_MARKE}`));
+    assert.ok(endKopf.endsWith(pflicht), "beide Aufträge tragen denselben Absatz");
+    const vorOhne = vorKopf.slice(0, vorKopf.length - pflicht.length);
+    const endOhne = endKopf.slice(0, endKopf.length - pflicht.length);
+    const datierung = vorOhne.slice(ab(vorOhne, "\n\nPRÜFPUNKT DATIERUNG"));
+    const schluss = vor.slice(vor.lastIndexOf("\n\nLETZTE ZEILE:") + 2);
+    assert.ok(end.endsWith(`\n\n${schluss}`));
+    const teile = [vorOhne.slice(0, vorOhne.length - datierung.length), endOhne.slice(0, endOhne.length - datierung.length), datierung, schluss, ...(pflicht ? [pflicht] : [])];
+    return createHash("sha256").update(JSON.stringify(teile), "utf8").digest("hex").slice(0, 16);
+  };
+  const lauf = async (body, objekt = RITTERGUT) => {
+    zuruecksetzen();
+    welt.pipelineModul = pipeline;
+    exportMit(objekt);
+    medien();
+    agenten();
+    const r = await pipePost(body);
+    assert.equal(r.body.status, "complete", JSON.stringify(r.body.fehler ?? null));
+    return { p: zeile(r.body.contentId).metadata.pruefauftrag, nach: nachgerechnet() };
+  };
+  const REEL = { ...LAUF, platform: "instagram", format: "reel" };
+  const reel = await lauf({ ...REEL, medium_id: EXPORT_ID });
+  const x = await lauf({ ...LAUF, medium_id: EXPORT_ID });
+  const ohne = await lauf(REEL);
+  const reel1750 = await lauf({ ...REEL, medium_id: EXPORT_ID }, EXPORT_1750);
+  const ohne1750 = await lauf(REEL, EXPORT_1750);
+  const MIT_PFLICHT = /^SHA-256, erste 16 Hex-Zeichen, über Kopf von Vor- und Endprüfung, PRÜFPUNKT DATIERUNG, Urteilsform \(LETZTE ZEILE\) und PRÜFPUNKT PFLICHTZEILE; nicht darin: /;
+  const WIE_BISHER = /^SHA-256, erste 16 Hex-Zeichen, über Kopf von Vor- und Endprüfung, PRÜFPUNKT DATIERUNG und Urteilsform \(LETZTE ZEILE\); nicht darin: /;
+  for (const [fall, { p, nach }, datierung, umfang] of [
+    ["Reel", reel, true, MIT_PFLICHT],
+    ["X", x, true, MIT_PFLICHT],
+    ["ohne medium_id", ohne, true, WIE_BISHER],
+    ["Reel, Exportwert 1750", reel1750, false, MIT_PFLICHT],
+    ["ohne medium_id, Exportwert 1750", ohne1750, false, WIE_BISHER],
+  ]) {
+    assert.match(p.kennung, /^[0-9a-f]{16}$/, fall);
+    assert.equal(p.kennung, nach, `${fall}: die Kennung gehört zu genau den gesendeten Anweisungen`);
+    assert.equal(p.datierung_pruefpunkt, datierung, fall);
+    assert.match(p.umfang, umfang, fall);
+    assert.equal(p.umfang.includes(PRUEFPUNKT_MARKE), umfang === MIT_PFLICHT, fall);
+    assert.deepEqual(Object.keys(p).sort(), ["datierung_pruefpunkt", "kennung", "umfang"], `${fall}: keine neuen Felder`);
+  }
+  assert.notEqual(reel.p.kennung, ohne.p.kennung, "mit und ohne Absatz unterscheidbar");
+  assert.notEqual(reel1750.p.kennung, ohne1750.p.kennung, "auch ohne greifende Datierungs-Ausnahme");
+  assert.notEqual(reel.p.kennung, x.p.kennung, "die Lage gehört zur Anweisung");
+  assert.notEqual(reel.p.kennung, reel1750.p.kennung, "der Datierungs-Prüfpunkt gehört zur Anweisung");
 });
