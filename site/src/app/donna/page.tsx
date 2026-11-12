@@ -16,7 +16,7 @@
 // "Schritte nicht gespeichert" statt "0 Schritte"; eine gespeicherte Summe 0 ohne Läufe heißt
 // "Kosten nicht gemessen", nie "geschätzt 0,0000 USD".
 
-import { useEffect, useState } from "react";
+import { useState, useSyncExternalStore } from "react";
 import Link from "next/link";
 import {
   MAX_PLAN_SCHRITTE,
@@ -169,6 +169,73 @@ function speichere(schluessel: string, wert: unknown): boolean {
     // Persistenz ist Komfort, kein Muss; der Aufrufer entscheidet, ob er das zeigt.
     return false;
   }
+}
+
+/** Rohtexte beider Schlüssel. gesperrt: Schon der Zugriff scheitert (Website-Daten blockiert),
+ *  gelesen ist dann nichts. */
+interface SpeicherLesung {
+  gesperrt: string | null;
+  auftrag: string | null;
+  historie: string | null;
+}
+
+// Gelesen wird über useSyncExternalStore (Lint-Regel set-state-in-effect, 10.11.2026). React
+// vergleicht Lesungen per Object.is: Gleicher Inhalt muss dasselbe Objekt ergeben, sonst
+// rendert es endlos neu.
+let letzteLesung: SpeicherLesung | null = null;
+
+function liesSpeicher(): SpeicherLesung {
+  let neu: SpeicherLesung;
+  try {
+    neu = {
+      gesperrt: null,
+      auftrag: localStorage.getItem(SPEICHER_AKTUELL),
+      historie: localStorage.getItem(SPEICHER_HISTORIE),
+    };
+  } catch (e) {
+    neu = { gesperrt: e instanceof Error && e.message ? e.message : "kein Zugriff", auftrag: null, historie: null };
+  }
+  const alt = letzteLesung;
+  if (alt && alt.gesperrt === neu.gesperrt && alt.auftrag === neu.auftrag && alt.historie === neu.historie) return alt;
+  letzteLesung = neu;
+  return neu;
+}
+
+/** Auf dem Server und beim Hydrieren gibt es keinen Browser-Speicher: keine Lesung, Leerzustand. */
+function keineLesung(): SpeicherLesung | null {
+  return null;
+}
+
+/** Kein Abo: Was andere Tabs schreiben, übernimmt die Seite wie bisher erst beim nächsten Laden. */
+function keinAbo(): () => void {
+  return () => {};
+}
+
+/** Stand aus Auftrag und Historie, je Schlüssel für sich: Ein kaputter Auftrag lässt die
+ *  Historie nicht ungelesen. */
+function werteLesungAus(rohAuftrag: string | null, rohHistorie: string | null) {
+  const stand: {
+    plan: PlanAntwort | null;
+    ausfuehrung: Ausfuehrung | null;
+    auftragFehler: string | null;
+    historie: HistorienEintrag[];
+    historieFehler: string | null;
+  } = { plan: null, ausfuehrung: null, auftragFehler: null, historie: [], historieFehler: null };
+  try {
+    const aktuell: unknown = rohAuftrag ? JSON.parse(rohAuftrag) : null;
+    if (istObjekt(aktuell)) {
+      if (istPlanAntwort(aktuell.plan)) stand.plan = aktuell.plan;
+      if (istAusfuehrung(aktuell.ausfuehrung)) stand.ausfuehrung = aktuell.ausfuehrung;
+    }
+  } catch (e) {
+    stand.auftragFehler = e instanceof Error && e.message ? e.message : "unlesbar";
+  }
+  try {
+    stand.historie = leseHistorie(rohHistorie);
+  } catch (e) {
+    stand.historieFehler = e instanceof Error && e.message ? e.message : "unlesbar";
+  }
+  return stand;
 }
 
 function usd(wert: number | null): string {
@@ -326,35 +393,32 @@ export default function DonnaPage() {
   // Verwerfen-Knopf, sondern der Hinweis, dass hier nichts gespeichert wird.
   const [speicherGesperrt, setSpeicherGesperrt] = useState<string | null>(null);
 
-  // Aktuellen Auftrag und Historie aus diesem Browser laden — je Schlüssel für sich. Vorher
-  // lagen beide in einem try: Ein kaputter Auftrag ließ die Historie ungelesen, und die nächste
-  // Ausführung schrieb [neu] über die gespeicherten Einträge. Geschrieben wird nur in den
-  // Handlern, damit der Leerzustand beim ersten Rendern nichts überschreibt.
-  useEffect(() => {
-    let rohAuftrag: string | null;
-    let rohHistorie: string | null;
-    try {
-      rohAuftrag = localStorage.getItem(SPEICHER_AKTUELL);
-      rohHistorie = localStorage.getItem(SPEICHER_HISTORIE);
-    } catch (e) {
-      setSpeicherGesperrt(e instanceof Error && e.message ? e.message : "kein Zugriff");
-      return;
+  // Aktuellen Auftrag und Historie aus diesem Browser laden — je Schlüssel für sich
+  // (werteLesungAus). Vorher lagen beide in einem try: Ein kaputter Auftrag ließ die Historie
+  // ungelesen, und die nächste Ausführung schrieb [neu] über die gespeicherten Einträge.
+  // Geschrieben wird nur in den Handlern, damit der Leerzustand beim ersten Rendern nichts
+  // überschreibt.
+  // Lint-Regel set-state-in-effect (10.11.2026): Gelesen wird über useSyncExternalStore statt im
+  // Effect. Auf dem Server und beim Hydrieren gibt es keine Lesung (Leerzustand wie bisher),
+  // danach rendert React mit der Lesung neu. Übernommen wird einmal je Einhängen, beim Rendern
+  // (React-Muster „Zustand bei geänderter Eingabe anpassen“, wie in der Shell). Danach gehört
+  // der Zustand den Handlern; spätere Lesungen ändern nichts.
+  const lesung = useSyncExternalStore(keinAbo, liesSpeicher, keineLesung);
+  const [uebernommen, setUebernommen] = useState(false);
+  if (lesung !== null && !uebernommen) {
+    setUebernommen(true);
+    if (lesung.gesperrt !== null) {
+      setSpeicherGesperrt(lesung.gesperrt);
+    } else {
+      // Bis hierher stehen alle Werte auf ihrem Startwert; die Übernahme setzt sie vollständig.
+      const stand = werteLesungAus(lesung.auftrag, lesung.historie);
+      setPlan(stand.plan);
+      setAusfuehrung(stand.ausfuehrung);
+      setAuftragFehler(stand.auftragFehler);
+      setHistorie(stand.historie);
+      setHistorieFehler(stand.historieFehler);
     }
-    try {
-      const aktuell: unknown = rohAuftrag ? JSON.parse(rohAuftrag) : null;
-      if (istObjekt(aktuell)) {
-        if (istPlanAntwort(aktuell.plan)) setPlan(aktuell.plan);
-        if (istAusfuehrung(aktuell.ausfuehrung)) setAusfuehrung(aktuell.ausfuehrung);
-      }
-    } catch (e) {
-      setAuftragFehler(e instanceof Error && e.message ? e.message : "unlesbar");
-    }
-    try {
-      setHistorie(leseHistorie(rohHistorie));
-    } catch (e) {
-      setHistorieFehler(e instanceof Error && e.message ? e.message : "unlesbar");
-    }
-  }, []);
+  }
 
   const beschaeftigt = phase !== "bereit";
   const planAusgefuehrt = !!plan && !!ausfuehrung && ausfuehrung.auftrag_id === plan.auftrag_id;

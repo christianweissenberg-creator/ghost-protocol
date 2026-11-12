@@ -35,6 +35,12 @@ export default function LoginPage() {
         body: JSON.stringify({ password }),
       });
       if (res.ok) {
+        // Bewusst ein voller Seitenaufbau statt router.push (Lint-Regel
+        // no-location-assign-relative-destination, geprüft 10.11.2026): Die Shell im Root-Layout
+        // bleibt bei weicher Navigation stehen. Ihr Abruf von /api/status lief ohne Sitzung (401)
+        // und käme erst mit dem nächsten Takt (60 s) neu. Der volle Aufbau startet alles mit dem
+        // neuen httpOnly-Cookie, das nur der Server liest.
+        // eslint-disable-next-line @next/next/no-location-assign-relative-destination -- voller Seitenaufbau gewollt, Grund oben
         window.location.href = "/";
         return;
       }

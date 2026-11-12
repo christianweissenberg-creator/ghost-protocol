@@ -302,9 +302,12 @@ test("G-N3 /messages: Lesefehler des Registers sichtbar und im CommandPanel stat
 
 // ═══ /donna: Browser-Speicher je Schlüssel, nicht lesbare Historie bleibt stehen (B33) ═══
 
-/** Hook-Laufzeit mit Zustand je Aufrufreihenfolge; Effekte laufen einmal auf Abruf. */
+/** Hook-Laufzeit mit Zustand je Aufrufreihenfolge; Effekte laufen einmal auf Abruf.
+ *  10.11.2026, wie React: useSyncExternalStore liefert bis zum Einhängen (effekte()) den
+ *  Server-Schnappschuss (Hydrieren), danach den des Browsers. setState während des Renderns
+ *  rendert sofort neu (Muster „Zustand bei geänderter Eingabe anpassen“). */
 function effektLaufzeit() {
-  const z = { slots: [], index: 0, effekte: [] };
+  const z = { slots: [], index: 0, effekte: [], eingehaengt: false, imRendern: false, neuRendern: false };
   const Fragment = Symbol("Fragment");
   const jsx = (type, props, key) => ({ $el: true, type, props: props ?? {}, key });
   const react = {
@@ -313,7 +316,13 @@ function effektLaufzeit() {
     useState(start) {
       const i = z.index++;
       if (!(i in z.slots)) z.slots[i] = typeof start === "function" ? start() : start;
-      return [z.slots[i], (v) => (z.slots[i] = typeof v === "function" ? v(z.slots[i]) : v)];
+      return [
+        z.slots[i],
+        (v) => {
+          z.slots[i] = typeof v === "function" ? v(z.slots[i]) : v;
+          if (z.imRendern) z.neuRendern = true;
+        },
+      ];
     },
     useEffect(fn) {
       const i = z.index++;
@@ -325,6 +334,7 @@ function effektLaufzeit() {
     useCallback: (fn) => fn,
     useMemo: (fn) => fn(),
     useRef: (start) => ({ current: start }),
+    useSyncExternalStore: (_abo, lese, leseServer) => (z.eingehaengt || !leseServer ? lese() : leseServer()),
   };
   function aufloesen(k) {
     if (k === null || k === undefined || typeof k === "boolean") return null;
@@ -337,10 +347,22 @@ function effektLaufzeit() {
   return {
     attrappen: { react, "react/jsx-runtime": { jsx, jsxs: jsx, Fragment } },
     rendere(K) {
-      z.index = 0;
-      return aufloesen(jsx(K, {}));
+      // React bricht nach 25 Neu-Renderings mit „Too many re-renders“ ab.
+      for (let durchlauf = 1; ; durchlauf += 1) {
+        z.index = 0;
+        z.imRendern = true;
+        z.neuRendern = false;
+        try {
+          const baum = aufloesen(jsx(K, {}));
+          if (!z.neuRendern) return baum;
+        } finally {
+          z.imRendern = false;
+        }
+        if (durchlauf >= 25) throw new Error("Zu viele Neu-Renderings: setState beim Rendern ohne wirksame Bedingung");
+      }
     },
     effekte() {
+      z.eingehaengt = true;
       for (const e of z.effekte.splice(0)) e();
     },
   };
@@ -849,5 +871,113 @@ test("G-D6 /donna: scheitert die Planung, ist der unlesbare Auftrag trotzdem ent
   } finally {
     globalThis.localStorage = vorherSpeicher;
     globalThis.fetch = vorherFetch;
+  }
+});
+
+// ═══ 10.11.2026: Lesen über useSyncExternalStore statt setState im Effect (eslint-config-next 16.4.6) ═══
+
+test("G-D7 /donna: beim Hydrieren Leerzustand ohne Lesen und Schreiben; nach dem Einhängen einmal übernommen — Änderungen aus einem anderen Tab erst beim nächsten Laden", async () => {
+  const { text } = await import("./harness/tsx.mjs");
+  const vorher = globalThis.localStorage;
+  const speicher = speicherAttrappe({
+    "gp-lisa-auftrag": JSON.stringify({ plan: PLAN_OK, ausfuehrung: null }),
+    "gp-donna-history": JSON.stringify(HISTORIE),
+  });
+  const zugriffe = { lesen: 0, schreiben: 0 };
+  const { getItem, setItem, removeItem } = speicher;
+  speicher.getItem = (k) => {
+    zugriffe.lesen += 1;
+    return getItem(k);
+  };
+  speicher.setItem = (k, v) => {
+    zugriffe.schreiben += 1;
+    setItem(k, v);
+  };
+  speicher.removeItem = (k) => {
+    zugriffe.schreiben += 1;
+    removeItem(k);
+  };
+  globalThis.localStorage = speicher;
+  try {
+    const lz = effektLaufzeit();
+    const D = donnaSeite(lz);
+    let t = text(lz.rendere(D.default));
+    assert.ok(!t.includes("Alter Auftrag") && !t.includes(PLAN_OK.auftrag_id), "Hydrieren: Leerzustand wie auf dem Server");
+    assert.equal(zugriffe.lesen, 0, "Hydrieren liest den Browser-Speicher nicht");
+    lz.effekte();
+    t = text(lz.rendere(D.default));
+    assert.ok(t.includes("Alter Auftrag"), "Historie übernommen");
+    assert.ok(t.includes(`Auftrag ${PLAN_OK.auftrag_id}`), "Plan übernommen");
+    // Ein anderer Tab schreibt: Die Seite bleibt beim übernommenen Stand (wie vorher der Effect mit []).
+    speicher.daten.set("gp-donna-history", JSON.stringify([{ ...HISTORIE[0], auftrag_id: "h-2", original_task: "Aus anderem Tab" }]));
+    speicher.daten.delete("gp-lisa-auftrag");
+    t = text(lz.rendere(D.default));
+    assert.ok(t.includes("Alter Auftrag") && !t.includes("Aus anderem Tab"), "Historie bleibt beim übernommenen Stand");
+    assert.ok(t.includes(`Auftrag ${PLAN_OK.auftrag_id}`), "Plan bleibt stehen");
+    assert.equal(zugriffe.schreiben, 0, "Lesen und Übernehmen schreiben nichts");
+  } finally {
+    globalThis.localStorage = vorher;
+  }
+});
+
+test("G-D8 /donna mit echtem React auf dem Server: Leerzustand, Browser-Speicher unberührt (Server-Schnappschuss)", () => {
+  const vorher = globalThis.localStorage;
+  let zugriffe = 0;
+  const zaehle = () => {
+    zugriffe += 1;
+    return null;
+  };
+  globalThis.localStorage = { getItem: zaehle, setItem: zaehle, removeItem: zaehle };
+  try {
+    const D = ladeTsx("app/donna/page.tsx", {
+      ...ECHT,
+      "next/link": { __esModule: true, default: ({ href, children }) => React.createElement("a", { href }, children) },
+      "@/lib/auftrag-types": auftragTypes,
+      "@/lib/freigabe-regeln": regeln,
+      "@/lib/hooks-status": hooksStatus,
+    });
+    // Ohne Server-Schnappschuss würfe React hier „Missing getServerSnapshot“.
+    const html = ent(renderToStaticMarkup(React.createElement(D.default)));
+    assert.ok(html.includes("Auftrag planen"), "Seite gerendert");
+    assert.ok(!html.includes("Letzte Ausführungen") && !html.includes("Browser-Speicher gesperrt"), "Leerzustand");
+    assert.equal(zugriffe, 0, "kein Zugriff auf den Browser-Speicher beim Rendern auf dem Server");
+  } finally {
+    globalThis.localStorage = vorher;
+  }
+});
+
+test("G-D9 /donna liesSpeicher: gleicher Inhalt ergibt dasselbe Objekt (React vergleicht per Object.is, sonst Endlosschleife), geänderter ein neues; gesperrt liefert den Grund", () => {
+  const vorher = globalThis.localStorage;
+  const speicher = speicherAttrappe({ "gp-donna-history": "[]" });
+  globalThis.localStorage = speicher;
+  try {
+    const { liesSpeicher } = ladeTsx(
+      "app/donna/page.tsx",
+      {
+        ...ECHT,
+        "next/link": { __esModule: true, default: ({ href, children }) => React.createElement("a", { href }, children) },
+        "@/lib/auftrag-types": auftragTypes,
+        "@/lib/freigabe-regeln": regeln,
+        "@/lib/hooks-status": hooksStatus,
+      },
+      ["liesSpeicher"],
+    ).__intern;
+    const a = liesSpeicher();
+    assert.deepEqual(a, { gesperrt: null, auftrag: null, historie: "[]" });
+    assert.equal(liesSpeicher(), a, "unveränderter Speicher: dasselbe Objekt");
+    speicher.setItem("gp-lisa-auftrag", "{}");
+    const b = liesSpeicher();
+    assert.notEqual(b, a, "geänderter Speicher: neues Objekt");
+    assert.equal(b.auftrag, "{}");
+    assert.equal(liesSpeicher(), b);
+    const gesperrt = () => {
+      throw new DOMException("Access is denied for this document.", "SecurityError");
+    };
+    globalThis.localStorage = { getItem: gesperrt, setItem: gesperrt, removeItem: gesperrt };
+    const c = liesSpeicher();
+    assert.deepEqual(c, { gesperrt: "Access is denied for this document.", auftrag: null, historie: null });
+    assert.equal(liesSpeicher(), c, "auch gesperrt dasselbe Objekt");
+  } finally {
+    globalThis.localStorage = vorher;
   }
 });

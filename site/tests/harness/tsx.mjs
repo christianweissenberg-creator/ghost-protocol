@@ -6,7 +6,8 @@
 // NAME = Pfad unter src ohne Endung, Sonderzeichen als "_", in Großbuchstaben, z. B.
 // Z_TSX_COMPONENTS_UI_COMMANDPANELS oder Z_TSX_APP_AGENTS_ID_PAGE.
 // baumLaufzeit: kleine statische Hook-Laufzeit ohne DOM (useState mit Vorgabewerten, Effekte
-// laufen nicht) für Seiten, deren Zustand erst ein Effekt setzen würde.
+// laufen nicht) für Seiten, deren Zustand erst ein Effekt setzen würde. useSyncExternalStore
+// liefert wie beim Rendern auf dem Server den Server-Schnappschuss (10.11.2026).
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
@@ -57,6 +58,7 @@ export function baumLaufzeit() {
     useCallback: (fn) => fn,
     useMemo: (fn) => fn(),
     useRef: (start) => ({ current: start }),
+    useSyncExternalStore: (_abo, lese, leseServer) => (leseServer ?? lese)(),
   };
   function aufloesen(k) {
     if (k === null || k === undefined || typeof k === "boolean") return null;
