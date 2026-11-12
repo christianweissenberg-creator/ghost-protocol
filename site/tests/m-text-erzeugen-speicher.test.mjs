@@ -3,7 +3,7 @@
 // Hält fest, was bis 11.11.2026 ein Effekt nach dem Einhängen tat und seitdem useSyncExternalStore plus Übernahme beim
 // Rendern tut (Lint-Regel react-hooks/set-state-in-effect ab eslint-plugin-react-hooks 7.1.1):
 // - M-TS1: Auf dem Server liest die Karte den Speicher nicht; das Server-HTML zeigt „Text erzeugen …“ ohne gemerkten Lauf.
-// - M-TS2: Beim Hydrieren gleicht das erste Bild dem Server-HTML; danach nennt die Karte den gemerkten Lauf.
+// - M-TS2: Beim Hydrieren gleicht das erste committete Bild dem Server-HTML; danach nennt die Karte den gemerkten Lauf.
 // - M-TS3: Beim Einhängen im Browser (so kommt die Karte auf die Studio-Seite, die ihre Daten erst im Browser lädt) liest
 //   sie genau einmal; weitere Bilder und Klicks lesen nicht neu; Ab- und Wiederaufbau (Strict Mode) ändert nichts, vor
 //   und nach einem Abgleich (kein zweites Lesen, kein zweites Löschen).
@@ -12,12 +12,14 @@
 //   (jetzt ?? gemerkt), und genannt wird nur ein Lauf, dessen ID sie auch sendet.
 // Abgleich mit den geladenen Captions (seit #16; bis 11.11.2026 ebenfalls ein Effekt mit setState):
 // - M-TS6: Steht die gemerkte ID beim Einhängen an einer Caption im Endzustand, nennt die Karte die Caption, der Eintrag
-//   im Speicher ist weg, „Text erzeugen …“ gilt wieder; beim Hydrieren gleicht das erste Bild dem Server-HTML.
+//   im Speicher ist weg, „Text erzeugen …“ gilt wieder; beim Hydrieren gleicht das erste committete Bild dem Server-HTML.
 // - M-TS7: Nach Neu-Lesen: nicht fertig → die ID bleibt; Endzustand bei offener Frage → erst nach Abbrechen; dann genau
 //   ein Löschen, auch wenn die Captions danach als neue Objekte kommen.
 // - M-TS8 (12.11.2026): Nach einem Abgleich und einem neuen Lauf mit offenem Ausgang lässt Ab- und Wiederaufbau (Strict
 //   Mode; ebenso Activity verborgen → sichtbar oder Fast Refresh) den Eintrag des neuen Laufs stehen: Je Abgleich wird
 //   höchstens einmal gelöscht. Nach Neuladen „Erneut senden …“ mit derselben ID.
+// Erstes committetes Bild: bilder()[0] der Hook-Laufzeit; Runden, die React wegen setState beim Rendern verwirft, fehlen.
+// Beim Hydrieren rendert die Laufzeit mit window wie im Browser (imBrowser), das Server-HTML ohne.
 // Ohne Netz und ohne bezahlte Aufrufe: holen und Speicher sind Attrappen, die Lauf-IDs Testwerte.
 // Z_TSX_COMPONENTS_STUDIO_TEXTERZEUGEN=<pfad> prüft eine Kopie (Gegenprobe an der Fassung mit Effekt, Mutanten).
 import { test } from "node:test";
@@ -115,6 +117,22 @@ function karte({ speicher, hydrieren = false, holen = holenAttrappe().holen, cap
   return { lz, T, props, el: (attr) => element(lz.rendere(), attr) };
 }
 
+/**
+ * Browser für die Hook-Laufzeit, solange fn läuft: window gesetzt wie im Browser; das Server-HTML entsteht ohne. So fällt
+ * auch eine Browser-Erkennung statt des Server-Schnappschusses beim Hydrieren auf (12.11.2026).
+ */
+function imBrowser(fn) {
+  const hatte = Object.hasOwn(globalThis, "window");
+  const vorher = globalThis.window;
+  globalThis.window = globalThis;
+  try {
+    return fn();
+  } finally {
+    if (hatte) globalThis.window = vorher;
+    else delete globalThis.window;
+  }
+}
+
 /** Server-HTML der Karte mit echtem React (renderToStaticMarkup). */
 function serverHtml(speicher, extra = {}) {
   const T = ladeTextErzeugen(ECHT, { hilfen });
@@ -130,14 +148,14 @@ test("M-TS1 Server-HTML: Die Karte liest den Tab-Speicher nicht; „Text erzeuge
   assert.ok(!html.includes(ID_A.slice(0, 8)), "die gemerkte Lauf-ID steht nicht im Server-HTML");
 });
 
-test("M-TS2 Hydrieren: Das erste Bild gleicht dem Server-HTML; danach nennt die Karte den gemerkten Lauf und „Erneut senden …“, gelesen genau einmal", () => {
+test("M-TS2 Hydrieren: Das erste committete Bild gleicht dem Server-HTML; danach nennt die Karte den gemerkten Lauf und „Erneut senden …“, gelesen genau einmal", () => {
   const server = serverHtml(zaehlSpeicher({ [schluessel(VIDEO.id)]: offen(ID_A) }));
   const speicher = zaehlSpeicher({ [schluessel(VIDEO.id)]: offen(ID_A) });
   const k = karte({ speicher, hydrieren: true });
-  const baum = k.lz.rendere();
+  const baum = imBrowser(() => k.lz.rendere());
   const bilder = k.lz.bilder();
+  assert.equal(alsMarkup(bilder[0]), server, "erstes committetes Bild = Server-HTML");
   assert.ok(bilder.length >= 2, "nach dem ersten Bild rendert die Karte neu");
-  assert.equal(alsMarkup(bilder[0]), server, "erstes Bild = Server-HTML");
   assert.equal(element(baum, "data-text-erzeugen-gemerkt")?.props["data-text-erzeugen-gemerkt"], "unbekannt");
   assert.match(text(element(baum, "data-text-erzeugen-gemerkt")), lauf(ID_A));
   assert.equal(text(element(baum, "data-text-erzeugen-knopf")), "Erneut senden …");
@@ -222,10 +240,10 @@ test("M-TS6 Abgleich beim Einhängen: Steht die gemerkte ID an einer Caption im 
     const captions = [caption(ID_A, "zur_freigabe")];
     const speicher = zaehlSpeicher({ [schluessel(VIDEO.id)]: offen(ID_A) });
     const k = karte({ speicher, hydrieren, captions });
-    const baum = k.lz.rendere();
+    const baum = imBrowser(() => k.lz.rendere());
     if (hydrieren) {
       const server = serverHtml(zaehlSpeicher({ [schluessel(VIDEO.id)]: offen(ID_A) }), { captions });
-      assert.equal(alsMarkup(k.lz.bilder()[0]), server, "erstes Bild = Server-HTML");
+      assert.equal(alsMarkup(k.lz.bilder()[0]), server, "erstes committetes Bild = Server-HTML");
     }
     const bekannt = element(baum, "data-text-erzeugen-bekannt");
     assert.equal(bekannt?.props["data-text-erzeugen-bekannt"], 41, `hydrieren: ${hydrieren}`);
