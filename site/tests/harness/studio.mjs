@@ -98,9 +98,16 @@ export function ladeAnkerPanel(attrappen, { anker, types, hilfen }) {
   });
 }
 
-/** Hook-Laufzeit: Zustand je Aufrufreihenfolge, Callbacks, Memos und Effekte mit Abhängigkeiten. */
-export function hookLaufzeit() {
-  const z = { hooks: [], index: 0, effekte: [], geaendert: false };
+/**
+ * Hook-Laufzeit: Zustand je Aufrufreihenfolge, Callbacks, Memos und Effekte mit Abhängigkeiten.
+ * useSyncExternalStore (11.11.2026) wie React: Beim Einhängen im Browser liest schon das erste Bild den
+ * Client-Schnappschuss. Mit hydrieren: true liest, was im ersten Bild der Laufzeit eingehängt wird, den
+ * Server-Schnappschuss wie beim Hydrieren; nach dem Bild vergleicht die Laufzeit wie React und rendert neu,
+ * wenn der Client-Schnappschuss abweicht. bilder() gibt die Bäume aller Runden des letzten rendere() zurück;
+ * beim Hydrieren ist das erste davon das erste Bild.
+ */
+export function hookLaufzeit({ hydrieren = false } = {}) {
+  const z = { hooks: [], index: 0, effekte: [], geaendert: false, eingehaengt: false, bilder: [] };
   const Fragment = Symbol("Fragment");
   const jsx = (type, props, key) => ({ $el: true, type, props: props ?? {}, key });
   const gleich = (a, b) => Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((d, i) => Object.is(d, b[i]));
@@ -153,6 +160,37 @@ export function hookLaufzeit() {
         slot.aufraeumen = typeof r === "function" ? r : undefined;
       });
     },
+    useSyncExternalStore(abo, lese, leseServer) {
+      const i = z.index++;
+      if (!(i in z.hooks)) {
+        const slot = { hydrierend: hydrieren && !z.eingehaengt, wert: undefined, lese };
+        // Nach dem Bild, wie Reacts passiver Effekt: abonnieren und einmal vergleichen. wiederAufbauen abonniert
+        // erneut, abbauen beendet das Abo. Ein in späteren Runden neues abo abonniert nicht neu (reicht für feste Abos).
+        slot.effekt = () => {
+          slot.hydrierend = false;
+          const pruefe = () => {
+            if (!Object.is(slot.lese(), slot.wert)) z.geaendert = true;
+          };
+          const ende = abo(pruefe);
+          pruefe();
+          return ende;
+        };
+        z.hooks[i] = slot;
+        z.effekte.push(() => {
+          const r = slot.effekt();
+          slot.aufraeumen = typeof r === "function" ? r : undefined;
+        });
+      }
+      const slot = z.hooks[i];
+      slot.lese = lese;
+      if (slot.hydrierend) {
+        if (typeof leseServer !== "function") throw new Error("useSyncExternalStore beim Hydrieren ohne Server-Schnappschuss");
+        slot.wert = leseServer();
+      } else {
+        slot.wert = lese();
+      }
+      return slot.wert;
+    },
   };
   function aufloesen(k) {
     if (k === null || k === undefined || typeof k === "boolean") return null;
@@ -166,11 +204,14 @@ export function hookLaufzeit() {
   let wurzelProps = {};
   let baum = null;
   function rendere() {
+    z.bilder = [];
     for (let runde = 0; runde < 50; runde += 1) {
       z.index = 0;
       z.geaendert = false;
       z.effekte = [];
       baum = aufloesen(jsx(wurzel, wurzelProps));
+      z.bilder.push(baum);
+      z.eingehaengt = true;
       const effekte = z.effekte;
       z.effekte = [];
       for (const e of effekte) e();
@@ -218,6 +259,7 @@ export function hookLaufzeit() {
     ruhe,
     abbauen,
     wiederAufbauen,
+    bilder: () => z.bilder.slice(),
   };
 }
 

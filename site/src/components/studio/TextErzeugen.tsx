@@ -17,7 +17,8 @@
 //   nicht freigebbar, solange das gilt. Der Knopf bleibt, weil die Abnahme genau diesen Fall braucht.
 // - Die offene Lauf-ID je Video steht in sessionStorage (Nachtrag d2-text-erzeugen-4): Nach Neuladen oder Zurück im selben
 //   Tab sendet „Erneut senden …“ dieselbe ID (der Server antwortet 409, wenn der Lauf schon läuft), und die Karte nennt
-//   den Lauf ohne bekannten Ausgang. Gelesen wird erst nach dem Einhängen (sonst wiche das erste Bild vom Server-HTML ab).
+//   den Lauf ohne bekannten Ausgang. Gelesen wird nur im Browser, nicht auf dem Server und nicht beim Hydrieren (sonst
+//   wiche das erste Bild vom Server-HTML ab).
 //   Ein zweiter Tab hat einen eigenen sessionStorage; dort hilft nur der Stapel.
 // - Abgleich mit den geladenen Captions (Schlussprüfung d3-kosten-knopf-3, Prüfung f-knopf-pruefung-1): Trägt eine Caption
 //   dieses Videos die offene Lauf-ID und steht sie in einem Endzustand (LAUF_VORBEI), ist der Ausgang bekannt. Der Eintrag
@@ -37,7 +38,7 @@
 //   seine Zeile dort stehen und hielte jede weitere Caption zu diesem Video und Kanal fest, bis jemand sie umstellt.
 // Keine Zahl ohne Quelle: Gemessene Kosten je Lauf gibt es vorab nicht; die Antwort nennt die geschätzten Kosten des Laufs.
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { FARBE_BERNSTEIN, FARBE_GRUEN, FARBE_ROT, istObjekt, maskiert } from "@/components/studio/beleg-hilfen";
 import { berlinDatumZeit } from "@/lib/types";
 import type { StudioAsset } from "@/lib/studio/typen";
@@ -224,6 +225,23 @@ function browserSpeicher(): Speicher | null {
   }
 }
 
+/**
+ * Darf die Karte den Speicher lesen? Für useSyncExternalStore: im Browser ja; auf dem Server und beim Hydrieren nein
+ * (Server-Schnappschuss), sonst wiche das erste Bild vom Server-HTML ab. Nach dem Hydrieren rendert React mit ja neu.
+ */
+function lesbarImBrowser(): boolean {
+  return true;
+}
+
+function lesbarAufDemServer(): boolean {
+  return false;
+}
+
+/** Kein Abo: Gelesen wird einmal je Speicher und Schlüssel; was danach im Speicher steht, schreibt die Karte selbst. */
+function keinAbo(): () => void {
+  return () => {};
+}
+
 /** Offenen Lauf lesen; null, wenn keiner da oder der Eintrag unlesbar ist. Wirft nie. */
 export function leseOffenenLauf(speicher: Speicher | null, schluessel: string): OffenerLauf | null {
   try {
@@ -310,7 +328,7 @@ export function TextErzeugen({
   const [offeneLaufId, setOffeneLaufId] = useState<string | null>(null);
   // Ein Klick, ein Lauf: Ein zweiter Klick, bevor die Ansicht neu gezeichnet ist, sendet nichts.
   const sendet = useRef(false);
-  // Offener Lauf aus dem Speicher dieses Tabs (Neuladen, Zurück): erst nach dem Einhängen gelesen.
+  // Offener Lauf aus dem Speicher dieses Tabs (Neuladen, Zurück): nur im Browser gelesen, nicht beim Hydrieren.
   const [gemerkt, setGemerkt] = useState<OffenerLauf | null>(null);
   // Caption mit bekanntem Ausgang zur zuletzt offenen Lauf-ID (Abgleich mit den geladenen Captions).
   const [bekannt, setBekannt] = useState<{ caption: CaptionZumLauf; laufId: string } | null>(null);
@@ -318,12 +336,22 @@ export function TextErzeugen({
   const [laut409, setLaut409] = useState<{ laufId: string; contentId: number; status: string | null } | null>(null);
   const schluessel = speicherSchluessel(slug, medium.id);
   const ablage = speicher === undefined ? browserSpeicher() : speicher;
-  useEffect(() => {
+  // Lint-Regel set-state-in-effect (eslint-plugin-react-hooks 7.1.1, 11.11.2026): Bisher übernahm ein Effekt nach dem
+  // Einhängen. Jetzt sagt useSyncExternalStore, ob gelesen werden darf (auf dem Server und beim Hydrieren nein), und
+  // übernommen wird beim Rendern, einmal je Speicher und Schlüssel (React-Muster „State bei geänderter Eingabe anpassen“,
+  // wie in der Shell). Gleich bleiben die Übernahme je Speicher und Schlüssel und „jetzt ?? gemerkt“ für die offene ID.
+  // Danach gehört der Zustand den Handlern und dem Abgleich unten: Was starten selbst schreibt, übernimmt die Karte nicht.
+  // Unterschied: Beim Einhängen im Browser steht ein gemerkter Lauf schon im ersten Bild, nicht erst ein Bild später.
+  const lesbar = useSyncExternalStore(keinAbo, lesbarImBrowser, lesbarAufDemServer);
+  const [gelesen, setGelesen] = useState<{ ablage: Speicher | null; schluessel: string } | null>(null);
+  if (lesbar && (gelesen === null || gelesen.ablage !== ablage || gelesen.schluessel !== schluessel)) {
+    setGelesen({ ablage, schluessel });
     const o = leseOffenenLauf(ablage, schluessel);
-    if (o === null) return;
-    setGemerkt(o);
-    setOffeneLaufId((jetzt) => jetzt ?? o.laufId);
-  }, [ablage, schluessel]);
+    if (o !== null) {
+      setGemerkt(o);
+      setOffeneLaufId((jetzt) => jetzt ?? o.laufId);
+    }
+  }
   const gesperrt = stand.art === "bestaetigen" || stand.art === "laeuft" || stand.art === "verwerfen";
   // Schlussprüfung d3-kosten-knopf-3, Prüfung f-knopf-pruefung-1: Steht die offene Lauf-ID an einer geladenen Caption in einem
   // Endzustand, ist ihr Ausgang bekannt — nur, solange kein Versuch gezeigt wird oder läuft. Eine Caption mit der ID in einem
@@ -343,15 +371,22 @@ export function TextErzeugen({
   // Eine Frage ist offen (bezahlter Lauf oder Verwerfen): Hinweise und Knopfzeile bleiben stehen, gesperrt (f3-lauf-id-1).
   const frage = stand.art === "bestaetigen" || stand.art === "verwerfen";
   const nichtLaufend = stand.art !== "laeuft";
-  useEffect(() => {
-    if (zumLauf === null) return;
-    merkeOffenenLauf(ablage, schluessel, null);
+  // Abgleich mit bekanntem Ausgang (Lint-Regel set-state-in-effect, 11.11.2026): Bisher setzte ein Effekt den Zustand
+  // zurück. Jetzt geschieht das beim Rendern wie oben; es endet von selbst, weil die offene ID danach null ist. Nur das
+  // Löschen des Eintrags im Speicher bleibt ein Effekt (Seiteneffekt, ohne setState), einmal je Abgleich.
+  // Unterschied: Das Bild mit der schon abgeglichenen ID („Erneut senden …“) entfällt; die Karte nennt gleich die Caption.
+  const [eintragWeg, setEintragWeg] = useState<{ ablage: Speicher | null; schluessel: string } | null>(null);
+  if (zumLauf !== null) {
     setOffeneLaufId(null);
     setGemerkt(null);
     setLaut409(null);
     setBekannt({ caption: zumLauf, laufId: zumLauf.laufId });
     setStand({ art: "zu" });
-  }, [zumLauf, ablage, schluessel]);
+    setEintragWeg({ ablage, schluessel });
+  }
+  useEffect(() => {
+    if (eintragWeg !== null) merkeOffenenLauf(eintragWeg.ablage, eintragWeg.schluessel, null);
+  }, [eintragWeg]);
   const w = CAPTION_WAHL.find((x) => x.wert === wahl) ?? CAPTION_WAHL[0];
   const k = KATEGORIEN.find((x) => x.wert === kategorie) ?? KATEGORIEN[0];
 
