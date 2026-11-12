@@ -82,6 +82,14 @@ const BASE_URL = process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000";
 // - Gegenprüfung PR #13: Im Review an PUBLISHER läuft die Namensmaske vor der Kampagnenmaske (X01), und Textregel-Befunde
 //   werden vor dem Kürzen maskiert (X02, textregelVermerk).
 //
+// Abnahmelauf 12.11.2026 (Caption-Lauf, Vorprüfung ABLEHNUNG): SCRIBE leitete aus der Ersterwähnung ein Jahrhundert ab.
+// SCRIBE las die Datierungsregel nur in der Datierungszeile des Objektblocks; sie nennt kein Jahrhundert, und den
+// PUBLISHER-Satz und den COUNSEL-Prüfpunkt bekommt SCRIBE nicht. Seitdem:
+// - Bei greifender Datierungs-Ausnahme steht im SCRIBE-Auftrag ein eigener Absatz DATIERUNG (datierungsHinweisScribe),
+//   für jeden Objekt-Lauf, mit und ohne medium_id. Andere Aufträge und Läufe ohne greifende Ausnahme bleiben zeichengleich.
+// - Der Code prüft den SCRIBE-Text vor der Vorprüfung auch auf das Jahrhundert der Ausnahme als Ordnungszahl
+//   (jahrhundertBefund); ein Treffer beendet den Lauf ohne COUNSEL-Aufruf. Die Endfassung prüft er darauf nicht.
+//
 // Stufe 1 (05.11.2026) — Freigabe und Beleg-Kette:
 // - Das COUNSEL-Urteil wertet werteCounselAus() aus (lib/counsel-urteil.ts); die frühere
 //   Regex ließ zitierte Optionen und verneinte Freigaben durch. Nur FREIGABE geht weiter.
@@ -1240,6 +1248,30 @@ function datierungsHinweisPublisher(datierung: Datierung | null): string {
   );
 }
 
+/**
+ * Absatz im SCRIBE-Auftrag bei greifender Datierungs-Ausnahme (Abnahmelauf 12.11.2026): SCRIBE leitete aus der
+ * Ersterwähnung ein Jahrhundert ab, und COUNSEL lehnte in der Vorprüfung ab. Bis dahin las SCRIBE die Regel nur in der
+ * Datierungszeile des Objektblocks, und die nennt kein Jahrhundert. Den PUBLISHER-Satz und den Prüfpunkt bekommt SCRIBE
+ * nicht. Der Absatz gilt für jeden Objekt-Lauf mit greifender Ausnahme, mit und ohne medium_id. Er steht hinter
+ * „Liefere den fertigen Content, sofort publishbar.“ und direkt vor dem Objektblock, so wie der PUBLISHER-Satz.
+ * Bausteine: Bezeichnung und Jahr aus dem Beleg, die erlaubten Formen wie im Prüfpunkt und die Formen aus abgeleiteteAlter.
+ * Neu sind nur Jahrhundert und „über N Jahre …“. Wie in der Datierungszeile steht „N“ statt einer Zahl: Zitiert SCRIBE
+ * den Absatz, trifft weder altersBefund noch jahrhundertBefund. Ohne greifende Ausnahme ist er leer, und der Auftrag bleibt
+ * zeichengleich.
+ */
+function datierungsHinweisScribe(datierung: Datierung | null): string {
+  const beleg = datierung?.beleg;
+  if (!beleg || !beleg.ausnahme_greift) return "";
+  const jahr = beleg.ausnahme_jahr;
+  const erwaehnung = `${beleg.bezeichnung} ${jahr}`;
+  return (
+    `\n\nDATIERUNG (gilt für den ganzen Text): Das Jahr ${jahr} steht im Text nur als „${erwaehnung}“ oder „${jahr} ` +
+    `urkundlich erstmals erwähnt“. Leite aus der ${erwaehnung} kein Alter, keine Bauzeit und kein Jahrhundert ab, und ` +
+    `nenne keine Zahl von Jahren, die daraus gerechnet ist. Nicht: „aus dem N. Jahrhundert“, „über N Jahre …“, ` +
+    `${abgeleiteteAlter(jahr)}.`
+  );
+}
+
 /** Ergebnis einer Kurzlink-Prüfung für metadata.kurzlink; Befunde mit maskiertem Namen (sie zitieren den Text). */
 function textPruefungBeleg(p: KurzlinkTextPruefung) {
   return {
@@ -1332,6 +1364,27 @@ function altersBefund(text: string, datierung: Datierung | null): string | null 
   // Kurz gehalten: Der Vermerk fasst Leerraum zusammen und kürzt das Detail auf 160 Zeichen (bereinigeFehler,
   // lib/status-server.ts), und neben diesem Befund kann der Baujahr-Befund stehen.
   return treffer ? `Alter „${treffer[0]}“ aus ${jahr} abgeleitet (${jahr} ist nur die ${a.beleg.bezeichnung})` : null;
+}
+
+/**
+ * Abnahmelauf 12.11.2026: SCRIBE leitete aus der Ersterwähnung ein Jahrhundert ab, und erst COUNSEL lehnte ab. Der Code
+ * erkennt deshalb im SCRIBE-Text das Jahrhundert der Ausnahme als Ordnungszahl, bei 1335 also „14. Jahrhundert“. Das gilt
+ * auch für „14. Jahrhunderts“, „14.Jahrhundert“, „14. Jh.“, „14. Jhd.“ und „14. Jhdt.“. Gesucht wird ohne Markdown wie bei
+ * altersBefund, und die Prüfung ist ebenso eng: Steht direkt davor eine Ziffer oder „<Ziffer>.“ bzw. „<Ziffer>,“, zählt es
+ * nicht („114. Jahrhundert“). Ohne Punkt ist es keine Ordnungszahl („14 Jahrhunderte“). Andere Formen prüft nur COUNSEL:
+ * ausgeschrieben, römisch, als Spanne („14./15. Jahrhundert“) oder ohne Zahl („seit Jahrhunderten“).
+ * Nur der SCRIBE-Text wird geprüft (pruefeText): Die Endfassung enthält auch den Fakten-Check, und das Review der
+ * Vorprüfung geht ohne Maske für das Jahrhundert an PUBLISHER. Prüfte der Code auch die Endfassung, bräche ein dort
+ * zitiertes Jahrhundert („kein 14. Jahrhundert ✓“) den Lauf nach vier bezahlten Aufrufen ab. null, wenn nichts auffällt.
+ */
+function jahrhundertBefund(text: string, datierung: Datierung | null): string | null {
+  const beleg = datierung?.beleg;
+  if (!beleg || !beleg.ausnahme_greift) return null;
+  const jahr = beleg.ausnahme_jahr;
+  const jahrhundert = Math.floor((jahr - 1) / 100) + 1;
+  const muster = new RegExp(`(?<!\\p{N}[.,]?)${jahrhundert}\\.\\s*(?:Jahrhundert|Jh(?:dt|d)?(?!\\p{L})\\.?)`, "iu");
+  const treffer = muster.exec(text.replace(DATIERUNG_MARKDOWN, ""));
+  return treffer ? `Jahrhundert „${treffer[0]}“ aus ${jahr} abgeleitet (${jahr} ist nur die ${beleg.bezeichnung})` : null;
 }
 
 /** Ein Markdown-Zeichen wie DATIERUNG_MARKDOWN, ohne g (test() ohne lastIndex). */
@@ -1762,7 +1815,8 @@ export async function POST(request: NextRequest) {
     /**
      * Deterministische Textprüfung vor dem nächsten bezahlten Aufruf (SCRIBE-Text vor COUNSEL,
      * Endfassung vor der Endprüfung): Kurzlinks (E12-Ersatzweg; Ergebnis belegt unter
-     * metadata.kurzlink[feld], nur mit Kurzlink), keine URTEIL-Zeile, Datierungs-Ausnahme (§8.1).
+     * metadata.kurzlink[feld], nur mit Kurzlink), keine URTEIL-Zeile, Datierungs-Ausnahme (§8.1), im
+     * SCRIBE-Text auch das Jahrhundert der Ausnahme (jahrhundertBefund).
      * Liefert Grund und Befunde, oder null, wenn der Text besteht.
      */
     const pruefeText = (text: string, feld: "pruefung_scribe" | "pruefung_endfassung"): { grund: string; befunde: string[] } | null => {
@@ -1782,6 +1836,8 @@ export async function POST(request: NextRequest) {
       if (datierungFalsch) befunde.push(datierungFalsch);
       const alterFalsch = altersBefund(text, datierung);
       if (alterFalsch) befunde.push(alterFalsch);
+      const jahrhundertFalsch = feld === "pruefung_scribe" ? jahrhundertBefund(text, datierung) : null;
+      if (jahrhundertFalsch) befunde.push(jahrhundertFalsch);
       return befunde.length > 0 ? { grund, befunde } : null;
     };
 
@@ -1921,6 +1977,8 @@ format === "reel" ? `REEL (30-90 Sek):
     // Paket C, Schritt 9: Bei einer Caption zu einem Video (medium_id) steht die Auftragsart mit der Pflichtzeile
     // direkt unter Plattform und Kategorie (CAPTION_AUFTRAG); sonst ist der Auftrag unverändert. Seit dem Nachtrag
     // d2-text-erzeugen-2 bekommt eine Caption eigene Anweisungen (captionAnweisungen) statt der für einen neuen Beitrag.
+    // Abnahmelauf 12.11.2026: Bei greifender Datierungs-Ausnahme folgt auf „Liefere …“ der Absatz DATIERUNG
+    // (datierungsHinweisScribe), mit und ohne medium_id; sonst ist er leer.
     await fuehreStufeAus(
       steps[1],
       `CONTENT-PRODUKTION: Schreibe Content zum Thema "${thema}".
@@ -1941,7 +1999,7 @@ STILREGELN:
 - ${objekt ? "Interne System-, Projekt- und Agentennamen NICHT erwähnen" : "Ghost Protocol NICHT erwähnen"} (Agenten sind unsichtbar)
 ${objekt ? "" : `- Brandname für extern: "AI Insider" (Arbeitstitel)`}
 
-Liefere den fertigen Content, sofort publishbar.${objektBlock ? `\n\n${objektBlock}` : ""}${cta}`,
+Liefere den fertigen Content, sofort publishbar.${datierungsHinweisScribe(datierung)}${objektBlock ? `\n\n${objektBlock}` : ""}${cta}`,
       cookie,
       true,
       warnungen
