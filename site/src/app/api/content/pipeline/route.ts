@@ -94,7 +94,9 @@ const BASE_URL = process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000";
 // festgelegten Lage gelten (eigene, letzte Zeile nach den Hashtags). Die Endprüfung wertete dieselbe Lage als Notiz statt
 // als Text des Posts. Keiner der beiden COUNSEL-Aufträge nannte die Pflichtzeile oder ihre Lage. Seitdem:
 // - Bei einer Caption (medium_id) tragen beide COUNSEL-Aufträge den PRÜFPUNKT PFLICHTZEILE (pflichtzeilenPruefpunkt):
-//   Wortlaut, sichtbarer Text des Posts, Lage je Kanal. Die anderen Aufträge und Läufe ohne medium_id bleiben zeichengleich.
+//   Wortlaut, sichtbarer Text des Posts, Lage je Kanal. Dazu kommt, was zur Caption gehört; Notizen, Vermerke,
+//   Qualitätsprüfung, Posting-Empfehlung und Cross-Promotion gehören nicht dazu (Gegenprüfung PR #20). Die anderen
+//   Aufträge und Läufe ohne medium_id bleiben zeichengleich.
 // - Die Auftragskennung (metadata.pruefauftrag) deckt den Prüfpunkt mit ab; ohne ihn bleibt sie wie bisher.
 //
 // Stufe 1 (05.11.2026) — Freigabe und Beleg-Kette:
@@ -1209,26 +1211,39 @@ function datierungsPruefpunkt(datierung: Datierung | null): string {
  * Der Prüfpunkt nennt den Wortlaut, dass die Zeile mit der Caption veröffentlicht wird, und ihre festgelegte Lage je Kanal
  * (wie captionAnweisungen und publisherPflichtzeile). Er nennt nur Tatsachen und was zu prüfen ist; das Urteil bleibt bei
  * COUNSEL.
+ * Gegenprüfung PR #20: Der Absatz sagt, was „Caption“ ist. Im Entwurf ist das der Caption-Text, in der Endfassung der
+ * Abschnitt „Finaler Content“; bei X ist es der Post mit dem Video. Notizen, Status- und Prüfvermerke, Qualitätsprüfung,
+ * Posting-Empfehlung und Cross-Promotion gehören nicht dazu, und für sie gilt die Lage nicht. Sonst läse die Vorprüfung
+ * einen Meta-Block, den SCRIBE unter die Pflichtzeile schreibt, als „nicht letzte Zeile“. Die Endprüfung prüft laut Kopf
+ * alles, auch Cross-Promotion. Ob Cross-Promotion-Texte eine KI-Zeile brauchen, sagt der Absatz nicht; das bleibt beim
+ * Regelpaket und bei COUNSEL. Die Lage nach den Hashtags gilt auch ohne Hashtags („falls es welche gibt“).
  * Ein Zitat soll nichts auslösen, denn das Review der Vorprüfung geht an PUBLISHER und kann im Freigabetext landen. Deshalb:
  * - eine Zeile ohne Umbruch, und der Wortlaut nur in Anführungszeichen mitten im Satz. Ein zitierter Satz ist dann weder
  *   die Pflichtzeile als eigene Zeile noch eine nahe Variante (enthaeltPflichtzeile, pflichtzeileEinsetzen) und hält die
  *   Pipeline nicht vom Einsetzen ab;
- * - keine Postmarke „1/…“ und keine Abschnittsüberschrift am Zeilenanfang;
+ * - kein Satz beginnt mit einer Abschnittsüberschrift (abschnittsKopf, KOPF_FINAL und KOPF_DANACH in
+ *   lib/freigabe-regeln.ts), mit „#“ oder mit einer Postmarke „1/…“. „Finaler Content“ und die anderen Abschnittswörter
+ *   stehen nur mitten im Satz, so wird auch ein einzeln zitierter Satz nicht als Abschnitt gelesen;
  * - kein „URTEIL“ und keine Adresse.
  * Leer ohne Caption.
  */
 function pflichtzeilenPruefpunkt(kanal: CaptionKanal | null): string {
   if (kanal === null) return "";
-  const lage =
-    kanal === "x|thread"
-      ? "als eigene Zeile im Post mit dem Video (bei einem Thread im ersten Post), dort als letzte Zeile"
-      : "als eigene, letzte Zeile der Caption, nach den Hashtags";
+  const x = kanal === "x|thread";
+  const lage = x
+    ? "als eigene Zeile im Post mit dem Video (bei einem Thread im ersten Post), dort als letzte Zeile"
+    : "als eigene, letzte Zeile der Caption, nach den Hashtags, falls es welche gibt";
+  const caption = x
+    ? "Mit „Caption“ ist der Post mit dem Video gemeint: im Entwurf dieser Post selbst, in der Endfassung derselbe Post im " +
+      "Abschnitt „Finaler Content“."
+    : "Mit „Caption“ ist im Entwurf der Caption-Text selbst gemeint, in der Endfassung der Text im Abschnitt „Finaler Content“.";
   return (
     `\n\nPRÜFPUNKT PFLICHTZEILE (Auftrag, zusätzlich zum Regelpaket): Die Caption gehört zu einem fertigen, ` +
     `KI-generierten Video. Ihre KI-Kennzeichnung ist eine Pflichtzeile mit dem Wortlaut „${KI_PFLICHTZEILE_CAPTION}“. ` +
     `Diese Zeile wird mit der Caption veröffentlicht und ist sichtbarer Text des Posts, keine Notiz. Ihre Lage ist ` +
-    `festgelegt: ${lage}. Zu prüfen ist, ob sie vorhanden ist, wörtlich, als eigene Zeile und an dieser Lage; fehlt sie ` +
-    `oder weicht sie davon ab, ist das ein Befund.`
+    `festgelegt: ${lage}. ${caption} Notizen, Status- und Prüfvermerke, Qualitätsprüfung, Posting-Empfehlung und ` +
+    `Cross-Promotion gehören nicht zur Caption, und für sie gilt die Lage nicht. Zu prüfen ist, ob die Pflichtzeile ` +
+    `vorhanden ist, wörtlich, als eigene Zeile und an dieser Lage; fehlt sie oder weicht sie davon ab, ist das ein Befund.`
   );
 }
 
