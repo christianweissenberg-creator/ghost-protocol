@@ -1773,17 +1773,19 @@ test("M-C29 Feste Lage der Fragen und Sichtbarkeit von „Lauf-ID verwerfen …�
 /** Lage der Pflichtzeile je Kanal, wie in captionAnweisungen und publisherPflichtzeile; nach den Hashtags auch ohne Hashtags erfüllbar. */
 const LAGE_ENDE = "als eigene, letzte Zeile der Caption, nach den Hashtags, falls es welche gibt";
 const LAGE_X = "als eigene Zeile im Post mit dem Video (bei einem Thread im ersten Post), dort als letzte Zeile";
-/** Was „Caption“ ist (Gegenprüfung PR #20): im Entwurf der Text selbst, in der Endfassung der Abschnitt „Finaler Content“; bei X der Post mit dem Video. */
-const CAPTION_ENDE = "Mit „Caption“ ist im Entwurf der Caption-Text selbst gemeint, in der Endfassung der Text im Abschnitt „Finaler Content“.";
-const CAPTION_X = "Mit „Caption“ ist der Post mit dem Video gemeint: im Entwurf dieser Post selbst, in der Endfassung derselbe Post im Abschnitt „Finaler Content“.";
+/** Was „Caption“ ist (Gegenprüfung PR #20): im Entwurf der Text selbst, in der Endfassung der Abschnitt mit dem finalen Content; bei X der Post mit dem Video. */
+const CAPTION_ENDE = "Mit „Caption“ ist im Entwurf der Caption-Text selbst gemeint, in der Endfassung der Text im Abschnitt mit dem finalen Content.";
+const CAPTION_X = "Mit „Caption“ ist der Post mit dem Video gemeint: im Entwurf dieser Post selbst, in der Endfassung derselbe Post im Abschnitt mit dem finalen Content.";
 /** Absatz PRÜFPUNKT PFLICHTZEILE (Schnappschuss), für X (x true) oder die anderen Kanäle. */
 const pflichtPruefpunkt = (x) =>
   "\n\nPRÜFPUNKT PFLICHTZEILE (Auftrag, zusätzlich zum Regelpaket): Die Caption gehört zu einem fertigen, KI-generierten " +
   `Video. Ihre KI-Kennzeichnung ist eine Pflichtzeile mit dem Wortlaut „${PFLICHTZEILE}“. Diese Zeile wird mit der Caption ` +
   `veröffentlicht und ist sichtbarer Text des Posts, keine Notiz. Ihre Lage ist festgelegt: ${x ? LAGE_X : LAGE_ENDE}. ` +
-  `${x ? CAPTION_X : CAPTION_ENDE} Notizen, Status- und Prüfvermerke, Qualitätsprüfung, Posting-Empfehlung und Cross-Promotion ` +
-  "gehören nicht zur Caption, und für sie gilt die Lage nicht. Zu prüfen ist, ob die Pflichtzeile vorhanden ist, wörtlich, als " +
-  "eigene Zeile und an dieser Lage; fehlt sie oder weicht sie davon ab, ist das ein Befund.";
+  `${x ? CAPTION_X : CAPTION_ENDE} Notizen, Status- und Prüfvermerke, die Qualitätsprüfung, die Posting-Empfehlung und die ` +
+  "Cross-Promotion gehören nicht zur Caption und zählen für die Lage nicht mit. Eine Pflichtzeile, die nur dort steht, ersetzt " +
+  "die in der Caption nicht. Ob diese Teile selbst eine KI-Kennzeichnung brauchen, richtet sich nach dem Regelpaket. Zu prüfen " +
+  "ist, ob die Pflichtzeile in der Caption vorhanden ist, wörtlich, als eigene Zeile und an dieser Lage; fehlt sie oder weicht " +
+  "sie davon ab, ist das ein Befund.";
 const PRUEFPUNKT_MARKE = "PRÜFPUNKT PFLICHTZEILE";
 /** Ende des Kopfs beider COUNSEL-Aufträge; ohne Datierungs-Prüfpunkt folgt der Absatz direkt darauf. */
 const KOPF_ENDE = "(Form: LETZTE ZEILE am Ende dieses Auftrags).";
@@ -1791,6 +1793,20 @@ const KOPF_ENDE = "(Form: LETZTE ZEILE am Ende dieses Auftrags).";
 const DATIERUNG_ENDE = "„1335 urkundlich erstmals erwähnt“.";
 /** Sätze des Absatzes: getrennt an „. “ vor einem Großbuchstaben oder „„“. */
 const saetze = (absatz) => absatz.trim().split(/(?<=\.)\s+(?=[A-ZÄÖÜ„])/u);
+/**
+ * Nachprüfung PR #20: Zitatfest muss auch jeder Satzteil sein. Das sind die Sätze, geteilt an Komma, Semikolon, Doppelpunkt,
+ * Klammer und „und“/„oder“, dazu jeder Begriff in Anführungszeichen. Jeder Teil wird ohne und mit den Präfixen „- “, „> “,
+ * „**“ und „1. “ geprüft, wie ihn ein Review als eigene Zeile zitieren könnte.
+ */
+const satzteile = (absatz) => {
+  const teile = new Set();
+  for (const satz of saetze(absatz)) {
+    teile.add(satz);
+    for (const teil of satz.split(/[,;:()]|\s(?:und|oder)\s/u)) if (teil.trim()) teile.add(teil.trim());
+    for (const zitat of satz.match(/„[^“]*“[.,;:]?/gu) ?? []) teile.add(zitat);
+  }
+  return [...teile].flatMap((teil) => ["", "- ", "> ", "**", "1. "].map((praefix) => `${praefix}${teil}`));
+};
 /**
  * Beginnt ein Satz so, dass die Pipeline ihn als Abschnitt oder Post lesen könnte? Der Zeilenanfang wird behandelt wie
  * abschnittsKopf in lib/freigabe-regeln.ts (Zeichen vor dem ersten Buchstaben weg, klein) und gegen KOPF_FINAL und
@@ -1809,7 +1825,7 @@ const KOMBINATIONEN = Object.entries((await (await pipeline.GET()).json()).forma
 const OHNE_OBJEKT = { topic: "KI-Agenten erklärt", category: "ki_automation" };
 const EXPORT_1750 = { ...RITTERGUT, baujahr: 1750 };
 
-test("M-C30 PRÜFPUNKT PFLICHTZEILE (Abnahmelauf 12.11.2026 abends, Gegenprüfung PR #20): Bei einer Caption tragen beide COUNSEL-Aufträge den Absatz genau einmal vor dem geprüften Text, direkt hinter dem Datierungs-Prüfpunkt oder, ohne greifende Ausnahme, direkt hinter dem Kopf — Wortlaut, sichtbarer Text des Posts, Lage je Kanal, was zur Caption gehört; kein Satz liest sich als Abschnitt oder Post; ohne medium_id bei keiner Kombination, mit und ohne Objekt; in keinem anderen Auftrag", async () => {
+test("M-C30 PRÜFPUNKT PFLICHTZEILE (Abnahmelauf 12.11.2026 abends, Gegenprüfung PR #20): Bei einer Caption tragen beide COUNSEL-Aufträge den Absatz genau einmal vor dem geprüften Text, direkt hinter dem Datierungs-Prüfpunkt oder, ohne greifende Ausnahme, direkt hinter dem Kopf — Wortlaut, sichtbarer Text des Posts, Lage je Kanal, was zur Caption gehört; kein Satz und kein Satzteil liest sich als Abschnitt oder Post (Nachprüfung PR #20); ohne medium_id bei keiner Kombination, mit und ohne Objekt; in keinem anderen Auftrag", async () => {
   // Zitat-fest: eine Zeile, Wortlaut einmal und nur in Anführungszeichen, kein Urteilswort, keine Adresse, kein Satz mit
   // Abschnittswort, „#“ oder Postmarke am Anfang („Finaler Content“ nur mitten im Satz)
   for (const x of [false, true]) {
@@ -1817,9 +1833,16 @@ test("M-C30 PRÜFPUNKT PFLICHTZEILE (Abnahmelauf 12.11.2026 abends, Gegenprüfun
     assert.ok(!absatz.includes("\n") && !/urteil/i.test(absatz) && !/https?:|steinadel\.de/i.test(absatz), `x=${x}`);
     assert.ok(absatz.includes(`„${PFLICHTZEILE}“`) && absatz.split(PFLICHTZEILE).length === 2, `x=${x}: Wortlaut einmal, in Anführungszeichen`);
     const s = saetze(absatz);
-    assert.equal(s.length, 7, `x=${x}: sieben Sätze`);
+    assert.equal(s.length, 9, `x=${x}: neun Sätze`);
     for (const satz of s) assert.ok(!liestSichAlsAbschnitt(satz) && !satz.startsWith(PFLICHTZEILE), `x=${x}: ${satz.slice(0, 50)}`);
-    assert.ok(absatz.includes("Abschnitt „Finaler Content“") && absatz.includes("Posting-Empfehlung und Cross-Promotion"), `x=${x}`);
+    // Nachprüfung PR #20: auch kein Satzteil, kein Aufzählungsglied und kein Begriff in Anführungszeichen, mit und ohne Präfix
+    const teile = satzteile(absatz);
+    assert.ok(teile.length > 150, `x=${x}: ${teile.length} Teile geprüft`);
+    for (const teil of teile) assert.ok(!liestSichAlsAbschnitt(teil), `x=${x}: Teil liest sich als Abschnitt: ${teil.slice(0, 60)}`);
+    assert.ok(absatz.includes("Abschnitt mit dem finalen Content") && !absatz.includes("Finaler Content"), `x=${x}: kein Abschnittsname`);
+    assert.ok(absatz.includes("die Qualitätsprüfung, die Posting-Empfehlung und die Cross-Promotion gehören nicht zur Caption und zählen für die Lage nicht mit."), `x=${x}`);
+    assert.ok(absatz.includes("Eine Pflichtzeile, die nur dort steht, ersetzt die in der Caption nicht."), `x=${x}: keine Freistellung`);
+    assert.ok(absatz.includes("Ob diese Teile selbst eine KI-Kennzeichnung brauchen, richtet sich nach dem Regelpaket."), `x=${x}: neutral`);
   }
   for (const [platform, format] of CAPTION_WAHL) {
     for (const [fall, objekt, vorAbsatz] of [["RitterGut", RITTERGUT, DATIERUNG_ENDE], ["Exportwert 1750", EXPORT_1750, KOPF_ENDE]]) {
@@ -1896,7 +1919,7 @@ test("M-C31 Differenz im Lauf: Ein Caption-Lauf und derselbe Lauf ohne medium_id
   }
 });
 
-test("M-C32 Zitat des Absatzes ist harmlos (das Review der Vorprüfung geht an PUBLISHER): COUNSEL zitiert ihn ganz und Satz für Satz, je Satz eine Zeile; PUBLISHER übernimmt das Review in seine Qualitätsprüfung vor dem finalen Content, dahinter Postmarken — die Pipeline erkennt den finalen Content weiter an seiner Überschrift (kein zitierter Satz gilt als Abschnitt), setzt eine fehlende Pflichtzeile dort ein (bei X in Post 1), eine vorhandene bleibt einmal; die Zitate bleiben unverändert und gelten nicht als nahe Variante", async () => {
+test("M-C32 Zitat des Absatzes ist harmlos (das Review der Vorprüfung geht an PUBLISHER): COUNSEL zitiert ihn ganz, Satz für Satz und Satzteil für Satzteil (auch mit „- “, „> “, „**“, „1. “), je eine Zeile; PUBLISHER übernimmt das Review in seine Qualitätsprüfung vor dem finalen Content, dahinter Postmarken und eine Scheduling-Überschrift — die Pipeline erkennt den finalen Content weiter an seiner Überschrift (kein Zitat gilt als Abschnitt), setzt eine fehlende Pflichtzeile dort ein (bei X in Post 1), eine vorhandene bleibt einmal; die Zitate bleiben unverändert und gelten nicht als nahe Variante", async () => {
   // Der ganze Absatz bis vor den geprüften Text, auch über Zeilenumbrüche (so fällt ein Wortlaut in eigener Zeile auf)
   const absatzAus = (task) => /\n\n(PRÜFPUNKT PFLICHTZEILE[\s\S]*?)\n\n(?:CONTENT|ENDFASSUNG \(PUBLISHER\)):\n/.exec(task)?.[1];
   const MARKEN = "1/2: 28 Zeichen ✓\n2/2: 30 Zeichen ✓";
@@ -1912,15 +1935,19 @@ test("M-C32 Zitat des Absatzes ist harmlos (das Review der Vorprüfung geht an P
         const caption = platform === "x"
           ? `1/2 Das Video zeigt den Hof.${mitZeile ? `\n${PFLICHTZEILE}` : ""}\n2/2 Mehr: ${link}`
           : `Das Video zeigt den Hof bei Nacht. Mehr: ${link}\n#Denkmal #Rittergut${mitZeile ? `\n${PFLICHTZEILE}` : ""}`;
-        // Die Postmarken hinter den Zitaten machen eine Fehlerkennung sichtbar: Läse die Pipeline einen zitierten Satz als
-        // Überschrift „Finaler Content“, stünde Post 1 hier, und eine fehlende Pflichtzeile landete in der Qualitätsprüfung.
-        return `## 1. Qualitätsprüfung\nAus dem Review:\n${review}\n${MARKEN}\n\n## 2. Finaler Content\n${caption}\n\n## 3. Publishing-Zeitpunkt\nDienstag, 18:00 (Empfehlung)`;
+        // Hinter den Zitaten stehen Postmarken und eine Überschrift aus KOPF_DANACH („Scheduling“). Läse die Pipeline ein Zitat
+        // als Überschrift „Finaler Content“, begänne der Abschnitt dort: Bei X stünde Post 1 in den Postmarken, sonst endete der
+        // Abschnitt vor „Scheduling“ — eine fehlende Pflichtzeile landete in beiden Fällen in der Qualitätsprüfung.
+        return (
+          `## 1. Qualitätsprüfung\nAus dem Review:\n${review}\n${MARKEN}\n\n## 2. Scheduling-Empfehlung\nDienstag, 18:00\n\n` +
+          `## 3. Finaler Content\n${caption}\n\n## 4. Publishing-Zeitpunkt\nDienstag, 18:00 (Empfehlung)`
+        );
       },
     });
     welt.agentAntworten.counsel = (task) => {
       if (task.startsWith("ENDPRUEFUNG (R2)")) return agentOk("counsel", FREIGABE_END);
       const absatz = absatzAus(task) ?? "";
-      return agentOk("counsel", `Geprüft: ${absatz} ✓\n${saetze(absatz).join("\n")}\nURTEIL: FREIGABE-EMPFEHLUNG`);
+      return agentOk("counsel", `Geprüft: ${absatz} ✓\n${saetze(absatz).join("\n")}\n${satzteile(absatz).join("\n")}\nURTEIL: FREIGABE-EMPFEHLUNG`);
     };
     const r = await pipePost({ ...LAUF, platform, format, medium_id: EXPORT_ID });
     const fall = `${platform} ${mitZeile ? "mit" : "ohne"} Pflichtzeile`;
@@ -1928,13 +1955,15 @@ test("M-C32 Zitat des Absatzes ist harmlos (das Review der Vorprüfung geht an P
     assert.equal(welt.aktivierungen.length, 6, fall);
     const z = zeile(r.body.contentId);
     const absatz = absatzAus(auftrag("counsel", 0));
-    assert.ok(absatz?.startsWith(`${PRUEFPUNKT_MARKE} (Auftrag`) && absatz.includes("„Finaler Content“"), `${fall}: COUNSEL zitiert den Absatz`);
-    for (const zitat of [`Geprüft: ${absatz} ✓`, ...saetze(absatz)]) {
+    assert.ok(absatz?.startsWith(`${PRUEFPUNKT_MARKE} (Auftrag`), `${fall}: COUNSEL zitiert den Absatz`);
+    const zitate = [`Geprüft: ${absatz} ✓`, ...saetze(absatz), ...satzteile(absatz)];
+    assert.ok(zitate.length > 150, `${fall}: ${zitate.length} Zitatzeilen`);
+    for (const zitat of zitate) {
       assert.ok(z.body.includes(`\n${zitat}\n`), `${fall}: Zitat unverändert im Freigabetext: ${zitat.slice(0, 50)}`);
     }
-    assert.ok(z.body.includes(`\n${MARKEN}\n`), `${fall}: in der Qualitätsprüfung nichts eingesetzt`);
+    assert.ok(z.body.includes(`\n${MARKEN}\n\n## 2. Scheduling-Empfehlung\nDienstag, 18:00\n\n## 3. Finaler Content\n`), `${fall}: in der Qualitätsprüfung nichts eingesetzt`);
     assert.equal(pflichtzeilen(z.body), 1, `${fall}: Pflichtzeile genau einmal als eigene Zeile`);
-    const final = z.body.slice(z.body.indexOf("## 2. Finaler Content"), z.body.indexOf("## 3. Publishing-Zeitpunkt"));
+    const final = z.body.slice(z.body.indexOf("## 3. Finaler Content"), z.body.indexOf("## 4. Publishing-Zeitpunkt"));
     assert.equal(pflichtzeilen(final), 1, `${fall}: im finalen Content`);
     if (platform === "x") assert.ok(final.includes(`${PFLICHTZEILE}\n2/2 Mehr: `), `${fall}: letzte Zeile von Post 1`);
     else assert.ok(final.trimEnd().endsWith(`#Denkmal #Rittergut\n${mitZeile ? "" : "\n"}${PFLICHTZEILE}`), `${fall}: letzte Zeile nach den Hashtags`);

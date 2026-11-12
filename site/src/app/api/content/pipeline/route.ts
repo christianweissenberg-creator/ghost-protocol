@@ -94,9 +94,10 @@ const BASE_URL = process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000";
 // festgelegten Lage gelten (eigene, letzte Zeile nach den Hashtags). Die Endprüfung wertete dieselbe Lage als Notiz statt
 // als Text des Posts. Keiner der beiden COUNSEL-Aufträge nannte die Pflichtzeile oder ihre Lage. Seitdem:
 // - Bei einer Caption (medium_id) tragen beide COUNSEL-Aufträge den PRÜFPUNKT PFLICHTZEILE (pflichtzeilenPruefpunkt):
-//   Wortlaut, sichtbarer Text des Posts, Lage je Kanal. Dazu kommt, was zur Caption gehört; Notizen, Vermerke,
-//   Qualitätsprüfung, Posting-Empfehlung und Cross-Promotion gehören nicht dazu (Gegenprüfung PR #20). Die anderen
-//   Aufträge und Läufe ohne medium_id bleiben zeichengleich.
+//   Wortlaut, sichtbarer Text des Posts, Lage je Kanal. Dazu kommt, was zur Caption gehört (Gegen- und Nachprüfung PR #20):
+//   Notizen, Vermerke, die Qualitätsprüfung, die Posting-Empfehlung und die Cross-Promotion zählen für die Lage nicht mit.
+//   Eine Pflichtzeile nur dort ersetzt die in der Caption nicht. Ob diese Teile selbst eine KI-Kennzeichnung brauchen,
+//   richtet sich nach dem Regelpaket. Die anderen Aufträge und Läufe ohne medium_id bleiben zeichengleich.
 // - Die Auftragskennung (metadata.pruefauftrag) deckt den Prüfpunkt mit ab; ohne ihn bleibt sie wie bisher.
 //
 // Stufe 1 (05.11.2026) — Freigabe und Beleg-Kette:
@@ -1212,18 +1213,24 @@ function datierungsPruefpunkt(datierung: Datierung | null): string {
  * (wie captionAnweisungen und publisherPflichtzeile). Er nennt nur Tatsachen und was zu prüfen ist; das Urteil bleibt bei
  * COUNSEL.
  * Gegenprüfung PR #20: Der Absatz sagt, was „Caption“ ist. Im Entwurf ist das der Caption-Text, in der Endfassung der
- * Abschnitt „Finaler Content“; bei X ist es der Post mit dem Video. Notizen, Status- und Prüfvermerke, Qualitätsprüfung,
- * Posting-Empfehlung und Cross-Promotion gehören nicht dazu, und für sie gilt die Lage nicht. Sonst läse die Vorprüfung
- * einen Meta-Block, den SCRIBE unter die Pflichtzeile schreibt, als „nicht letzte Zeile“. Die Endprüfung prüft laut Kopf
- * alles, auch Cross-Promotion. Ob Cross-Promotion-Texte eine KI-Zeile brauchen, sagt der Absatz nicht; das bleibt beim
- * Regelpaket und bei COUNSEL. Die Lage nach den Hashtags gilt auch ohne Hashtags („falls es welche gibt“).
+ * Abschnitt mit dem finalen Content; bei X ist es der Post mit dem Video. Notizen, Status- und Prüfvermerke, die
+ * Qualitätsprüfung, die Posting-Empfehlung und die Cross-Promotion gehören nicht dazu und zählen für die Lage nicht mit.
+ * Sonst läse die Vorprüfung einen Meta-Block, den SCRIBE unter die Pflichtzeile schreibt, als „nicht letzte Zeile“; die
+ * Endprüfung prüft laut Kopf alles, auch Cross-Promotion. Die Lage nach den Hashtags gilt auch ohne Hashtags („falls es
+ * welche gibt“).
+ * Nachprüfung PR #20:
+ * - Eine Pflichtzeile, die nur in diesen Teilen steht, ersetzt die in der Caption nicht. Die frühere Fassung („für sie gilt
+ *   die Lage nicht“) ließ sich als Freistellung lesen.
+ * - Ob diese Teile selbst eine KI-Kennzeichnung brauchen, richtet sich nach dem Regelpaket. Der Absatz sagt das ausdrücklich,
+ *   damit „gehören nicht zur Caption“ nicht als „brauchen keine“ gelesen wird.
  * Ein Zitat soll nichts auslösen, denn das Review der Vorprüfung geht an PUBLISHER und kann im Freigabetext landen. Deshalb:
  * - eine Zeile ohne Umbruch, und der Wortlaut nur in Anführungszeichen mitten im Satz. Ein zitierter Satz ist dann weder
  *   die Pflichtzeile als eigene Zeile noch eine nahe Variante (enthaeltPflichtzeile, pflichtzeileEinsetzen) und hält die
  *   Pipeline nicht vom Einsetzen ab;
- * - kein Satz beginnt mit einer Abschnittsüberschrift (abschnittsKopf, KOPF_FINAL und KOPF_DANACH in
- *   lib/freigabe-regeln.ts), mit „#“ oder mit einer Postmarke „1/…“. „Finaler Content“ und die anderen Abschnittswörter
- *   stehen nur mitten im Satz, so wird auch ein einzeln zitierter Satz nicht als Abschnitt gelesen;
+ * - kein Satz, kein Satzteil (an Komma, Semikolon, Doppelpunkt, Klammer und „und“/„oder“ geteilt), kein Aufzählungsglied
+ *   und kein Begriff in Anführungszeichen beginnt mit einer Abschnittsüberschrift (abschnittsKopf, KOPF_FINAL und KOPF_DANACH
+ *   in lib/freigabe-regeln.ts), mit „#“ oder mit einer Postmarke „1/…“, auch nicht hinter „- “, „> “, „**“ oder „1. “.
+ *   Vor den Abschnittswörtern steht deshalb ein Artikel, und statt „Finaler Content“ steht „mit dem finalen Content“;
  * - kein „URTEIL“ und keine Adresse.
  * Leer ohne Caption.
  */
@@ -1235,15 +1242,18 @@ function pflichtzeilenPruefpunkt(kanal: CaptionKanal | null): string {
     : "als eigene, letzte Zeile der Caption, nach den Hashtags, falls es welche gibt";
   const caption = x
     ? "Mit „Caption“ ist der Post mit dem Video gemeint: im Entwurf dieser Post selbst, in der Endfassung derselbe Post im " +
-      "Abschnitt „Finaler Content“."
-    : "Mit „Caption“ ist im Entwurf der Caption-Text selbst gemeint, in der Endfassung der Text im Abschnitt „Finaler Content“.";
+      "Abschnitt mit dem finalen Content."
+    : "Mit „Caption“ ist im Entwurf der Caption-Text selbst gemeint, in der Endfassung der Text im Abschnitt mit dem finalen " +
+      "Content.";
   return (
     `\n\nPRÜFPUNKT PFLICHTZEILE (Auftrag, zusätzlich zum Regelpaket): Die Caption gehört zu einem fertigen, ` +
     `KI-generierten Video. Ihre KI-Kennzeichnung ist eine Pflichtzeile mit dem Wortlaut „${KI_PFLICHTZEILE_CAPTION}“. ` +
     `Diese Zeile wird mit der Caption veröffentlicht und ist sichtbarer Text des Posts, keine Notiz. Ihre Lage ist ` +
-    `festgelegt: ${lage}. ${caption} Notizen, Status- und Prüfvermerke, Qualitätsprüfung, Posting-Empfehlung und ` +
-    `Cross-Promotion gehören nicht zur Caption, und für sie gilt die Lage nicht. Zu prüfen ist, ob die Pflichtzeile ` +
-    `vorhanden ist, wörtlich, als eigene Zeile und an dieser Lage; fehlt sie oder weicht sie davon ab, ist das ein Befund.`
+    `festgelegt: ${lage}. ${caption} Notizen, Status- und Prüfvermerke, die Qualitätsprüfung, die Posting-Empfehlung und ` +
+    `die Cross-Promotion gehören nicht zur Caption und zählen für die Lage nicht mit. Eine Pflichtzeile, die nur dort ` +
+    `steht, ersetzt die in der Caption nicht. Ob diese Teile selbst eine KI-Kennzeichnung brauchen, richtet sich nach dem ` +
+    `Regelpaket. Zu prüfen ist, ob die Pflichtzeile in der Caption vorhanden ist, wörtlich, als eigene Zeile und an dieser ` +
+    `Lage; fehlt sie oder weicht sie davon ab, ist das ein Befund.`
   );
 }
 
