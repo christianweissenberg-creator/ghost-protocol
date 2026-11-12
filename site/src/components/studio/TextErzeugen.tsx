@@ -373,7 +373,7 @@ export function TextErzeugen({
   const nichtLaufend = stand.art !== "laeuft";
   // Abgleich mit bekanntem Ausgang (Lint-Regel set-state-in-effect, 11.11.2026): Bisher setzte ein Effekt den Zustand
   // zurück. Jetzt geschieht das beim Rendern wie oben; es endet von selbst, weil die offene ID danach null ist. Nur das
-  // Löschen des Eintrags im Speicher bleibt ein Effekt (Seiteneffekt, ohne setState), einmal je Abgleich.
+  // Löschen des Eintrags im Speicher bleibt ein Effekt (Seiteneffekt, ohne setState), höchstens einmal je Abgleich.
   // Unterschied: Das Bild mit der schon abgeglichenen ID („Erneut senden …“) entfällt; die Karte nennt gleich die Caption.
   const [eintragWeg, setEintragWeg] = useState<{ ablage: Speicher | null; schluessel: string } | null>(null);
   if (zumLauf !== null) {
@@ -384,8 +384,15 @@ export function TextErzeugen({
     setStand({ art: "zu" });
     setEintragWeg({ ablage, schluessel });
   }
+  // Wächter (12.11.2026): React kann den Effekt erneut ausführen, ohne dass ein neuer Abgleich kam (Strict Mode, Activity
+  // verborgen → sichtbar, Fast Refresh). Dann steht im Speicher womöglich schon der Eintrag eines späteren Laufs mit
+  // offenem Ausgang, und der muss bleiben. Jeder Abgleich legt ein neues Objekt an; gelöscht wird nur für eines, das noch
+  // nicht erledigt ist. Ein Ref statt Zustand: kein setState im Effekt.
+  const eintragWegErledigt = useRef<object | null>(null);
   useEffect(() => {
-    if (eintragWeg !== null) merkeOffenenLauf(eintragWeg.ablage, eintragWeg.schluessel, null);
+    if (eintragWeg === null || eintragWegErledigt.current === eintragWeg) return;
+    eintragWegErledigt.current = eintragWeg;
+    merkeOffenenLauf(eintragWeg.ablage, eintragWeg.schluessel, null);
   }, [eintragWeg]);
   const w = CAPTION_WAHL.find((x) => x.wert === wahl) ?? CAPTION_WAHL[0];
   const k = KATEGORIEN.find((x) => x.wert === kategorie) ?? KATEGORIEN[0];

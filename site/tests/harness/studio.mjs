@@ -103,11 +103,14 @@ export function ladeAnkerPanel(attrappen, { anker, types, hilfen }) {
  * useSyncExternalStore (11.11.2026) wie React: Beim Einhängen im Browser liest schon das erste Bild den
  * Client-Schnappschuss. Mit hydrieren: true liest, was im ersten Bild der Laufzeit eingehängt wird, den
  * Server-Schnappschuss wie beim Hydrieren; nach dem Bild vergleicht die Laufzeit wie React und rendert neu,
- * wenn der Client-Schnappschuss abweicht. bilder() gibt die Bäume aller Runden des letzten rendere() zurück;
- * beim Hydrieren ist das erste davon das erste Bild.
+ * wenn der Client-Schnappschuss abweicht. bilder() gibt die Bäume des letzten rendere() zurück, die React
+ * committen würde (12.11.2026): Ändert ein setState schon beim Rendern den Zustand, verwirft React diese Runde und
+ * rendert sofort neu; solche Runden fehlen in bilder(). Beim Hydrieren ist bilder()[0] damit das erste committete
+ * Bild. Vereinfacht bleibt: Die Effekte einer verworfenen Runde laufen hier trotzdem.
  */
 export function hookLaufzeit({ hydrieren = false } = {}) {
-  const z = { hooks: [], index: 0, effekte: [], geaendert: false, eingehaengt: false, bilder: [] };
+  // rendernd: eine Runde läuft gerade; verworfen: in dieser Runde hat setState beim Rendern den Zustand geändert.
+  const z = { hooks: [], index: 0, effekte: [], geaendert: false, eingehaengt: false, bilder: [], rendernd: false, verworfen: false };
   const Fragment = Symbol("Fragment");
   const jsx = (type, props, key) => ({ $el: true, type, props: props ?? {}, key });
   const gleich = (a, b) => Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((d, i) => Object.is(d, b[i]));
@@ -123,6 +126,7 @@ export function hookLaufzeit({ hydrieren = false } = {}) {
           if (!Object.is(neu, slot.wert)) {
             slot.wert = neu;
             z.geaendert = true;
+            if (z.rendernd) z.verworfen = true;
           }
         };
         z.hooks[i] = slot;
@@ -209,8 +213,14 @@ export function hookLaufzeit({ hydrieren = false } = {}) {
       z.index = 0;
       z.geaendert = false;
       z.effekte = [];
-      baum = aufloesen(jsx(wurzel, wurzelProps));
-      z.bilder.push(baum);
+      z.rendernd = true;
+      z.verworfen = false;
+      try {
+        baum = aufloesen(jsx(wurzel, wurzelProps));
+      } finally {
+        z.rendernd = false;
+      }
+      if (!z.verworfen) z.bilder.push(baum);
       z.eingehaengt = true;
       const effekte = z.effekte;
       z.effekte = [];
