@@ -21,6 +21,8 @@
 //   Textregel-Befunde einzeln (P-P25), Auftragskennung der COUNSEL-Prüfanweisungen (P-P26).
 // - Gegenprüfung PR #13 (Paket C, 10.11.2026): Namensmaske vor Kampagnenmaske im Review an PUBLISHER (X01, P-P27),
 //   Textregel-Befunde vor dem Kürzen maskiert (X02, P-P28).
+// - Abnahmelauf 12.11.2026: Absatz DATIERUNG im SCRIBE-Auftrag für jede Plattform und jedes Format, mit und ohne
+//   medium_id (P-P29); Jahrhundert der Ausnahme im SCRIBE-Text → Abbruch vor der Vorprüfung, nicht in der Endfassung (P-P30).
 // Die Umgebungswerte unten sind Testwerte dieses Prozesses, keine echten Schlüssel.
 // Z_ROUTE_<NAME>=<pfad> und Z_TSX_<NAME>=<pfad> prüfen Kopien statt der Repo-Dateien (Mutationstests).
 import { test, beforeEach } from "node:test";
@@ -1986,4 +1988,169 @@ test("P-P28 Textregel-Befund mit dem geschützten Namen an der Schnittgrenze (X0
     }
     assert.deepEqual(zeile(r.body.contentId).metadata.fehler.befunde, befunde, `${fall}: gespeichert wie geantwortet`);
   }
+});
+
+// ═══ Abnahmelauf 12.11.2026: Datierung im SCRIBE-Auftrag, Jahrhundert im SCRIBE-Text ═══
+
+/**
+ * Absatz DATIERUNG im SCRIBE-Auftrag bei greifender Ausnahme (Schnappschuss). Er enthält die erlaubten Formen wie im
+ * Prüfpunkt und die Formen aus abgeleiteteAlter (FORMEN). Dazu kommen Jahrhundert und „über N Jahre …“, mit „N“ statt
+ * einer Zahl.
+ */
+const HINWEIS_SCRIBE =
+  "\n\nDATIERUNG (gilt für den ganzen Text): Das Jahr 1335 steht im Text nur als „Ersterwähnung 1335“ oder „1335 urkundlich " +
+  "erstmals erwähnt“. Leite aus der Ersterwähnung 1335 kein Alter, keine Bauzeit und kein Jahrhundert ab, und nenne keine " +
+  `Zahl von Jahren, die daraus gerechnet ist. Nicht: „aus dem N. Jahrhundert“, „über N Jahre …“, ${FORMEN}.`;
+const HINWEIS_MARKE = "DATIERUNG (gilt für den ganzen Text)";
+const LIEFERE = "Liefere den fertigen Content, sofort publishbar.";
+/** Kanäle, zu denen die Pipeline eine Caption zu einem Video schreibt (CAPTION_KANAELE in der Route). */
+const CAPTION = new Set(["instagram|reel", "tiktok|tiktok_short", "youtube|short", "x|thread", "linkedin|linkedin_post"]);
+/** Jede Kombination aus Plattform und Format, wie GET sie meldet. */
+const KOMBINATIONEN = Object.entries((await (await pipeline.GET()).json()).formats).flatMap(([p, formate]) => formate.map((f) => [p, f]));
+const VIDEO_ID = 7;
+/** Export-Fassung eines Videos in studio_medium, nur mit den Spalten, die die Pipeline liest (leseMedium). */
+function exportVideo(objekt_slug = "rittergut-seifersdorf") {
+  welt.tabellen.studio_medium = [{ id: VIDEO_ID, objekt_slug, fassung: "export" }];
+}
+const NBSP = String.fromCharCode(0xa0);
+
+test("P-P29 Datierung im SCRIBE-Auftrag (Abnahmelauf 12.11.2026): bei greifender Ausnahme der Absatz DATIERUNG genau einmal, hinter „Liefere …“ und vor dem Objektblock — jede Plattform, jedes Format, mit und ohne medium_id; in keinem anderen Auftrag; ohne greifende Ausnahme und ohne Objekt nirgends", async () => {
+  assert.equal(KOMBINATIONEN.length, 11);
+  assert.ok([...CAPTION].every((k) => KOMBINATIONEN.some(([p, f]) => `${p}|${f}` === k)), "Caption-Kanäle sind Kombinationen");
+  // Der Absatz nennt keine Zahl, die altersBefund oder jahrhundertBefund träfe, keine Bauzeit und keine Rechenformel
+  assert.ok(!new RegExp(`(?<!\\d)(?:${ALTER - 1}|${ALTER}|${ALTER + 1})(?!\\d)`).test(HINWEIS_SCRIBE));
+  assert.ok(!HINWEIS_SCRIBE.includes("14") && !HINWEIS_SCRIBE.includes("1750"));
+  assert.ok(!HINWEIS_SCRIBE.includes("N =") && !HINWEIS_SCRIBE.includes("Jahre seit"));
+
+  const laeufe = [];
+  for (const [platform, format] of KOMBINATIONEN) {
+    laeufe.push([`${platform}|${format}`, { ...RITTERGUT_X, platform, format }]);
+    if (CAPTION.has(`${platform}|${format}`)) {
+      laeufe.push([`${platform}|${format} mit medium_id`, { ...RITTERGUT_X, platform, format, medium_id: VIDEO_ID }]);
+    }
+  }
+  assert.equal(laeufe.length, 16);
+  for (const [fall, body] of laeufe) {
+    zuruecksetzen();
+    welt.pipelineModul = pipeline;
+    exportMit(RITTERGUT);
+    exportVideo();
+    agentenMitLink();
+    const r = await pipePost(body);
+    assert.equal(r.status, 200, `${fall}: ${JSON.stringify(r.body).slice(0, 300)}`);
+    assert.equal(r.body.status, "complete", `${fall}: ${JSON.stringify(r.body.fehler ?? null)}`);
+    assert.equal(welt.aktivierungen.length, 6, fall);
+    const scribe = auftrag("scribe");
+    assert.ok(scribe.includes(`${LIEFERE}${HINWEIS_SCRIBE}\n\nOBJEKTDATEN (Steinadel-Export, read-only):\n`), fall);
+    assert.equal(scribe.split(HINWEIS_MARKE).length, 2, `${fall}: genau einmal`);
+    for (const a of welt.aktivierungen.filter((x) => x.agent !== "scribe")) {
+      assert.ok(!a.task.includes(HINWEIS_MARKE) && !a.task.includes("aus dem N. Jahrhundert"), `${fall}: ${a.agent} ohne den Absatz`);
+    }
+  }
+
+  // Ohne greifende Ausnahme (Export nennt 1750, anderes Objekt) und ohne Objekt: kein Absatz in keinem Auftrag
+  const villa = structuredClone(STANDARD_OBJEKT);
+  villa.kampagnen[0] = { kampagne: "herbst", lpUrl: "https://steinadel.de/l/herbst", lpVariant: "herbst-a" };
+  let geprueft = 0;
+  for (const [platform, format] of KOMBINATIONEN) {
+    const video = CAPTION.has(`${platform}|${format}`) ? { medium_id: VIDEO_ID } : {};
+    for (const [fall, vorbereiten, body] of [
+      ["Export nennt 1750", () => { exportMit({ ...RITTERGUT, baujahr: 1750 }); exportVideo(); }, { ...RITTERGUT_X, platform, format, ...video }],
+      ["anderes Objekt", () => { exportMit(villa); exportVideo("villa-x"); }, { ...RITTERGUT_X, objekt_slug: "villa-x", platform, format, ...video }],
+      ["ohne Objekt", () => {}, { ...OHNE_OBJEKT, platform, format }],
+    ]) {
+      zuruecksetzen();
+      welt.pipelineModul = pipeline;
+      vorbereiten();
+      agentenMitLink();
+      const r = await pipePost(body);
+      const name = `${fall} ${platform}|${format}${video.medium_id ? " mit medium_id" : ""}`;
+      assert.equal(r.body.status, "complete", `${name}: ${JSON.stringify(r.body.fehler ?? r.body).slice(0, 300)}`);
+      assert.equal(welt.aktivierungen.length, 6, name);
+      for (const a of welt.aktivierungen) assert.ok(!a.task.includes(HINWEIS_MARKE) && !a.task.includes("aus dem N. Jahrhundert"), `${name}: ${a.agent}`);
+      const scribe = auftrag("scribe");
+      if (fall === "ohne Objekt") assert.ok(scribe.endsWith(LIEFERE), name);
+      else assert.ok(scribe.includes(`${LIEFERE}\n\nOBJEKTDATEN (Steinadel-Export, read-only):\n`), name);
+      geprueft += 1;
+    }
+  }
+  assert.equal(geprueft, 33);
+});
+
+test("P-P30 Jahrhundert aus 1335 im SCRIBE-Text (Abnahmelauf 12.11.2026): „14. Jahrhundert“ und Kurzformen → Abbruch vor der Vorprüfung, ohne COUNSEL-Aufruf; andere Jahrhunderte, Zahlen ohne Punkt, der zitierte Absatz und die Endfassung nicht", async () => {
+  const befund = (treffer) => `Jahrhundert „${treffer}“ aus 1335 abgeleitet (1335 ist nur die Ersterwähnung)`;
+  const lauf = async ({ scribe, publisher, body = RITTERGUT_X, objekt = RITTERGUT } = {}) => {
+    zuruecksetzen();
+    welt.pipelineModul = pipeline;
+    if (objekt) exportMit(objekt);
+    exportVideo();
+    agentenMitLink({ scribe, publisher });
+    return pipePost(body);
+  };
+  const treffer = [
+    ["Ein Landgut aus dem 14. Jahrhundert.", "14. Jahrhundert"],
+    ["Die Mauern des 14. Jahrhunderts.", "14. Jahrhundert"],
+    ["Erbaut im 14.Jahrhundert.", "14.Jahrhundert"],
+    ["**14.** Jahrhundert", "14. Jahrhundert"],
+    ["_14. Jahrhundert_", "14. Jahrhundert"],
+    ["Gutshof (14. Jh.)", "14. Jh."],
+    ["14. Jhd. — Ersterwähnung 1335", "14. Jhd."],
+    ["seit dem 14. Jhdt.", "14. Jhdt."],
+    ["AUS DEM 14. JAHRHUNDERT", "14. JAHRHUNDERT"],
+    [`aus dem 14.${NBSP}Jahrhundert`, "14. Jahrhundert"], // geschütztes Leerzeichen; der Vermerk fasst Leerraum zusammen (bereinigeFehler)
+  ];
+  for (const [satz, stelle] of treffer) {
+    const r = await lauf({ scribe: (task) => `${satz}\n${linkAusAuftrag(task)}` });
+    assert.equal(r.body.status, "fehler", satz);
+    assert.deepEqual(welt.aktivierungen.map((a) => a.agent), ["researcher", "scribe"], `${satz}: kein COUNSEL-Aufruf`);
+    assert.deepEqual([r.body.fehler.stufe, r.body.fehler.grund], ["scribe", "Textregel nicht erfüllt"], satz);
+    assert.equal(r.body.fehler.detail, befund(stelle), satz);
+    assert.deepEqual(zeile(r.body.contentId).metadata.fehler.befunde, [befund(stelle)], `${satz}: gespeichert`);
+  }
+  // Caption zu einem Video (medium_id): dieselbe Prüfung
+  const caption = await lauf({
+    scribe: (task) => `Ein Landgut aus dem 14. Jahrhundert.\n${linkAusAuftrag(task)}`,
+    body: { ...RITTERGUT_X, platform: "instagram", format: "reel", medium_id: VIDEO_ID },
+  });
+  assert.equal(caption.body.status, "fehler");
+  assert.deepEqual(welt.aktivierungen.map((a) => a.agent), ["researcher", "scribe"]);
+  assert.equal(caption.body.fehler.detail, befund("14. Jahrhundert"));
+  // Alter und Jahrhundert zugleich: beide Befunde, das Alter zuerst
+  const beide = await lauf({ scribe: (task) => `Seit ${ALTER} Jahren, also seit dem 14. Jahrhundert. ${linkAusAuftrag(task)}` });
+  assert.equal(beide.body.fehler.detail, `Alter „${ALTER} Jahren“ aus 1335 abgeleitet (1335 ist nur die Ersterwähnung); ${befund("14. Jahrhundert")}`);
+
+  // Kein Befund: die erlaubten Formen, ein anderes Jahrhundert, eine Ziffer davor, ohne Punkt, ohne Zahl, kein Jahrhundert-Wort
+  for (const satz of [
+    "Ersterwähnung 1335.",
+    "1335 urkundlich erstmals erwähnt.",
+    "Stallungen aus dem 18. Jahrhundert.",
+    "Im 114. Jahrhundert.",
+    "Kapitel 2.14. Jahrhundert",
+    "14 Jahrhunderte",
+    "Seit Jahrhunderten im Familienbesitz.",
+    "„aus dem N. Jahrhundert“",
+    "Zum 14. Jahrestag.",
+    "14. Jhx",
+  ]) {
+    const r = await lauf({ scribe: (task) => `${satz}\n${linkAusAuftrag(task)}` });
+    assert.equal(r.body.status, "complete", `${satz}: ${JSON.stringify(r.body.fehler ?? null)}`);
+  }
+  // SCRIBE zitiert den Absatz DATIERUNG: kein Befund (wie P-P21 für die Datierungszeile)
+  const zitat = await lauf({
+    scribe: (task) => `Thread 1/2 Ersterwähnung 1335.\nHinweis: ${/DATIERUNG \(gilt für den ganzen Text\): [^\n]*/.exec(task)?.[0]}\n2/2 Mehr: ${linkAusAuftrag(task)}`,
+  });
+  assert.equal(zitat.body.status, "complete", JSON.stringify(zitat.body.fehler ?? null));
+  assert.ok(zitat.body.steps[1].output.includes("Hinweis: DATIERUNG (gilt für den ganzen Text): Das Jahr 1335 steht im Text nur"));
+  // Endfassung: keine Code-Prüfung auf das Jahrhundert (sie enthält den Fakten-Check); die Endprüfung entscheidet
+  const end = await lauf({ publisher: (task) => `Finaler Content:\n1/2 Ersterwähnung 1335.\n2/2 Mehr: ${linkAusAuftrag(task)}\nFakten-Check: kein „14. Jahrhundert“ ✓` });
+  assert.equal(end.body.status, "complete", JSON.stringify(end.body.fehler ?? null));
+  assert.equal(welt.aktivierungen.length, 6);
+  assert.ok(end.body.steps[3].output.includes("kein „14. Jahrhundert“"));
+  // Ohne greifende Ausnahme keine Prüfung: Export nennt 1750, anderes Objekt, kein Objekt
+  const villa = structuredClone(STANDARD_OBJEKT);
+  villa.kampagnen[0] = { kampagne: "herbst", lpUrl: "https://steinadel.de/l/herbst", lpVariant: "herbst-a" };
+  const satz = (task) => `Ein Landgut aus dem 14. Jahrhundert. ${linkAusAuftrag(task)}`;
+  assert.equal((await lauf({ scribe: satz, objekt: { ...RITTERGUT, baujahr: 1750 } })).body.status, "complete");
+  assert.equal((await lauf({ scribe: satz, objekt: villa, body: { ...RITTERGUT_X, objekt_slug: "villa-x" } })).body.status, "complete");
+  assert.equal((await lauf({ scribe: satz, objekt: null, body: OHNE_OBJEKT })).body.status, "complete");
 });
