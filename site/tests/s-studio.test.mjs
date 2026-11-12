@@ -819,7 +819,11 @@ test("S-D1 Sidebar: 'Objekt-Studio' in der Gruppe Produktion auf /studio/ritterg
   const S = ladeTsx("components/layout/Sidebar.tsx", {
     ...ECHT,
     "next/link": { __esModule: true, default: Link },
-    "next/navigation": { usePathname: () => "/studio/rittergut-seifersdorf" },
+    // Seit 11.11.2026 wählt die Sidebar über useAktivPfad() (React #418 unter Rewrite); angemeldet
+    // liefert der Routenbaum den Abschnitt "studio", es gilt die URL.
+    "@/components/layout/aktiv-pfad": ladeTsx("components/layout/aktiv-pfad.ts", {
+      "next/navigation": { usePathname: () => "/studio/rittergut-seifersdorf", useSelectedLayoutSegment: () => "studio" },
+    }),
     "@/lib/studio/objekte": await objekteModul(),
   });
   const html = renderToStaticMarkup(React.createElement(S.Sidebar, {}));
