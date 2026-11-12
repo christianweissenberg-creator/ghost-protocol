@@ -90,6 +90,13 @@ const BASE_URL = process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000";
 // - Der Code prüft den SCRIBE-Text vor der Vorprüfung auch auf das Jahrhundert der Ausnahme als Ordnungszahl
 //   (jahrhundertBefund); ein Treffer beendet den Lauf ohne COUNSEL-Aufruf. Die Endfassung prüft er darauf nicht.
 //
+// Abnahmelauf 12.11.2026 abends (Caption-Lauf, Endprüfung ABLEHNUNG): Die Vorprüfung ließ die Pflichtzeile an ihrer
+// festgelegten Lage gelten (eigene, letzte Zeile nach den Hashtags). Die Endprüfung wertete dieselbe Lage als Notiz statt
+// als Text des Posts. Keiner der beiden COUNSEL-Aufträge nannte die Pflichtzeile oder ihre Lage. Seitdem:
+// - Bei einer Caption (medium_id) tragen beide COUNSEL-Aufträge den PRÜFPUNKT PFLICHTZEILE (pflichtzeilenPruefpunkt):
+//   Wortlaut, sichtbarer Text des Posts, Lage je Kanal. Die anderen Aufträge und Läufe ohne medium_id bleiben zeichengleich.
+// - Die Auftragskennung (metadata.pruefauftrag) deckt den Prüfpunkt mit ab; ohne ihn bleibt sie wie bisher.
+//
 // Stufe 1 (05.11.2026) — Freigabe und Beleg-Kette:
 // - Das COUNSEL-Urteil wertet werteCounselAus() aus (lib/counsel-urteil.ts); die frühere
 //   Regex ließ zitierte Optionen und verneinte Freigaben durch. Nur FREIGABE geht weiter.
@@ -1195,6 +1202,36 @@ function datierungsPruefpunkt(datierung: Datierung | null): string {
   );
 }
 
+/**
+ * Prüfpunkt beider COUNSEL-Aufträge bei einer Caption zu einem Video (Abnahmelauf 12.11.2026 abends). Die Vorprüfung ließ
+ * die Pflichtzeile als eigene, letzte Zeile nach den Hashtags gelten. Die Endprüfung wertete dieselbe Lage als Notiz und
+ * lehnte ab. Keiner der beiden Aufträge nannte die Pflichtzeile oder ihre Lage.
+ * Der Prüfpunkt nennt den Wortlaut, dass die Zeile mit der Caption veröffentlicht wird, und ihre festgelegte Lage je Kanal
+ * (wie captionAnweisungen und publisherPflichtzeile). Er nennt nur Tatsachen und was zu prüfen ist; das Urteil bleibt bei
+ * COUNSEL.
+ * Ein Zitat soll nichts auslösen, denn das Review der Vorprüfung geht an PUBLISHER und kann im Freigabetext landen. Deshalb:
+ * - eine Zeile ohne Umbruch, und der Wortlaut nur in Anführungszeichen mitten im Satz. Ein zitierter Satz ist dann weder
+ *   die Pflichtzeile als eigene Zeile noch eine nahe Variante (enthaeltPflichtzeile, pflichtzeileEinsetzen) und hält die
+ *   Pipeline nicht vom Einsetzen ab;
+ * - keine Postmarke „1/…“ und keine Abschnittsüberschrift am Zeilenanfang;
+ * - kein „URTEIL“ und keine Adresse.
+ * Leer ohne Caption.
+ */
+function pflichtzeilenPruefpunkt(kanal: CaptionKanal | null): string {
+  if (kanal === null) return "";
+  const lage =
+    kanal === "x|thread"
+      ? "als eigene Zeile im Post mit dem Video (bei einem Thread im ersten Post), dort als letzte Zeile"
+      : "als eigene, letzte Zeile der Caption, nach den Hashtags";
+  return (
+    `\n\nPRÜFPUNKT PFLICHTZEILE (Auftrag, zusätzlich zum Regelpaket): Die Caption gehört zu einem fertigen, ` +
+    `KI-generierten Video. Ihre KI-Kennzeichnung ist eine Pflichtzeile mit dem Wortlaut „${KI_PFLICHTZEILE_CAPTION}“. ` +
+    `Diese Zeile wird mit der Caption veröffentlicht und ist sichtbarer Text des Posts, keine Notiz. Ihre Lage ist ` +
+    `festgelegt: ${lage}. Zu prüfen ist, ob sie vorhanden ist, wörtlich, als eigene Zeile und an dieser Lage; fehlt sie ` +
+    `oder weicht sie davon ab, ist das ein Befund.`
+  );
+}
+
 /** Beleg der Prüfanweisungen an COUNSEL (metadata.pruefauftrag). */
 interface PruefauftragBeleg {
   /** Erste 16 Hex-Zeichen von SHA-256 über die Prüfanweisungen beider COUNSEL-Aufträge. */
@@ -1210,6 +1247,12 @@ const PRUEFAUFTRAG_UMFANG =
   "nicht darin: geprüfter Text, Objektdaten und Kurzlink-Block (Belege: objekt_snapshot, kurzlink) und der Systemprompt " +
   "(Regelpaket: regelpaket)";
 
+/** Umfang bei einer Caption: Die Kennung deckt auch den PRÜFPUNKT PFLICHTZEILE ab (Abnahmelauf 12.11.2026 abends). */
+const PRUEFAUFTRAG_UMFANG_CAPTION =
+  "SHA-256, erste 16 Hex-Zeichen, über Kopf von Vor- und Endprüfung, PRÜFPUNKT DATIERUNG, Urteilsform (LETZTE ZEILE) und " +
+  "PRÜFPUNKT PFLICHTZEILE; nicht darin: geprüfter Text, Objektdaten und Kurzlink-Block (Belege: objekt_snapshot, kurzlink) " +
+  "und der Systemprompt (Regelpaket: regelpaket)";
+
 /**
  * Auftragskennung (Gegenprüfung PR #10, B3): Die Zeile belegte nur die Regelpaket-Version. Seit dem Abnahmelauf vom
  * 10.11.2026 stehen aber Prüfanweisungen im Auftrag, die nicht im Regelpaket stehen — die Urteilsform und der
@@ -1217,14 +1260,19 @@ const PRUEFAUFTRAG_UMFANG =
  * Kennung ist ein Hash über genau die Teile beider COUNSEL-Aufträge, die Anweisung sind (Kopf, Prüfpunkt, Schluss), in
  * dieser Reihenfolge als JSON-Liste. Ändert sich einer davon, ändert sich die Kennung; Läufe mit Prüfpunkt (Objekt mit
  * greifender Ausnahme) haben eine andere Kennung als Läufe ohne.
+ * Abnahmelauf 12.11.2026 abends: Bei einer Caption ist auch der PRÜFPUNKT PFLICHTZEILE Anweisung. Er kommt als fünfter Teil
+ * ans Ende der Liste, und der Umfang nennt ihn. Ohne Caption bleiben Liste, Kennung und Umfang wie vorher.
  */
-function pruefauftragBeleg(datierung: Datierung | null): PruefauftragBeleg {
+function pruefauftragBeleg(datierung: Datierung | null, kanal: CaptionKanal | null): PruefauftragBeleg {
   const pruefpunkt = datierungsPruefpunkt(datierung);
-  const kennung = createHash("sha256")
-    .update(JSON.stringify([VORPRUEFUNG_KOPF, ENDPRUEFUNG_KOPF, pruefpunkt, URTEIL_SCHLUSS]), "utf8")
-    .digest("hex")
-    .slice(0, 16);
-  return { kennung, datierung_pruefpunkt: pruefpunkt !== "", umfang: PRUEFAUFTRAG_UMFANG };
+  const pflichtzeile = pflichtzeilenPruefpunkt(kanal);
+  const teile = [VORPRUEFUNG_KOPF, ENDPRUEFUNG_KOPF, pruefpunkt, URTEIL_SCHLUSS, ...(pflichtzeile ? [pflichtzeile] : [])];
+  const kennung = createHash("sha256").update(JSON.stringify(teile), "utf8").digest("hex").slice(0, 16);
+  return {
+    kennung,
+    datierung_pruefpunkt: pruefpunkt !== "",
+    umfang: pflichtzeile ? PRUEFAUFTRAG_UMFANG_CAPTION : PRUEFAUFTRAG_UMFANG,
+  };
 }
 
 /**
@@ -1695,7 +1743,7 @@ export async function POST(request: NextRequest) {
       ...(objektSnapshot ? { objekt_snapshot: objektSnapshot } : {}),
       regelpaket: REGELPAKET,
       // Gegenprüfung PR #10 (B3): welche Prüfanweisungen COUNSEL im Auftrag bekam (pruefauftragBeleg).
-      pruefauftrag: pruefauftragBeleg(datierung),
+      pruefauftrag: pruefauftragBeleg(datierung, captionKanal),
       researcher_quellen: RESEARCHER_QUELLEN_HINWEIS,
     };
 
@@ -2021,7 +2069,7 @@ Liefere den fertigen Content, sofort publishbar.${datierungsHinweisScribe(datier
     // ═══ STEP 3: COUNSEL — Pflicht-Review, fail-closed ═══
     await fuehreStufeAus(
       steps[2],
-      `${VORPRUEFUNG_KOPF}${datierungsPruefpunkt(datierung)}
+      `${VORPRUEFUNG_KOPF}${datierungsPruefpunkt(datierung)}${pflichtzeilenPruefpunkt(captionKanal)}
 
 CONTENT:
 ${steps[1].output}
@@ -2236,7 +2284,7 @@ Modellrechnung-Disclaimer wörtlich.${datierungsHinweisPublisher(datierung)}${ob
     // AMPLIFIER nicht; das spart dessen Aufruf und hält die Zeile bei "abgelehnt".
     await fuehreStufeAus(
       steps[4],
-      `${ENDPRUEFUNG_KOPF}${datierungsPruefpunkt(datierung)}
+      `${ENDPRUEFUNG_KOPF}${datierungsPruefpunkt(datierung)}${pflichtzeilenPruefpunkt(captionKanal)}
 
 ENDFASSUNG (PUBLISHER):
 ${freigabeText}
